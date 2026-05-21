@@ -100,14 +100,14 @@ impl StateMachine {
             .with_conn(|conn| {
                 conn.execute_batch("BEGIN TRANSACTION;")
                     .map_err(|e| crate::StorageError::Database(e))?;
-                // 在事务内：f 会使用 storage 方法（锁自己），所以需要先释放锁
-                // 事务由 SQLite 内部管理，不依赖 Rust Mutex 保持
+                // Within a transaction: f uses the storage method (locks itself), so it needs to release the lock first.
+                // Transactions are managed internally by SQLite and do not rely on Rust Mutex to maintain the
                 Ok(())
             })?;
 
         let result = f(&self.storage);
 
-        // 提交或回滚
+        // Commit or Rollback
         self.storage
             .with_conn(|conn| {
                 match &result {

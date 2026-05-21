@@ -1,6 +1,6 @@
-//! manual_edit 层操作
+//Manual_edit level operations manual_edit Layer Operation
 //!
-//! 人工编辑归集到 manual_edit 层，可通过 merge 合并到 staged 层。
+//! Manual edits are grouped into manual_edit layers, which can be merged into staged layers via merge.
 
 use crate::core::delta::Delta;
 use crate::core::file_node::FileNode;
@@ -15,12 +15,12 @@ use crate::error::{Result, StratumError};
 use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
 use crate::storage::sqlite_storage::SqliteStorage;
 use std::path::PathBuf;
-/// 获取 manual_edit 层的分区 ID
+/// Get the partition ID of the manual_edit level
 pub fn manual_partition_id() -> PartitionId {
     uuid::Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_0001)
 }
 
-/// 获取或创建 manual_edit 分区
+/// Get or create manual_edit partition
 pub fn ensure_manual_partition(storage: &SqliteStorage, initial_snapshot_id: SnapshotId) -> Result<Partition> {
     let pid = manual_partition_id();
     match storage.get_partition(&pid) {
@@ -39,18 +39,18 @@ pub fn ensure_manual_partition(storage: &SqliteStorage, initial_snapshot_id: Sna
     }
 }
 
-/// 对指定文件应用人工编辑
+/// Apply manual editing to specified files
 ///
-/// 1. 读取 old_content（从 file_node 或空字符串）
-/// 2. 计算 old ↔ new 的 Delta
-/// 3. 创建新 Snapshot 追加到 manual_edit 分区
-/// 4. 返回新 Snapshot ID
+/// 1. read old_content (from file_node or empty string)
+/// 2. Calculate old ↔ new Delta
+/// 3. Create a new Snapshot to append to the manual_edit partition
+/// 4. Return the new Snapshot ID
 pub fn apply_manual_edit(
     storage: &SqliteStorage,
     file_path: &str,
     new_content: &str,
 ) -> Result<SnapshotId> {
-    // 获取 manual_edit 分区的当前快照
+    // Get the current snapshot of the manual_edit partition
     let pid = manual_partition_id();
     let partition = storage
         .get_partition(&pid)
@@ -60,7 +60,7 @@ pub fn apply_manual_edit(
         .get_snapshot(&partition.current_snapshot)
         .map_err(|e| StratumError::Storage(e.into()))?;
 
-    // 读取旧内容
+    // Read old content
     let old_content = {
         let deltas = storage
             .get_deltas(&current_snapshot.deltas)
@@ -75,13 +75,13 @@ pub fn apply_manual_edit(
             .map_err(|e| StratumError::Engine(e.to_string()))?
     };
 
-    // 计算 diff
+    // Calculate diff
     let line_diff = diff_to_line_diff(&old_content, new_content);
     if line_diff.is_empty() {
-        return Ok(partition.current_snapshot); // 无变化，返回当前快照
+        return Ok(partition.current_snapshot); // No change, return current snapshot
     }
 
-    // 创建 Delta
+    // Create Delta
     let file_node = FileNode::new(PathBuf::from(file_path), old_content.as_bytes());
     let delta = Delta::new(file_node.clone(), line_diff, SourceType::Manual);
     storage
@@ -94,7 +94,7 @@ pub fn apply_manual_edit(
         .store_file_node(&file_node, new_content.as_bytes())
         .map_err(|e| StratumError::Storage(e.into()))?;
 
-    // 创建新 Snapshot
+    // Creating a New Snapshot
     let new_snapshot = Snapshot::from_parent(
         &current_snapshot,
         delta.id,
@@ -104,7 +104,7 @@ pub fn apply_manual_edit(
         .store_snapshot(&new_snapshot, b"")
         .map_err(|e| StratumError::Storage(e.into()))?;
 
-    // 更新分区指针
+    // Updating the partition pointer
     storage
         .update_pointer(&pid, &new_snapshot.id)
         .map_err(|e| StratumError::Storage(e.into()))?;
@@ -112,16 +112,16 @@ pub fn apply_manual_edit(
     Ok(new_snapshot.id)
 }
 
-/// 将 manual_edit 层当前快照合并到 staged
+/// Merge the current snapshot of the manual_edit tier into staged
 ///
-/// 取 manual_edit 和 staged 的当前 Snapshot，合并生成新 Snapshot 推入 staged 历史。
+/// Take the current Snapshot from manual_edit and staged and merge it to create a new Snapshot to push into the staged history.
 pub fn merge_manual_to_staged(
     storage: &SqliteStorage,
 ) -> Result<SnapshotId> {
     let manual_pid = manual_partition_id();
     let staged_pid = crate::state_machine::staged::staged_partition_id();
 
-    // 获取 manual 和 staged 的分区
+    // Get manual and staged partitions
     let manual_partition = storage
         .get_partition(&manual_pid)
         .map_err(|_| StratumError::NotFound("manual_edit partition not found".into()))?;
@@ -136,15 +136,15 @@ pub fn merge_manual_to_staged(
         .get_snapshot(&staged_partition.current_snapshot)
         .map_err(|e| StratumError::Storage(e.into()))?;
 
-    // 重建文本内容
+    // Reconstructing text content
     let manual_text = crate::state_machine::transition::reconstruct_text(storage, &manual_snapshot)?;
     let staged_text = crate::state_machine::transition::reconstruct_text(storage, &staged_snapshot)?;
 
-    // 以 staged 为基准，将 manual 的修改合并进来
-    // 计算 manual_text 相对于 staged_text 的 diff
+    // Incorporate manual changes using staged as a baseline.
+    // Calculate the diff of manual_text relative to staged_text
     let merge_diff = diff_to_line_diff(&staged_text, &manual_text);
     if merge_diff.is_empty() {
-        return Ok(staged_partition.current_snapshot); // 无变化
+        return Ok(staged_partition.current_snapshot); // no change
     }
 
     let merge_delta = Delta::new(
@@ -156,7 +156,7 @@ pub fn merge_manual_to_staged(
         .store_delta(&merge_delta)
         .map_err(|e| StratumError::Storage(e.into()))?;
 
-    // 创建 merge snapshot（双父）
+    // Create merge snapshot (dual parent)
     let new_snapshot = Snapshot::merge(
         vec![&staged_snapshot, &manual_snapshot],
         merge_delta.id,
@@ -166,7 +166,7 @@ pub fn merge_manual_to_staged(
         .store_snapshot(&new_snapshot, b"")
         .map_err(|e| StratumError::Storage(e.into()))?;
 
-    // 更新 staged 指针
+    // Update staged pointer
     storage
         .update_pointer(&staged_pid, &new_snapshot.id)
         .map_err(|e| StratumError::Storage(e.into()))?;
@@ -208,7 +208,7 @@ mod tests {
         let new_id = apply_manual_edit(&storage, "test.txt", "hello\nrust\n").unwrap();
         assert_ne!(new_id, initial_id);
 
-        // 验证快照链
+        // Validate Snapshot Chain
         let snapshot = storage.get_snapshot(&new_id).unwrap();
         assert_eq!(snapshot.parents.len(), 1);
         assert_eq!(snapshot.parents[0], initial_id);
@@ -219,19 +219,19 @@ mod tests {
         let storage = setup_storage();
         let initial_id = create_initial_snapshot(&storage, "base\ncontent\n");
 
-        // 创建 manual 和 staged 分区，指向同一初始快照
+        // Create manual and staged partitions that point to the same initial snapshot
         ensure_manual_partition(&storage, initial_id).unwrap();
         crate::state_machine::staged::ensure_staged_partition(&storage, initial_id).unwrap();
 
-        // 在 manual 层应用编辑
+        // Apply edits to the manual layer
         apply_manual_edit(&storage, "test.txt", "base\nmodified\n").unwrap();
 
-        // 合并到 staged
+        // Merge to staged
         let merged_id = merge_manual_to_staged(&storage).unwrap();
         let staged = storage.get_partition(&crate::state_machine::staged::staged_partition_id()).unwrap();
         assert_eq!(staged.current_snapshot, merged_id);
 
-        // 验证 merge snapshot 的双父
+        // Verify the dual parent of the merge snapshot
         let merged = storage.get_snapshot(&merged_id).unwrap();
         assert_eq!(merged.parents.len(), 2);
     }

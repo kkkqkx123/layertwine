@@ -1,7 +1,7 @@
-//! agent_edit 层操作
+//! agent_edit Layer Operation
 //!
-//! 每个 Agent 实例隔离在独立 Partition 中。Agent 修改先进入自身分区，
-//! 然后通过 move_agent_to_approval 移入 approval 层的对应分区。
+//Each Agent instance is isolated in a separate Partition. Each Agent instance is segregated in a separate Partition. the Agent modification enters its own Partition first.
+//! and then moved into the corresponding partition at the approval level via move_agent_to_approval.
 
 use crate::core::delta::Delta;
 use crate::core::file_node::FileNode;
@@ -16,7 +16,7 @@ use crate::error::{Result, StratumError};
 use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
 use crate::storage::sqlite_storage::SqliteStorage;
 use std::path::PathBuf;
-/// 生成 agent 分区的稳定 ID
+/// Generate stable IDs for agent partitions
 pub fn agent_partition_id(agent_id: &AgentInstanceId) -> PartitionId {
     let uuid = uuid::Uuid::from_u128(0x2000_0000_0000_0000_0000_0000_0000_0000);
     let bytes = uuid.as_bytes();
@@ -28,7 +28,7 @@ pub fn agent_partition_id(agent_id: &AgentInstanceId) -> PartitionId {
     uuid::Uuid::from_bytes(new_bytes)
 }
 
-/// 获取或创建 agent_edit 分区
+/// Getting or creating agent_edit partitions
 pub fn ensure_agent_partition(
     storage: &SqliteStorage,
     agent_id: &AgentInstanceId,
@@ -51,10 +51,10 @@ pub fn ensure_agent_partition(
     }
 }
 
-/// Agent 编辑文件
+/// Agent Edit File
 ///
-/// 将 Agent 的修改作为 Delta 追加到 agent_edit 层的对应分区。
-/// 每个 Agent 实例有独立分区，互不干扰。
+/// Append the Agent changes as Delta to the corresponding partition at the agent_edit level.
+/// Each Agent instance has a separate partition and does not interfere with each other.
 pub fn apply_agent_edit(
     storage: &SqliteStorage,
     agent_id: &AgentInstanceId,
@@ -72,7 +72,7 @@ pub fn apply_agent_edit(
         .get_snapshot(&partition.current_snapshot)
         .map_err(|e| StratumError::Storage(e.into()))?;
 
-    // 读取旧内容
+    // Read old content
     let old_content = {
         let deltas = storage
             .get_deltas(&current_snapshot.deltas)
@@ -87,13 +87,13 @@ pub fn apply_agent_edit(
             .map_err(|e| StratumError::Engine(e.to_string()))?
     };
 
-    // 计算 diff
+    // Calculate diff
     let line_diff = diff_to_line_diff(&old_content, new_content);
     if line_diff.is_empty() {
         return Ok(partition.current_snapshot);
     }
 
-    // 创建 Delta
+    // Create Delta
     let file_node = FileNode::new(PathBuf::from(file_path), old_content.as_bytes());
     let delta = Delta::new(
         file_node.clone(),
@@ -110,7 +110,7 @@ pub fn apply_agent_edit(
         .store_file_node(&file_node, new_content.as_bytes())
         .map_err(|e| StratumError::Storage(e.into()))?;
 
-    // 创建新 Snapshot
+    // Creating a New Snapshot
     let new_snapshot = Snapshot::from_parent(
         &current_snapshot,
         delta.id,
@@ -120,7 +120,7 @@ pub fn apply_agent_edit(
         .store_snapshot(&new_snapshot, b"")
         .map_err(|e| StratumError::Storage(e.into()))?;
 
-    // 更新分区指针
+    // Updating the partition pointer
     storage
         .update_pointer(&pid, &new_snapshot.id)
         .map_err(|e| StratumError::Storage(e.into()))?;
@@ -128,11 +128,11 @@ pub fn apply_agent_edit(
     Ok(new_snapshot.id)
 }
 
-/// 将 Agent 的修改移动到 approval 层的 Agent 分区
+/// Moving Agent Changes to the Agent Partition at the Approval Level
 ///
-/// 对应架构文档的 `move_agent_to_approval`:
-/// - 取 agent_raw 分区和 approval agent 分区的当前快照
-/// - 合并生成新快照推入 approval agent 分区
+/// Corresponds to `move_agent_to_approval` in the architecture documentation.
+/// - Take the current snapshot of the agent_raw partition and the approval agent partition
+/// - Merge to generate a new snapshot to push into the approval agent partition
 pub fn move_agent_to_approval(
     storage: &SqliteStorage,
     agent_id: &AgentInstanceId,
@@ -157,13 +157,13 @@ pub fn move_agent_to_approval(
         .get_snapshot(&approval_partition.current_snapshot)
         .map_err(|e| StratumError::Storage(e.into()))?;
 
-    // 重建文本
+    // Reconstructed text
     let agent_text =
         crate::state_machine::transition::reconstruct_text(storage, &agent_snapshot)?;
     let approval_text =
         crate::state_machine::transition::reconstruct_text(storage, &approval_snapshot)?;
 
-    // 计算合并 diff
+    // Calculate the merge diff
     let merge_diff = diff_to_line_diff(&approval_text, &agent_text);
     if merge_diff.is_empty() {
         return Ok(approval_partition.current_snapshot);
@@ -178,7 +178,7 @@ pub fn move_agent_to_approval(
         .store_delta(&merge_delta)
         .map_err(|e| StratumError::Storage(e.into()))?;
 
-    // 创建 merge snapshot
+    // Create a merge snapshot
     let new_snapshot = Snapshot::merge(
         vec![&approval_snapshot, &agent_snapshot],
         merge_delta.id,
@@ -195,7 +195,7 @@ pub fn move_agent_to_approval(
     Ok(new_snapshot.id)
 }
 
-/// 放弃 Agent 修改（仅切换指针到父 Snapshot）
+/// Abandon Agent modifications (switch pointer to parent Snapshot only)
 pub fn discard_agent_edit(
     storage: &SqliteStorage,
     agent_id: &AgentInstanceId,
@@ -209,7 +209,7 @@ pub fn discard_agent_edit(
         .get_snapshot(&partition.current_snapshot)
         .map_err(|e| StratumError::Storage(e.into()))?;
 
-    // 如果存在父快照，回退到父快照
+    // If a parent snapshot exists, fallback to the parent snapshot
     if let Some(&parent_id) = current_snapshot.parents.first() {
         storage
             .update_pointer(&pid, &parent_id)
@@ -264,11 +264,11 @@ mod tests {
         let initial_id = create_initial_snapshot(&storage, "original\n");
         ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
 
-        // 应用编辑
+        // Application Editor
         let edited_id = apply_agent_edit(&storage, &agent_id, "test.txt", "original\nchanged\n").unwrap();
         assert_ne!(edited_id, initial_id);
 
-        // 放弃编辑 — 回退到父快照
+        // Abandon Editing - Fallback to Parent Snapshot
         discard_agent_edit(&storage, &agent_id).unwrap();
         let partition = storage.get_partition(&agent_partition_id(&agent_id)).unwrap();
         assert_eq!(partition.current_snapshot, initial_id);
@@ -290,7 +290,7 @@ mod tests {
 
         assert_ne!(a_id, b_id);
 
-        // 验证各自分区独立
+        // Verify that the respective partitions are independent
         let pa = storage.get_partition(&agent_partition_id(&agent_a)).unwrap();
         let pb = storage.get_partition(&agent_partition_id(&agent_b)).unwrap();
         assert_eq!(pa.current_snapshot, a_id);

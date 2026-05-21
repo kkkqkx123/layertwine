@@ -47,15 +47,15 @@ impl SqliteStorage {
         })
     }
 
-    /// 使用现有连接创建存储实例（用于事务内操作）
-    /// 共享同一个底层 Arc<Mutex<Connection>>
+    /// Creating storage instances using existing connections (for in-transaction operations)
+    /// Share the same underlying Arc<Mutex<Connection>>
     pub fn new_with_connection_arc(conn: &Arc<Mutex<Connection>>) -> Self {
         SqliteStorage {
             conn: conn.clone(),
         }
     }
 
-    /// 获取内部连接的引用（用于事务等）
+    /// Getting a reference to an internal connection (for transactions, etc.)
     pub fn with_conn<F, T>(&self, f: F) -> StorageResult<T>
     where
         F: FnOnce(&Connection) -> StorageResult<T>,
@@ -556,14 +556,16 @@ impl CheckpointStore for SqliteStorage {
         let conn = self.conn.lock().unwrap();
         let parents_json = serde_json::to_vec(&checkpoint.parents)
             .map_err(|e| crate::StorageError::Serialization(e.to_string()))?;
+        let snapshot_ids_json = serde_json::to_vec(&checkpoint.baseline_snapshots)
+            .map_err(|e| crate::StorageError::Serialization(e.to_string()))?;
 
         conn.execute(
-            "INSERT OR IGNORE INTO checkpoints (id, parents, snapshot_id, author, message, git_anchor, created_at)
+            "INSERT OR IGNORE INTO checkpoints (id, parents, snapshot_ids, author, message, git_anchor, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
                 &checkpoint.id.0.to_vec(),
                 parents_json,
-                &checkpoint.baseline_snapshot.0.to_vec(),
+                snapshot_ids_json,
                 checkpoint.metadata.author,
                 checkpoint.metadata.message,
                 checkpoint.metadata.git_anchor,
@@ -576,7 +578,7 @@ impl CheckpointStore for SqliteStorage {
     fn get_checkpoint(&self, id: &CheckpointId) -> StorageResult<Checkpoint> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, parents, snapshot_id, author, message, git_anchor, created_at FROM checkpoints WHERE id = ?1"
+            "SELECT id, parents, snapshot_ids, author, message, git_anchor, created_at FROM checkpoints WHERE id = ?1"
         )?;
 
         let result = stmt.query_row(rusqlite::params![&id.0.to_vec()], |row| {
@@ -588,9 +590,9 @@ impl CheckpointStore for SqliteStorage {
             let parents: Vec<CheckpointId> = serde_json::from_slice(&parents_json)
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
 
-            let snap_bytes: Vec<u8> = row.get(2)?;
-            let mut snap_arr = [0u8; 32];
-            snap_arr.copy_from_slice(&snap_bytes);
+            let snap_ids_json: Vec<u8> = row.get(2)?;
+            let baseline_snapshots: Vec<SnapshotId> = serde_json::from_slice(&snap_ids_json)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
 
             let author: String = row.get(3)?;
             let message: String = row.get(4)?;
@@ -600,7 +602,7 @@ impl CheckpointStore for SqliteStorage {
             Ok(Checkpoint {
                 id: ContentId(id_arr).into(),
                 parents,
-                baseline_snapshot: ContentId(snap_arr).into(),
+                baseline_snapshots,
                 metadata: crate::checkpoint::checkpoint::CheckpointMetadata {
                     author,
                     message,

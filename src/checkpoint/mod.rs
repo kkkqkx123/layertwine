@@ -1,7 +1,7 @@
 //! Checkpoint Module (Phase 4)
 //!
-//! 自研检查点仓库：Checkpoint 提交流程、轻量分支创建/切换/合并、DAG 历史追踪。
-//! 独立于 Git 的版本管理核心。
+//! Self-developed checkpoint repository: Checkpoint commit process, lightweight branch creation/switching/merging, DAG history tracking.
+//! A versioning core independent of Git.
 
 pub mod checkpoint;
 pub mod branch;

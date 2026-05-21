@@ -1,8 +1,3 @@
-//! CheckpointRepo — 检查点仓库总控
-//!
-//! 管理检查点提交、分支创建/切换/合并、DAG 历史追踪。
-//! 参考 architecture/05-检查点仓库与分支管理.md §5.5
-
 use crate::checkpoint::branch::Branch;
 use crate::checkpoint::checkpoint::{Checkpoint, CheckpointMetadata};
 use crate::checkpoint::dag::CheckpointDag;
@@ -10,26 +5,25 @@ use crate::core::types::{CheckpointId, SnapshotId};
 use crate::error::{Result, StratumError};
 use std::collections::HashMap;
 
-/// 检查点仓库 — 版本管理核心
+/// Checkpoint Repository - Versioning Core
 ///
-/// 独立于 Git 的版本管理，管理检查点提交、分支、DAG 历史。
+/// Git-independent versioning, managing checkpoint commits, branches, and DAG history.
 pub struct CheckpointRepo {
-    /// 所有分支
+    /// All branches
     pub branches: Vec<Branch>,
-    /// 当前分支索引
+    /// Current branch index
     pub current_branch: usize,
-    /// 检查点 DAG
+    /// Checkpoint DAG
     pub checkpoint_dag: CheckpointDag,
-    /// 所有检查点（ID → Checkpoint）
+    /// All checkpoints (ID → Checkpoint)
     checkpoints: HashMap<CheckpointId, Checkpoint>,
 }
 
 impl CheckpointRepo {
-    /// 创建新的检查点仓库
-    pub fn new(initial_snapshot: SnapshotId) -> Self {
-        // 创建初始 checkpoint
+    /// Create a new checkpoint repository with multi-file initialization support
+    pub fn new(initial_snapshots: Vec<SnapshotId>) -> Self {
         let metadata = CheckpointMetadata::new("system", "root checkpoint");
-        let root = Checkpoint::new(initial_snapshot, vec![], metadata);
+        let root = Checkpoint::new(initial_snapshots, vec![], metadata);
         let root_id = root.id;
 
         let mut dag = CheckpointDag::new();
@@ -38,7 +32,6 @@ impl CheckpointRepo {
         let mut checkpoints = HashMap::new();
         checkpoints.insert(root_id, root);
 
-        // 创建 main 分支
         let main_branch = Branch::new("main", root_id);
 
         CheckpointRepo {
@@ -49,69 +42,84 @@ impl CheckpointRepo {
         }
     }
 
-    // ── 检查点操作 ──
+    /// Convenient single-snapshot compatible construction
+    pub fn new_single(initial_snapshot: SnapshotId) -> Self {
+        CheckpointRepo::new(vec![initial_snapshot])
+    }
 
-    /// 获取指定检查点
+    // Checkpoint operations -
+
+    /// Getting the specified checkpoints
     pub fn get_checkpoint(&self, id: &CheckpointId) -> Result<&Checkpoint> {
         self.checkpoints
             .get(id)
             .ok_or_else(|| StratumError::NotFound(format!("checkpoint {} not found", id)))
     }
 
-    /// 获取可变引用
+    /// Getting variable references
     pub fn get_checkpoint_mut(&mut self, id: &CheckpointId) -> Result<&mut Checkpoint> {
         self.checkpoints
             .get_mut(id)
             .ok_or_else(|| StratumError::NotFound(format!("checkpoint {} not found", id)))
     }
 
-    /// 提交：将 staged 的当前状态打包为 Checkpoint
+    /// Commit: Packages the current state of staged as a Checkpoint.
     ///
-    /// 1. 创建新 Checkpoint
-    /// 2. 添加到 DAG
-    /// 3. 更新分支 head
+    /// 1. Create a new Checkpoint (supports multi-file snapshots)
+    /// 2. Add to DAG
+    /// 3. Update branch head
     pub fn commit(
         &mut self,
-        snapshot_id: SnapshotId,
+        snapshot_ids: Vec<SnapshotId>,
         message: &str,
         author: &str,
     ) -> Result<CheckpointId> {
+        if snapshot_ids.is_empty() {
+            return Err(StratumError::Checkpoint(
+                "cannot commit with empty snapshot list".to_string(),
+            ));
+        }
         let current_head = self.current_branch_head();
         let metadata = CheckpointMetadata::new(author, message);
-        let cp = Checkpoint::new(snapshot_id, vec![current_head], metadata);
+        let cp = Checkpoint::new(snapshot_ids, vec![current_head], metadata);
         let cp_id = cp.id;
 
-        // 存储
         self.checkpoints.insert(cp_id, cp);
-
-        // 更新 DAG
         self.checkpoint_dag.add_node(cp_id);
         self.checkpoint_dag.add_edge(current_head, cp_id);
-
-        // 更新分支 head
         self.current_branch_mut().set_head(cp_id);
 
         Ok(cp_id)
     }
 
-    // ── 分支操作 ──
+    /// Compatible with single snapshot submission
+    pub fn commit_single(
+        &mut self,
+        snapshot_id: SnapshotId,
+        message: &str,
+        author: &str,
+    ) -> Result<CheckpointId> {
+        self.commit(vec![snapshot_id], message, author)
+    }
 
-    /// 获取当前分支的 head Checkpoint ID
+    // Branching out.
+
+    /// Get the head Checkpoint ID of the current branch
     pub fn current_branch_head(&self) -> CheckpointId {
         self.branches[self.current_branch].head
     }
 
-    /// 获取当前分支的可变引用
+    /// Get a mutable reference to the current branch
     pub fn current_branch_mut(&mut self) -> &mut Branch {
         &mut self.branches[self.current_branch]
     }
 
-    /// 获取当前分支名称
+    /// Get current branch name
     pub fn current_branch_name(&self) -> &str {
         &self.branches[self.current_branch].name
     }
 
-    /// 基于当前 head 创建新分支
+    /// Create a new branch based on the current head
     pub fn create_branch(&mut self, name: &str) -> Result<()> {
         if self.branches.iter().any(|b| b.name == name) {
             return Err(StratumError::Checkpoint(format!(
@@ -125,7 +133,7 @@ impl CheckpointRepo {
         Ok(())
     }
 
-    /// 在指定 checkpoint 上创建新分支
+    /// Create a new branch on the specified checkpoint
     pub fn create_branch_from(&mut self, name: &str, from_checkpoint: CheckpointId) -> Result<()> {
         if !self.checkpoints.contains_key(&from_checkpoint) {
             return Err(StratumError::NotFound(format!(
@@ -144,7 +152,7 @@ impl CheckpointRepo {
         Ok(())
     }
 
-    /// 切换分支
+    /// Switching Branches
     pub fn switch_branch(&mut self, name: &str) -> Result<usize> {
         let idx = self
             .branches
@@ -156,12 +164,12 @@ impl CheckpointRepo {
         Ok(idx)
     }
 
-    /// 列出所有分支
+    /// List all branches
     pub fn list_branches(&self) -> &[Branch] {
         &self.branches
     }
 
-    /// 查找分支索引
+    /// Find Branch Index
     pub fn find_branch(&self, name: &str) -> Result<usize> {
         self.branches
             .iter()
@@ -169,45 +177,46 @@ impl CheckpointRepo {
             .ok_or_else(|| StratumError::NotFound(format!("branch '{}' not found", name)))
     }
 
-    /// 获取指定分支的 head
+    /// Get the head of the specified branch
     pub fn get_branch_head(&self, name: &str) -> Result<CheckpointId> {
         let idx = self.find_branch(name)?;
         Ok(self.branches[idx].head)
     }
 
-    /// 合并分支：将 source_branch 合并到当前分支
+    /// Merge branch: Merge source_branch into the current branch.
     ///
-    /// 生成多父 Checkpoint，添加到 DAG。
+    /// Generate multiple parent Checkpoints to add to the DAG.
     pub fn merge_branches(
         &mut self,
         source_branch: &str,
-        snapshot_id: SnapshotId,
+        snapshot_ids: Vec<SnapshotId>,
         message: &str,
         author: &str,
     ) -> Result<CheckpointId> {
+        if snapshot_ids.is_empty() {
+            return Err(StratumError::Checkpoint(
+                "cannot merge with empty snapshot list".to_string(),
+            ));
+        }
         let source_head = self.get_branch_head(source_branch)?;
         let current_head = self.current_branch_head();
 
         let metadata = CheckpointMetadata::new(author, message);
-        let cp = Checkpoint::new(snapshot_id, vec![current_head, source_head], metadata);
+        let cp = Checkpoint::new(snapshot_ids, vec![current_head, source_head], metadata);
         let cp_id = cp.id;
 
         self.checkpoints.insert(cp_id, cp);
-
-        // 更新 DAG
         self.checkpoint_dag.add_node(cp_id);
         self.checkpoint_dag.add_edge(current_head, cp_id);
         self.checkpoint_dag.add_edge(source_head, cp_id);
-
-        // 更新当前分支 head
         self.current_branch_mut().set_head(cp_id);
 
         Ok(cp_id)
     }
 
-    // ── 日志 ──
+    // - -Logs - -
 
-    /// 从当前 head 回溯祖先链
+    /// Trace back the ancestor chain from the current head
     pub fn log(&self, count: usize) -> Vec<&Checkpoint> {
         let mut result = Vec::new();
         let mut current = Some(self.current_branch_head());
@@ -227,7 +236,7 @@ impl CheckpointRepo {
         result
     }
 
-    /// 从指定 checkpoint 回溯
+    /// Backtracking from a given checkpoint
     pub fn log_from(&self, start: &CheckpointId, count: usize) -> Vec<&Checkpoint> {
         let mut result = Vec::new();
         let mut current = Some(*start);
@@ -247,16 +256,27 @@ impl CheckpointRepo {
         result
     }
 
-    // ── 查询 ──
+    // - - Enquiry - -
 
-    /// 获取所有检查点数量
+    /// Get the number of all checkpoints
     pub fn checkpoint_count(&self) -> usize {
         self.checkpoints.len()
     }
 
-    /// DAG 引用
+    /// DAG references
     pub fn dag(&self) -> &CheckpointDag {
         &self.checkpoint_dag
+    }
+
+    /// Delete checkpoints
+    pub fn remove_checkpoint(&mut self, id: &CheckpointId) -> Result<()> {
+        if self.checkpoints.remove(id).is_none() {
+            return Err(crate::error::StratumError::NotFound(
+                format!("checkpoint {} not found", id),
+            ));
+        }
+        self.checkpoint_dag.remove_node(id);
+        Ok(())
     }
 }
 
@@ -272,24 +292,34 @@ mod tests {
     #[test]
     fn test_init_repo() {
         let snap = dummy_snapshot_id(1);
-        let repo = CheckpointRepo::new(snap);
+        let repo = CheckpointRepo::new_single(snap);
         assert_eq!(repo.branches.len(), 1);
         assert_eq!(repo.branches[0].name, "main");
         assert_eq!(repo.checkpoint_count(), 1);
     }
 
     #[test]
+    fn test_init_repo_multi_snapshot() {
+        let snap1 = dummy_snapshot_id(1);
+        let snap2 = dummy_snapshot_id(2);
+        let snapshots = vec![snap1, snap2];
+        let repo = CheckpointRepo::new(snapshots);
+        assert_eq!(repo.checkpoint_count(), 1);
+        let root = repo.get_checkpoint(&repo.current_branch_head()).unwrap();
+        assert_eq!(root.baseline_snapshots.len(), 2);
+    }
+
+    #[test]
     fn test_linear_commit() {
         let snap1 = dummy_snapshot_id(1);
-        let mut repo = CheckpointRepo::new(snap1);
+        let mut repo = CheckpointRepo::new_single(snap1);
 
         let snap2 = dummy_snapshot_id(2);
-        let cp1 = repo.commit(snap2, "second commit", "user").unwrap();
+        let cp1 = repo.commit_single(snap2, "second commit", "user").unwrap();
 
         let snap3 = dummy_snapshot_id(3);
-        let cp2 = repo.commit(snap3, "third commit", "user").unwrap();
+        let cp2 = repo.commit_single(snap3, "third commit", "user").unwrap();
 
-        // log 应该返回 3 条（含 root）
         let log = repo.log(10);
         assert_eq!(log.len(), 3);
         assert_eq!(log[0].id, cp2);
@@ -297,9 +327,22 @@ mod tests {
     }
 
     #[test]
+    fn test_multi_snapshot_commit() {
+        let snap1 = dummy_snapshot_id(1);
+        let mut repo = CheckpointRepo::new_single(snap1);
+
+        let snap2 = dummy_snapshot_id(2);
+        let snap3 = dummy_snapshot_id(3);
+        let cp1 = repo.commit(vec![snap2, snap3], "multi-file commit", "user").unwrap();
+
+        let cp = repo.get_checkpoint(&cp1).unwrap();
+        assert_eq!(cp.baseline_snapshots.len(), 2);
+    }
+
+    #[test]
     fn test_create_and_switch_branch() {
         let snap = dummy_snapshot_id(1);
-        let mut repo = CheckpointRepo::new(snap);
+        let mut repo = CheckpointRepo::new_single(snap);
 
         repo.create_branch("feature").unwrap();
         assert_eq!(repo.branches.len(), 2);
@@ -311,26 +354,21 @@ mod tests {
     #[test]
     fn test_merge_branches() {
         let snap1 = dummy_snapshot_id(1);
-        let mut repo = CheckpointRepo::new(snap1);
+        let mut repo = CheckpointRepo::new_single(snap1);
 
-        // main 分支上提交一次
         let snap2 = dummy_snapshot_id(2);
-        repo.commit(snap2, "main v2", "user").unwrap();
+        repo.commit_single(snap2, "main v2", "user").unwrap();
 
-        // 创建 feature 分支并切换
         repo.create_branch("feature").unwrap();
 
-        // feature 上提交
         let snap3 = dummy_snapshot_id(3);
-        repo.commit(snap3, "feature v1", "user").unwrap();
+        repo.commit_single(snap3, "feature v1", "user").unwrap();
 
-        // 切回 main
         repo.switch_branch("main").unwrap();
 
-        // main 上合并 feature
         let snap4 = dummy_snapshot_id(4);
         let merge_cp = repo
-            .merge_branches("feature", snap4, "merge feature", "user")
+            .merge_branches("feature", vec![snap4], "merge feature", "user")
             .unwrap();
 
         let cp = repo.get_checkpoint(&merge_cp).unwrap();
@@ -340,10 +378,10 @@ mod tests {
     #[test]
     fn test_log_count() {
         let snap1 = dummy_snapshot_id(1);
-        let mut repo = CheckpointRepo::new(snap1);
+        let mut repo = CheckpointRepo::new_single(snap1);
 
         for i in 2..=10 {
-            repo.commit(dummy_snapshot_id(i), &format!("commit {}", i), "user")
+            repo.commit_single(dummy_snapshot_id(i), &format!("commit {}", i), "user")
                 .unwrap();
         }
 
@@ -355,12 +393,20 @@ mod tests {
     #[test]
     fn test_list_branches() {
         let snap = dummy_snapshot_id(1);
-        let mut repo = CheckpointRepo::new(snap);
+        let mut repo = CheckpointRepo::new_single(snap);
 
         repo.create_branch("feature-a").unwrap();
         repo.create_branch("feature-b").unwrap();
 
         let branches = repo.list_branches();
         assert_eq!(branches.len(), 3);
+    }
+
+    #[test]
+    fn test_empty_commit_fails() {
+        let snap = dummy_snapshot_id(1);
+        let mut repo = CheckpointRepo::new_single(snap);
+        let result = repo.commit(vec![], "empty", "user");
+        assert!(result.is_err());
     }
 }

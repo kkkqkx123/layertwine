@@ -1,7 +1,7 @@
-//! staged 层操作
+//! staged layer operation
 //!
-//! Staged 层是提交前的最后一层。Approval 层的内容合并到此层后，
-//! 可通过 commit 打包为 Checkpoint（占位，P4 实现具体逻辑）。
+//The Staged layer is the last layer before submission. The Staged layer is the last layer before the commit, and the contents of the Approval layer are merged into this layer.
+//! can be packaged as a Checkpoint via commit (placeholder, P4 implements specific logic).
 
 use crate::core::delta::Delta;
 use crate::core::partition::Partition;
@@ -12,12 +12,12 @@ use crate::error::{Result, StratumError};
 use crate::storage::repository::{DeltaStore, PartitionStore, SnapshotStore};
 use crate::storage::sqlite_storage::SqliteStorage;
 
-/// staged 分区的固定 ID
+/// Fixed ID of the staged partition
 pub fn staged_partition_id() -> PartitionId {
     uuid::Uuid::from_u128(0x6000_0000_0000_0000_0000_0000_0000_0000)
 }
 
-/// 获取或创建 staged 分区
+/// Getting or creating staged partitions
 pub fn ensure_staged_partition(
     storage: &SqliteStorage,
     initial_snapshot_id: SnapshotId,
@@ -39,9 +39,9 @@ pub fn ensure_staged_partition(
     }
 }
 
-/// 将 approval Agent 分区的内容合并到 staged
+/// Merge the contents of the approval Agent partition into the staged
 ///
-/// 从 approval 层取指定 Agent 分区的当前快照，合并到 staged。
+/// Takes the current snapshot of the specified Agent partition from the approval level and merges it into staged.
 pub fn merge_approval_to_staged(
     storage: &SqliteStorage,
     approval_partition_id: &PartitionId,
@@ -97,22 +97,22 @@ pub fn merge_approval_to_staged(
     Ok(new_snapshot.id)
 }
 
-/// 将 staged 提交为 Checkpoint（占位，P4 实现具体逻辑）
+/// Submit staged as Checkpoint (placeholder, P4 implements specific logic)
 ///
-/// 当前仅返回 staged 的当前快照 ID 和占位 CheckpointId。
-/// P4 中将实现完整的 Checkpoint 提交逻辑。
+/// Currently only the staged current snapshot ID and placeholder CheckpointId are returned.
+/// The full Checkpoint submission logic will be implemented in P4.
 pub fn commit_staged_to_checkpoint(
     _storage: &SqliteStorage,
     _message: &str,
 ) -> Result<()> {
-    // P4 实现：将 staged 的当前快照打包为 Checkpoint
-    // 添加到 DAG，更新分支 head，清空 staged
+    // P4 Implementation: Packaging the staged current snapshot as a Checkpoint
+    // Add to DAG, update branch head, clear staged
     Err(StratumError::Checkpoint(
         "checkpoint commit not yet implemented in P3, see P4".into(),
     ))
 }
 
-/// 清空 staged 分区（重置到初始状态）
+/// Empty staged partition (reset to initial state)
 pub fn reset_staged(
     storage: &SqliteStorage,
     base_snapshot_id: SnapshotId,
@@ -162,7 +162,7 @@ mod tests {
         );
         storage.create_partition(&partition).unwrap();
 
-        // 创建修改后的快照
+        // Creating a modified snapshot
         let file_node = FileNode::new(std::path::PathBuf::from(file_path), content.as_bytes());
         storage.store_file_node(&file_node, content.as_bytes()).unwrap();
         let diff = diff_to_line_diff("base\n", content);

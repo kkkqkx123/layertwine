@@ -1,26 +1,26 @@
-//! DAG — 有向无环图
+//! DAG - Directed Acyclic Graph
 //!
-//! 管理检查点的父子关系，提供祖先查询、可达性判断、共同祖先查找等功能。
-//! 参考 architecture/05-检查点仓库与分支管理.md §5.4
+//! Manages the parent-child relationship of checkpoints, providing functions such as ancestor lookup, reachability determination, and common ancestor lookup.
+//! Reference architecture/05-Checkpoint warehouse and branch management.md §5.4
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use crate::core::types::CheckpointId;
 
-/// 有向无环图
+/// directed acyclic graph
 ///
-/// `nodes`: node → children (反向索引，用于向前遍历)
-/// parents 关系在 Checkpoint 实体中维护（向后遍历）
+/// `nodes`: node → children (reverse index, for forward traversal)
+/// The parents relationship is maintained in the Checkpoint entity (traversed backwards)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointDag {
-    /// node → children 映射（反向索引）
+    /// node → children mapping (reverse indexing)
     nodes: HashMap<CheckpointId, HashSet<CheckpointId>>,
-    /// Generation number: node → 从根开始的最大距离
+    /// Generation number: node → maximum distance from root
     generation: HashMap<CheckpointId, u64>,
 }
 
 impl CheckpointDag {
-    /// 创建空的 DAG
+    /// Creating an empty DAG
     pub fn new() -> Self {
         CheckpointDag {
             nodes: HashMap::new(),
@@ -28,36 +28,39 @@ impl CheckpointDag {
         }
     }
 
-    /// 添加节点
+    /// Add Node
     pub fn add_node(&mut self, id: CheckpointId) {
         self.nodes.entry(id).or_default();
         self.generation.entry(id).or_insert(0);
     }
 
-    /// 添加父子关系（parent → child）
+    /// Add parent-child relationship (parent → child)
     pub fn add_edge(&mut self, parent: CheckpointId, child: CheckpointId) {
-        // 确保两个节点都存在
+        // Make sure both nodes exist
         self.nodes.entry(parent).or_default();
         self.nodes.entry(child).or_default();
 
-        // 添加子关系
+        // Adding Sub-Relationships
         self.nodes.entry(parent).or_default().insert(child);
 
-        // 更新 generation number
+        // Initialize parent's generation (if it doesn't exist)
+        self.generation.entry(parent).or_insert(0);
+
+        // Update generation number of child
         let parent_gen = *self.generation.get(&parent).unwrap_or(&0);
         let child_gen = self.generation.entry(child).or_insert(0);
         *child_gen = (*child_gen).max(parent_gen + 1);
     }
 
-    /// 检查节点是否存在
+    /// Check if the node exists
     pub fn has_node(&self, id: &CheckpointId) -> bool {
         self.nodes.contains_key(id)
     }
 
-    /// 获取节点的所有祖先（从近到远，线性遍历）
+    /// Get all ancestors of the node (from near to far, linear traversal)
     ///
-    /// 通过 Checkpoint 实体中的 parents 列表进行遍历。
-    /// 注意：此方法需要传入 parent 查询函数。
+    /// Iterate through the parents list in the Checkpoint entity.
+    /// Note: This method requires the parent query function to be passed.
     pub fn ancestors<F>(&self, id: &CheckpointId, get_parents: F) -> Vec<CheckpointId>
     where
         F: Fn(&CheckpointId) -> Vec<CheckpointId>,
@@ -84,9 +87,9 @@ impl CheckpointDag {
         result
     }
 
-    /// 判断 ancestor 是否是 descendant 的祖先（可达性判断）
+    /// Determine whether ancestor is an ancestor of descendant (reachability judgment)
     ///
-    /// 从 ancestor 的子节点向前遍历 BFS。
+    /// Traverse the BFS forward from the ancestor's children.
     pub fn is_ancestor(&self, ancestor: &CheckpointId, descendant: &CheckpointId) -> bool {
         if ancestor == descendant {
             return true;
@@ -115,9 +118,9 @@ impl CheckpointDag {
         false
     }
 
-    /// 寻找两个节点的共同祖先
+    /// Finding the common ancestor of two nodes
     ///
-    /// 获取 id1 的所有祖先，再从 id2 反向遍历找第一个匹配的。
+    /// Get all the ancestors of id1, then iterate backwards from id2 to find the first match.
     pub fn merge_base<F>(&self, id1: &CheckpointId, id2: &CheckpointId, get_parents: F) -> Option<CheckpointId>
     where
         F: Fn(&CheckpointId) -> Vec<CheckpointId>,
@@ -149,7 +152,7 @@ impl CheckpointDag {
         None
     }
 
-    /// 获取节点的子节点列表
+    /// Get a list of the node's children
     pub fn get_children(&self, id: &CheckpointId) -> Vec<CheckpointId> {
         self.nodes
             .get(id)
@@ -157,22 +160,32 @@ impl CheckpointDag {
             .unwrap_or_default()
     }
 
-    /// 获取节点的 generation number
+    /// Get the generation number of the node
     pub fn generation(&self, id: &CheckpointId) -> Option<u64> {
         self.generation.get(id).copied()
     }
 
-    /// 获取所有节点
+    /// Get all nodes
     pub fn all_nodes(&self) -> Vec<CheckpointId> {
         self.nodes.keys().copied().collect()
     }
 
-    /// 节点数量
+    /// Delete nodes and their edges
+    pub fn remove_node(&mut self, id: &CheckpointId) {
+        self.nodes.remove(id);
+        self.generation.remove(id);
+        // Remove from the list of children of all other nodes
+        for children in self.nodes.values_mut() {
+            children.remove(id);
+        }
+    }
+
+    /// Number of nodes
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
 
-    /// 是否为空
+    /// Whether or not it is empty
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
@@ -193,7 +206,7 @@ mod tests {
         ContentId::from_content(data)
     }
 
-    /// 辅助函数：模拟从 Checkpoint 中获取 parents
+    /// helper function: simulate getting parents from Checkpoint
     fn make_get_parents(checkpoints: &HashMap<CheckpointId, Vec<CheckpointId>>) -> impl Fn(&CheckpointId) -> Vec<CheckpointId> + '_ {
         move |id| checkpoints.get(id).cloned().unwrap_or_default()
     }
@@ -242,7 +255,7 @@ mod tests {
         parents.insert(c, vec![b]);
         let get_p = make_get_parents(&parents);
 
-        // c 的祖先：a, b
+        // Ancestors of c: a, b
         let ancestors = dag.ancestors(&c, &get_p);
         assert!(ancestors.contains(&a));
         assert!(ancestors.contains(&b));

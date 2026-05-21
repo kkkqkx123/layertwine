@@ -1,0 +1,85 @@
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use crate::core::delta::Delta;
+use crate::core::file_node::FileNode;
+use crate::core::types::{BackupId, ContentId, SnapshotId};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupSnapshot {
+    pub id: BackupId,
+    pub source_snapshot: SnapshotId,
+    pub file: FileNode,
+    pub deltas: Vec<Delta>,
+    pub label: Option<String>,
+    pub backed_at: i64,
+    pub metadata: HashMap<String, String>,
+}
+
+impl BackupSnapshot {
+    pub fn new(
+        source_snapshot: SnapshotId,
+        file: FileNode,
+        deltas: Vec<Delta>,
+        label: Option<String>,
+    ) -> Self {
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut bs = BackupSnapshot {
+            id: ContentId([0u8; 32]),
+            source_snapshot,
+            file,
+            deltas,
+            label,
+            backed_at: now,
+            metadata: HashMap::new(),
+        };
+        bs.id = bs.compute_id();
+        bs
+    }
+
+    pub fn compute_id(&self) -> BackupId {
+        let json = serde_json::to_vec(self).unwrap_or_default();
+        BackupId::from_content(&json)
+    }
+
+    pub fn with_metadata(mut self, key: &str, value: &str) -> Self {
+        self.metadata.insert(key.to_string(), value.to_string());
+        self.id = self.compute_id();
+        self
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BackupFilter {
+    pub source_snapshot: Option<SnapshotId>,
+    pub time_range: Option<(i64, i64)>,
+    pub label: Option<String>,
+    pub metadata_key: Option<String>,
+    pub metadata_value: Option<String>,
+}
+
+impl BackupFilter {
+    pub fn new() -> Self {
+        BackupFilter::default()
+    }
+
+    pub fn with_source(mut self, id: SnapshotId) -> Self {
+        self.source_snapshot = Some(id);
+        self
+    }
+
+    pub fn with_time_range(mut self, start: i64, end: i64) -> Self {
+        self.time_range = Some((start, end));
+        self
+    }
+
+    pub fn with_label(mut self, label: &str) -> Self {
+        self.label = Some(label.to_string());
+        self
+    }
+
+    pub fn with_metadata(mut self, key: &str, value: &str) -> Self {
+        self.metadata_key = Some(key.to_string());
+        self.metadata_value = Some(value.to_string());
+        self
+    }
+}

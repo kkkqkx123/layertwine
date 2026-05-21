@@ -1,7 +1,7 @@
-//! approval 层操作
+//! approval Layer Operation
 //!
-//! Agent 修改经过审核后，可从 Agent Approval 分区迁移到 Integrated 分区，
-//! 多个 Integrated 分区可合并到 Unified 分区。同时支持分区间的双向指针切换。
+//! Agent changes can be migrated from an Agent Approval partition to an Integrated partition after they have been reviewed.
+//! Multiple Integrated partitions can be merged into a Unified partition. Bi-directional pointer switching between partitions is also supported.
 
 use crate::core::delta::Delta;
 use crate::core::partition::Partition;
@@ -14,9 +14,9 @@ use crate::error::{Result, StratumError};
 use crate::storage::repository::{DeltaStore, PartitionStore, SnapshotStore};
 use crate::storage::sqlite_storage::SqliteStorage;
 
-// ── Partition ID 生成 ──
+// Partition ID generation -
 
-/// approval 层中 Agent 分区的 ID
+/// ID of the Agent partition in the approval layer
 pub fn approval_agent_partition_id(agent_id: &AgentInstanceId) -> PartitionId {
     let uuid = uuid::Uuid::from_u128(0x3000_0000_0000_0000_0000_0000_0000_0000);
     let bytes = uuid.as_bytes();
@@ -28,7 +28,7 @@ pub fn approval_agent_partition_id(agent_id: &AgentInstanceId) -> PartitionId {
     uuid::Uuid::from_bytes(new_bytes)
 }
 
-/// Integrated 分区的 ID
+/// ID of the Integrated partition
 pub fn integrated_partition_id(name: &str) -> PartitionId {
     let uuid = uuid::Uuid::from_u128(0x4000_0000_0000_0000_0000_0000_0000_0000);
     let bytes = uuid.as_bytes();
@@ -40,14 +40,14 @@ pub fn integrated_partition_id(name: &str) -> PartitionId {
     uuid::Uuid::from_bytes(new_bytes)
 }
 
-/// Unified 分区的固定 ID
+/// Fixed ID of the Unified partition
 pub fn unified_partition_id() -> PartitionId {
     uuid::Uuid::from_u128(0x5000_0000_0000_0000_0000_0000_0000_0000)
 }
 
-// ── 分区创建 ──
+// Partition creation -
 
-/// 获取或创建 approval 层的 Agent 分区
+/// Get or create an Agent partition at the approval level
 pub fn ensure_approval_agent_partition(
     storage: &SqliteStorage,
     agent_id: &AgentInstanceId,
@@ -70,7 +70,7 @@ pub fn ensure_approval_agent_partition(
     }
 }
 
-/// 获取或创建 Integrated 分区
+/// Getting or Creating Integrated Partitions
 pub fn ensure_integrated_partition(
     storage: &SqliteStorage,
     name: &str,
@@ -93,7 +93,7 @@ pub fn ensure_integrated_partition(
     }
 }
 
-/// 获取或创建 Unified 分区
+/// Getting or Creating a Unified Partition
 pub fn ensure_unified_partition(
     storage: &SqliteStorage,
     initial_snapshot_id: SnapshotId,
@@ -115,11 +115,11 @@ pub fn ensure_unified_partition(
     }
 }
 
-// ── 正向迁移操作 ──
+// -Forward migration operations -
 
-/// 将 Agent Approval 分区的内容迁移到 Integrated 分区
+/// Migrating the contents of an Agent Approval partition to an Integrated partition
 ///
-/// 从 approval 层的 Agent 分区取当前快照，合并到指定名称的 Integrated 分区。
+/// Takes the current snapshot from the Agent partition at the approval level and merges it into the Integrated partition with the specified name.
 pub fn move_approval_to_integrated(
     storage: &SqliteStorage,
     agent_id: &AgentInstanceId,
@@ -142,7 +142,7 @@ pub fn move_approval_to_integrated(
         .get_snapshot(&integrated_partition.current_snapshot)
         .map_err(|e| StratumError::Storage(e.into()))?;
 
-    // 合并
+    // incorporation
     let approval_text =
         crate::state_machine::transition::reconstruct_text(storage, &approval_snapshot)?;
     let integrated_text =
@@ -178,7 +178,7 @@ pub fn move_approval_to_integrated(
     Ok(new_snapshot.id)
 }
 
-/// 将多个 Integrated 分区合并到 Unified 分区
+/// Merging Multiple Integrated Partitions into a Unified Partition
 pub fn move_integrated_to_unified(
     storage: &SqliteStorage,
     integrated_names: &[String],
@@ -206,10 +206,10 @@ pub fn move_integrated_to_unified(
             .map_err(|e| StratumError::Storage(e.into()))?;
         let text = crate::state_machine::transition::reconstruct_text(storage, &snap)?;
 
-        // 累加合并
+        // cumulative merger
         let diff = diff_to_line_diff(&merged_text, &text);
         if !diff.is_empty() {
-            // 应用 diff 到 merged_text
+            // Apply diff to merged_text
             let delta = Delta::new(
                 snap.file.clone(),
                 diff,
@@ -218,25 +218,25 @@ pub fn move_integrated_to_unified(
             storage
                 .store_delta(&delta)
                 .map_err(|e| StratumError::Storage(e.into()))?;
-            // 使用 apply_deltas 更新 merged_text
+            // Update merged_text with apply_deltas
             merged_text = crate::engine::merge::apply_deltas(&merged_text, &[delta])
                 .map_err(|e| StratumError::Engine(e.to_string()))?;
         }
         parent_snapshots_owned.push(snap);
     }
 
-    // 如果没有变化，返回当前 unified 快照
+    // If there are no changes, the current unified snapshot is returned
     if parent_snapshots_owned.is_empty() {
         return Ok(unified_partition.current_snapshot);
     }
 
-    // 构建引用集合用于 merge
+    // Constructing reference collections for merge
     let mut all_parents: Vec<&Snapshot> = vec![&unified_snapshot];
     for snap in &parent_snapshots_owned {
         all_parents.push(snap);
     }
 
-    // 创建最终合并 diff
+    // Creating the final merge diff
     let final_diff = diff_to_line_diff(
         &crate::state_machine::transition::reconstruct_text(storage, &unified_snapshot)?,
         &merged_text,
@@ -266,9 +266,9 @@ pub fn move_integrated_to_unified(
     Ok(new_snapshot.id)
 }
 
-/// AGENT_RAW ↔ INTEGRATED ↔ UNIFIED 双向迁移（仅切换指针）
+/// AGENT_RAW ↔ INTEGRATED ↔ UNIFIED Bidirectional migration (switching pointers only)
 ///
-/// 将 from 分区的 current_snapshot 指针复制到 to 分区。
+/// Copies the current_snapshot pointer from the from partition to the to partition.
 pub fn migrate_between_partitions(
     storage: &SqliteStorage,
     from_partition_id: &PartitionId,
@@ -289,7 +289,9 @@ pub fn migrate_between_partitions(
 mod tests {
     use super::*;
     use crate::core::delta::Delta;
+    use crate::core::file_node::FileNode;
     use crate::core::types::SourceType;
+    use crate::storage::repository::FileNodeStore;
     use crate::storage::sqlite_storage::SqliteStorage;
     use std::sync::Arc;
 
@@ -318,7 +320,7 @@ mod tests {
         let integrated_name = "integrated-1";
         let integrated_pid = integrated_partition_id(integrated_name);
 
-        // 创建分区
+        // Creating Partitions
         let approval_part = Partition::new(
             "approval/test-agent".into(),
             PartitionType::Approval(agent_id.clone()),
@@ -333,7 +335,7 @@ mod tests {
         );
         storage.create_partition(&integrated_part).unwrap();
 
-        // 创建新快照用于 approval
+        // Creating a new snapshot for approval
         let new_snap = {
             let snap = storage.get_snapshot(&initial_id).unwrap();
             let s = Snapshot::from_parent(
@@ -351,7 +353,7 @@ mod tests {
         };
         storage.update_pointer(&approval_pid, &new_snap.id).unwrap();
 
-        // 迁移指针
+        // migration pointer
         migrate_between_partitions(&storage, &approval_pid, &integrated_pid).unwrap();
         let integrated = storage.get_partition(&integrated_pid).unwrap();
         assert_eq!(integrated.current_snapshot, new_snap.id);

@@ -75,7 +75,7 @@ pub const MIGRATION_CHECKPOINT_SQL: &str = "
 CREATE TABLE IF NOT EXISTS checkpoints (
     id              BLOB PRIMARY KEY,
     parents         BLOB NOT NULL,
-    snapshot_id     BLOB NOT NULL,
+    snapshot_ids    BLOB NOT NULL,
     author          TEXT NOT NULL,
     message         TEXT NOT NULL,
     git_anchor      TEXT,

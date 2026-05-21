@@ -1,7 +1,7 @@
-//! 层间流转逻辑
+//! Inter-layer flow logic
 //!
-//! 定义所有允许的正向/逆向流转操作，以及状态机铁律检查。
-//! 流转规则参考 architecture/03-分层状态机.md §3.4 状态机铁律。
+//! Define all allowed forward/reverse flow operations, and state machine irony checks.
+//! Flow rules reference architecture/03-hierarchical-state-machines.md §3.4 Iron laws of state machines.
 
 use crate::core::snapshot::Snapshot;
 use crate::core::types::{LayerType, PartitionId, SnapshotId};
@@ -10,9 +10,9 @@ use crate::error::{Result, StratumError};
 use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
 use crate::storage::sqlite_storage::SqliteStorage;
 
-// ===== 可允许的流转方向 =====
+// ===== Allowable Direction of Flow =====
 
-/// 正向流转类型
+/// Positive flow type
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForwardTransition {
     /// manual_edit → staged
@@ -27,7 +27,7 @@ pub enum ForwardTransition {
     ApprovalToStaged,
 }
 
-/// 逆向流转类型
+/// Type of reverse flow
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RollbackTransition {
     /// staged → manual_edit
@@ -40,11 +40,11 @@ pub enum RollbackTransition {
     ApprovalToAgentRaw,
 }
 
-// ===== 铁律检查 =====
+// ===== Iron Law Check =====
 
-/// 检查是否允许正向流转
+/// Check if positive flow is allowed
 ///
-/// 铁律 1: 不可越层流转 — 所有流转必须经过相邻层
+/// Iron rule 1: No cross-layer flows - all flows must pass through neighboring layers
 pub fn check_forward_valid(from: &LayerType, to: &LayerType) -> Result<()> {
     let valid = match (from, to) {
         (LayerType::ManualEdit, LayerType::Staged) => true,
@@ -55,16 +55,16 @@ pub fn check_forward_valid(from: &LayerType, to: &LayerType) -> Result<()> {
 
     if !valid {
         return Err(StratumError::StateMachine(format!(
-            "铁律检查失败: 不允许的越层流转 {:?} → {:?}",
+            "Ironclad check failed: impermissible cross-layer flow {:?} → {:?}",
             from, to
         )));
     }
     Ok(())
 }
 
-/// 检查是否允许逆向回退
+/// Check if reverse fallback is allowed
 ///
-/// 铁律 2: 不可反向写入 — 回退仅切换指针
+/// Ironclad Rule #2: No Reverse Writes - Fallback Only Toggles Pointer
 pub fn check_rollback_valid(from: &LayerType, to: &LayerType) -> Result<()> {
     let valid = match (from, to) {
         (LayerType::Staged, LayerType::ManualEdit) => true,
@@ -76,7 +76,7 @@ pub fn check_rollback_valid(from: &LayerType, to: &LayerType) -> Result<()> {
 
     if !valid {
         return Err(StratumError::StateMachine(format!(
-            "铁律检查失败: 不允许的越层回退 {:?} → {:?}",
+            "Ironclad check failed: impermissible cross-level fallback {:?} → {:?}",
             from, to
         )));
     }
@@ -85,13 +85,13 @@ pub fn check_rollback_valid(from: &LayerType, to: &LayerType) -> Result<()> {
 
 // ===== Forward transitions =====
 
-/// 执行正向流转
+/// Implementation of positive flow
 ///
-/// 根据 ForwardTransition 类型自动调度到各层的操作函数。
+/// Automatically schedules operation functions to each layer based on the ForwardTransition type.
 pub fn execute_forward(
     storage: &SqliteStorage,
     transition: ForwardTransition,
-    params: &[&str], // 可选参数：agent_id, integrated_name 等
+    params: &[&str], // Optional parameters: agent_id, integrated_name, etc.
 ) -> Result<SnapshotId> {
     match transition {
         ForwardTransition::ManualToStaged => {
@@ -122,7 +122,7 @@ pub fn execute_forward(
             )
         }
         ForwardTransition::IntegratedToUnified => {
-            // integrated_names 通过 params 传入，用逗号分隔
+            // integrated_names passed in via params, separated by commas
             let names_str = params.first().ok_or_else(|| {
                 StratumError::StateMachine("IntegratedToUnified requires integrated_names parameter".into())
             })?;
@@ -137,7 +137,7 @@ pub fn execute_forward(
             let approval_partition_id_str = params.first().ok_or_else(|| {
                 StratumError::StateMachine("ApprovalToStaged requires approval_partition_id parameter".into())
             })?;
-            // 解析 UUID
+            // Parsing UUIDs
             let pid = uuid::Uuid::parse_str(approval_partition_id_str)
                 .map_err(|_| StratumError::StateMachine("invalid partition_id UUID".into()))?;
             crate::state_machine::staged::merge_approval_to_staged(storage, &pid)
@@ -147,10 +147,10 @@ pub fn execute_forward(
 
 // ===== Rollback operations =====
 
-/// 分区自身回退：current = history.pop()
+/// Partition itself back: current = history.pop()
 ///
-/// 对应架构文档 §3.3 的 rollback_partition。
-/// 仅切换指针，不修改任何不可变数据（铁律 2）。
+/// Corresponds to rollback_partition in architecture document §3.3.
+/// Only switches pointers and does not modify any immutable data (Iron Law 2).
 pub fn rollback_partition(
     storage: &SqliteStorage,
     partition_id: &PartitionId,
@@ -173,10 +173,10 @@ pub fn rollback_partition(
     Ok(prev_id)
 }
 
-/// 将 staged 回退到指定层
+/// Fallback staged to the specified layer
 ///
-/// 从 staged 当前快照的 parents 中找到目标层来源。
-/// 对应架构文档 §3.3 的 rollback_staged_to_source。
+/// Finds the target layer source from the parents of the staged current snapshot.
+/// Corresponds to rollback_staged_to_source in architecture document §3.3.
 pub fn rollback_staged_to_layer(
     storage: &SqliteStorage,
     target_layer: LayerType,
@@ -190,7 +190,7 @@ pub fn rollback_staged_to_layer(
         .get_snapshot(&staged_partition.current_snapshot)
         .map_err(|e| StratumError::Storage(e.into()))?;
 
-    // 从 staged 的 parents 中找到目标层来源
+    // Find the source of the target layer from staged parents
     let target_partition_type = match target_layer {
         LayerType::ManualEdit => "manual",
         LayerType::AgentEdit => "agent",
@@ -202,7 +202,7 @@ pub fn rollback_staged_to_layer(
         let parent_snapshot = storage.get_snapshot(parent_id)
             .map_err(|e| StratumError::Storage(e.into()))?;
         if parent_snapshot.partition_type.contains(target_partition_type) {
-            // 将 staged 指针切换到该 parent
+            // Switch the staged pointer to this parent
             storage
                 .update_pointer(&staged_pid, parent_id)
                 .map_err(|e| StratumError::Storage(e.into()))?;
@@ -216,7 +216,7 @@ pub fn rollback_staged_to_layer(
     )))
 }
 
-/// 将 backup 快照合并到 staged（占位，P5 实现具体逻辑）
+/// Merge backup snapshots into staged (placeholder, P5 implements specific logic)
 pub fn merge_backup_to_staged(
     _storage: &SqliteStorage,
     _backup_snapshot_id: &SnapshotId,
@@ -228,9 +228,9 @@ pub fn merge_backup_to_staged(
 
 // ===== Utility functions =====
 
-/// 从 Snapshot 的 delta 链重建完整的文本内容
+/// Reconstructs the complete text content from Snapshot's delta chains
 ///
-/// 从 file_node 读原始内容，依次应用所有 deltas。
+/// Read the original content from file_node and apply all deltas in turn.
 pub fn reconstruct_text(
     storage: &SqliteStorage,
     snapshot: &Snapshot,
@@ -248,7 +248,7 @@ pub fn reconstruct_text(
         .map_err(|e| StratumError::Engine(e.to_string()))
 }
 
-/// 检查 snapshot 是否包含指定 partition_type 来源的 parent
+/// Checks if the snapshot contains a parent of the specified partition_type.
 pub fn has_parent_of_type(
     storage: &SqliteStorage,
     snapshot: &Snapshot,
@@ -268,10 +268,10 @@ pub fn has_parent_of_type(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::delta::Delta;
     use crate::core::file_node::FileNode;
-    use crate::core::types::{AgentInstanceId, SourceType};
-    use crate::state_machine::manual::ensure_manual_partition;
-    use crate::state_machine::staged::ensure_staged_partition;
+    use crate::core::partition::Partition;
+    use crate::core::types::{PartitionType, SourceType};
     use crate::storage::sqlite_storage::SqliteStorage;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -293,12 +293,12 @@ mod tests {
 
     #[test]
     fn test_check_forward_valid() {
-        // 允许的流转
+        // Permitted flows
         assert!(check_forward_valid(&LayerType::ManualEdit, &LayerType::Staged).is_ok());
         assert!(check_forward_valid(&LayerType::AgentEdit, &LayerType::Approval).is_ok());
         assert!(check_forward_valid(&LayerType::Approval, &LayerType::Staged).is_ok());
 
-        // 禁止越层
+        // Prohibition of cross-layering
         assert!(check_forward_valid(&LayerType::AgentEdit, &LayerType::Staged).is_err());
         assert!(check_forward_valid(&LayerType::ManualEdit, &LayerType::Approval).is_err());
     }
@@ -342,7 +342,7 @@ mod tests {
         let file_node = FileNode::new(PathBuf::from("test.txt"), b"hello\n");
         storage.store_file_node(&file_node, b"hello\n").unwrap();
 
-        // 创建 delta: modify "hello" to "hello world"
+        // Create delta: modify "hello" to "hello world"
         let diff = crate::engine::diff::diff_to_line_diff("hello\n", "hello world\n");
         let delta = Delta::new(file_node.clone(), diff, SourceType::Manual);
         storage.store_delta(&delta).unwrap();

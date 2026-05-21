@@ -14,24 +14,21 @@ Always use English in code, comments, logging, error info or other string litera
 ## Build
 
 ```sh
-cargo test              # run all unit tests
-cargo build --lib       # library only; no main.rs / binary target
+cargo test --lib # run all unit tests (with compile check)
 ```
-
-**Build is currently broken.** `similar` 3.x changed its API — `TextDiff` takes 2 lifetime args (not 3), `new_slices()` was removed, and `ChangeTag` iteration needs type annotation. Fix `src/engine/diff.rs` before making other changes.
 
 ## Architecture
 
 ```
 src/
-├── core/        # P1: immutable data types — FileNode, Delta, Snapshot, Partition, Layer, types
-├── storage/     # P1: SQLite persistence — SqliteStorage, migrations, Repository traits
-├── engine/      # P2: diff/merge/inverse — similar-based, three-way merge with conflict detection
-├── state_machine/ # P3 (stub)
-├── backup/      # P5 (stub)
-├── checkpoint/  # P4 (stub)
-├── git_sync/    # P6 (stub)
-├── cli/         # P7 (stub)
+├── core/        # immutable data types — FileNode, Delta, Snapshot, Partition, Layer, types
+├── storage/     # SQLite persistence — SqliteStorage, migrations, Repository traits
+├── engine/      # diff/merge/inverse — similar-based, three-way merge with conflict detection
+├── state_machine/
+├── backup/
+├── checkpoint/
+├── git_sync/
+├── cli/
 ├── lib.rs       # re-exports all modules + pub use error::{StratumError, StorageError, StorageResult}
 └── error.rs     # StratumError + StorageError (thiserror)
 ```
