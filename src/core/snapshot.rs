@@ -2,28 +2,28 @@ use serde::{Deserialize, Serialize};
 use crate::core::types::{ContentId, DeltaId, SnapshotId};
 use crate::core::file_node::FileNode;
 
-/// Snapshot — 不可变状态快照
+/// Snapshot - Immutable state snapshot
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
-    /// 唯一 ID（内容寻址）
+    /// Unique ID (content addressing)
     pub id: SnapshotId,
-    /// 关联的文件基准
+    /// Linked document benchmarks
     pub file: FileNode,
-    /// 增量列表（按应用顺序）
+    /// Incremental list (in order of application)
     pub deltas: Vec<DeltaId>,
-    /// 父快照 ID 列表（单父=普通，多父=合并）
+    /// List of parent snapshot IDs (single parent = normal, multiple parents = merged)
     pub parents: Vec<SnapshotId>,
-    /// 归属分区类型
+    /// Attributed partition type
     pub partition_type: String,
-    /// 创建时间戳（Unix 毫秒）
+    /// Creating timestamps (Unix milliseconds)
     pub created_at: i64,
 }
 
 impl Snapshot {
-    /// 创建初始快照（第一个版本）
+    /// Creating the initial snapshot (first version)
     pub fn new_initial(file: FileNode, delta_id: DeltaId) -> Self {
         let snapshot = Snapshot {
-            id: ContentId([0u8; 32]), // 占位
+            id: ContentId([0u8; 32]), // occupy a position
             file,
             deltas: vec![delta_id],
             parents: vec![],
@@ -35,7 +35,7 @@ impl Snapshot {
         s
     }
 
-    /// 基于父快照创建新快照
+    /// Creating a new snapshot based on a parent snapshot
     pub fn from_parent(
         parent: &Snapshot,
         delta_id: DeltaId,
@@ -45,7 +45,7 @@ impl Snapshot {
         deltas.push(delta_id);
 
         let snapshot = Snapshot {
-            id: ContentId([0u8; 32]), // 占位
+            id: ContentId([0u8; 32]), // occupy a position
             file: parent.file.clone(),
             deltas,
             parents: vec![parent.id],
@@ -57,21 +57,21 @@ impl Snapshot {
         s
     }
 
-    /// 在当前快照上应用增量，生成新快照
+    /// Apply an increment on the current snapshot to generate a new snapshot
     ///
-    /// 等价于 Snapshot::from_parent — 在现有快照的增量链末尾追加新 Delta。
-    /// 返回包含新 Delta 的子快照。
+    /// Equivalent to Snapshot::from_parent - appends a new Delta at the end of an incremental chain of existing snapshots.
+    /// Returns a sub-snapshot containing the new Delta.
     pub fn apply_delta(&self, delta_id: DeltaId) -> Self {
         Snapshot::from_parent(self, delta_id, self.partition_type.clone())
     }
 
-    /// 合并快照（多父）
+    /// Merge snapshots (multiple parents)
     pub fn merge(parents: Vec<&Snapshot>, delta_id: DeltaId, partition_type: String) -> Self {
         let file = parents[0].file.clone();
         let deltas = vec![delta_id];
 
         let snapshot = Snapshot {
-            id: ContentId([0u8; 32]), // 占位
+            id: ContentId([0u8; 32]), // occupy a position
             file,
             deltas,
             parents: parents.iter().map(|p| p.id).collect(),
@@ -83,14 +83,14 @@ impl Snapshot {
         s
     }
 
-    /// 根据内容计算 ID
+    /// Calculate ID based on content
     pub fn compute_id(&self) -> SnapshotId {
         let json = serde_json::to_vec(self).unwrap_or_default();
         SnapshotId::from_content(&json)
     }
 }
 
-/// Snapshot 构建器（链式构造）
+/// Snapshot builder (chaining construction)
 #[derive(Debug, Clone)]
 pub struct SnapshotBuilder {
     file: Option<FileNode>,
@@ -132,7 +132,7 @@ impl SnapshotBuilder {
     pub fn build(self) -> Result<Snapshot, &'static str> {
         let file = self.file.ok_or("file is required")?;
         let snapshot = Snapshot {
-            id: ContentId([0u8; 32]), // 占位
+            id: ContentId([0u8; 32]), // occupy a position
             file,
             deltas: self.deltas,
             parents: self.parents,

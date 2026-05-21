@@ -1,46 +1,58 @@
+use crate::checkpoint::branch::Branch;
+use crate::checkpoint::checkpoint::Checkpoint;
 use crate::core::delta::{Delta, LineDiff};
 use crate::core::file_node::FileNode;
 use crate::core::partition::Partition;
 use crate::core::snapshot::Snapshot;
-use crate::core::types::{ContentId, DeltaId, PartitionId, PartitionType, SnapshotId};
+use crate::core::types::{CheckpointId, ContentId, DeltaId, PartitionId, PartitionType, SnapshotId};
 use crate::storage::migrations;
-use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
+use crate::storage::repository::{
+    BranchStore, CheckpointStore, DeltaStore, FileNodeStore, PartitionStore, SnapshotStore,
+};
 use crate::StorageResult;
 use rusqlite::{params, Connection};
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-/// SQLite 存储实现
+/// SQLite Storage Implementation
 pub struct SqliteStorage {
-    conn: Mutex<Connection>,
+    conn: Arc<Mutex<Connection>>,
 }
 
 impl SqliteStorage {
-    /// 创建新的 SQLite 存储（内存数据库）
+    /// Creating a new SQLite store (in-memory database)
     pub fn new_in_memory() -> StorageResult<Self> {
         let conn = Connection::open_in_memory()?;
         migrations::initialize_database(&conn)?;
         Ok(SqliteStorage {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
         })
     }
 
-    /// 创建新的 SQLite 存储（文件数据库）
+    /// Creating a new SQLite store (file database)
     pub fn new(path: &Path) -> StorageResult<Self> {
         let conn = Connection::open(path)?;
         migrations::initialize_database(&conn)?;
         Ok(SqliteStorage {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
         })
     }
 
-    /// 创建新的 SQLite 存储（文件数据库，含检查点表）
+    /// Create a new SQLite store (file database with checkpoint tables)
     pub fn new_full(path: &Path) -> StorageResult<Self> {
         let conn = Connection::open(path)?;
         migrations::initialize_full(&conn)?;
         Ok(SqliteStorage {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
         })
+    }
+
+    /// 使用现有连接创建存储实例（用于事务内操作）
+    /// 共享同一个底层 Arc<Mutex<Connection>>
+    pub fn new_with_connection_arc(conn: &Arc<Mutex<Connection>>) -> Self {
+        SqliteStorage {
+            conn: conn.clone(),
+        }
     }
 
     /// 获取内部连接的引用（用于事务等）
@@ -52,7 +64,7 @@ impl SqliteStorage {
         f(&conn)
     }
 
-    /// 执行事务
+    /// enforcement service
     pub fn with_transaction<F, T>(&self, f: F) -> StorageResult<T>
     where
         F: FnOnce(&Connection) -> StorageResult<T>,
@@ -72,7 +84,7 @@ impl SqliteStorage {
     }
 }
 
-// ── SnapshotStore 实现 ──
+// SnapshotStore implementation.
 
 impl SnapshotStore for SqliteStorage {
     fn store_snapshot(&self, snapshot: &Snapshot, _content: &[u8]) -> StorageResult<()> {
@@ -235,7 +247,7 @@ impl SnapshotStore for SqliteStorage {
     }
 }
 
-// ── DeltaStore 实现 ──
+// DeltaStore implementation -
 
 impl DeltaStore for SqliteStorage {
     fn store_delta(&self, delta: &Delta) -> StorageResult<()> {
@@ -330,7 +342,7 @@ impl DeltaStore for SqliteStorage {
     }
 }
 
-// ── FileNodeStore 实现 ──
+// FileNodeStore implementation.
 
 impl FileNodeStore for SqliteStorage {
     fn store_file_node(&self, file_node: &FileNode, content: &[u8]) -> StorageResult<()> {
@@ -373,7 +385,7 @@ impl FileNodeStore for SqliteStorage {
     }
 }
 
-// ── PartitionStore 实现 ──
+// PartitionStore implementation -
 
 impl PartitionStore for SqliteStorage {
     fn create_partition(&self, partition: &Partition) -> StorageResult<()> {
@@ -395,7 +407,7 @@ impl PartitionStore for SqliteStorage {
             ],
         )?;
 
-        // 写入历史
+        // put into history
         for (seq, snap_id) in partition.history.iter().enumerate() {
             conn.execute(
                 "INSERT INTO partition_history (partition_id, snapshot_id, seq, created_at)
@@ -421,7 +433,7 @@ impl PartitionStore for SqliteStorage {
             params![&snapshot_id.0.to_vec(), now, &partition_id.as_bytes().to_vec()],
         )?;
 
-        // 查询当前最大 seq
+        // Queries the current maximum seq
         let max_seq: i64 = conn
             .query_row(
                 "SELECT COALESCE(MAX(seq), -1) FROM partition_history WHERE partition_id = ?1",
@@ -430,7 +442,7 @@ impl PartitionStore for SqliteStorage {
             )
             .unwrap_or(-1);
 
-        // 插入新的历史记录
+        // Insert new history
         conn.execute(
             "INSERT INTO partition_history (partition_id, snapshot_id, seq, created_at)
              VALUES (?1, ?2, ?3, ?4)",
@@ -467,7 +479,7 @@ impl PartitionStore for SqliteStorage {
             Ok((id_bytes, name, snap_arr, partition_type))
         })?;
 
-        // 读取历史
+        // Read history
         let mut hist_stmt = conn.prepare(
             "SELECT snapshot_id, seq FROM partition_history WHERE partition_id = ?1 ORDER BY seq"
         )?;
@@ -480,10 +492,10 @@ impl PartitionStore for SqliteStorage {
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
-        // 重建 Partition
-        // 用从数据库中读取的实际值覆盖占位值
+        // Rebuild Partition
+        // Overwrite the placeholder value with the actual value read from the database
         let (id_bytes, name, snap_arr, partition_type) = partition;
-        // id_bytes 是 Vec<u8>，我们需要重建 PartitionId
+        // id_bytes is Vec<u8>, we need to rebuild PartitionId
         let actual_id = uuid::Uuid::from_slice(&id_bytes)
             .map_err(|e| crate::StorageError::Serialization(e.to_string()))?;
 
@@ -537,9 +549,187 @@ impl PartitionStore for SqliteStorage {
     }
 }
 
-// ── 组合存储 ──
+// CheckpointStore implementation -
 
-/// 组合存储结构体，同时实现了所有存储 trait
+impl CheckpointStore for SqliteStorage {
+    fn store_checkpoint(&self, checkpoint: &Checkpoint) -> StorageResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let parents_json = serde_json::to_vec(&checkpoint.parents)
+            .map_err(|e| crate::StorageError::Serialization(e.to_string()))?;
+
+        conn.execute(
+            "INSERT OR IGNORE INTO checkpoints (id, parents, snapshot_id, author, message, git_anchor, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                &checkpoint.id.0.to_vec(),
+                parents_json,
+                &checkpoint.baseline_snapshot.0.to_vec(),
+                checkpoint.metadata.author,
+                checkpoint.metadata.message,
+                checkpoint.metadata.git_anchor,
+                checkpoint.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn get_checkpoint(&self, id: &CheckpointId) -> StorageResult<Checkpoint> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, parents, snapshot_id, author, message, git_anchor, created_at FROM checkpoints WHERE id = ?1"
+        )?;
+
+        let result = stmt.query_row(rusqlite::params![&id.0.to_vec()], |row| {
+            let id_bytes: Vec<u8> = row.get(0)?;
+            let mut id_arr = [0u8; 32];
+            id_arr.copy_from_slice(&id_bytes);
+
+            let parents_json: Vec<u8> = row.get(1)?;
+            let parents: Vec<CheckpointId> = serde_json::from_slice(&parents_json)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+
+            let snap_bytes: Vec<u8> = row.get(2)?;
+            let mut snap_arr = [0u8; 32];
+            snap_arr.copy_from_slice(&snap_bytes);
+
+            let author: String = row.get(3)?;
+            let message: String = row.get(4)?;
+            let git_anchor: Option<String> = row.get(5)?;
+            let created_at: i64 = row.get(6)?;
+
+            Ok(Checkpoint {
+                id: ContentId(id_arr).into(),
+                parents,
+                baseline_snapshot: ContentId(snap_arr).into(),
+                metadata: crate::checkpoint::checkpoint::CheckpointMetadata {
+                    author,
+                    message,
+                    git_anchor,
+                },
+                created_at,
+            })
+        })?;
+        Ok(result)
+    }
+
+    fn checkpoint_exists(&self, id: &CheckpointId) -> StorageResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT COUNT(*) FROM checkpoints WHERE id = ?1")?;
+        let count: i64 = stmt.query_row(rusqlite::params![&id.0.to_vec()], |row| row.get(0))?;
+        Ok(count > 0)
+    }
+
+    fn list_checkpoints(&self) -> StorageResult<Vec<Checkpoint>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id FROM checkpoints ORDER BY created_at DESC")?;
+        let ids: Vec<Vec<u8>> = stmt
+            .query_map([], |row| row.get(0))
+            .map_err(|e| crate::StorageError::Database(e))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut result = Vec::new();
+        for id_bytes in ids {
+            let mut id_arr = [0u8; 32];
+            id_arr.copy_from_slice(&id_bytes);
+            let id = ContentId(id_arr).into();
+            result.push(self.get_checkpoint(&id)?);
+        }
+        Ok(result)
+    }
+}
+
+impl BranchStore for SqliteStorage {
+    fn store_branch(&self, branch: &Branch) -> StorageResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO branches (name, head, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                branch.name,
+                &branch.head.0.to_vec(),
+                branch.created_at,
+                branch.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn get_branch(&self, name: &str) -> StorageResult<Branch> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT name, head, created_at, updated_at FROM branches WHERE name = ?1"
+        )?;
+
+        let result = stmt.query_row(rusqlite::params![name], |row| {
+            let name: String = row.get(0)?;
+            let head_bytes: Vec<u8> = row.get(1)?;
+            let mut head_arr = [0u8; 32];
+            head_arr.copy_from_slice(&head_bytes);
+            let created_at: i64 = row.get(2)?;
+            let updated_at: i64 = row.get(3)?;
+
+            Ok(Branch {
+                name,
+                head: ContentId(head_arr).into(),
+                created_at,
+                updated_at,
+            })
+        })?;
+        Ok(result)
+    }
+
+    fn update_branch_head(&self, name: &str, head: &CheckpointId) -> StorageResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE branches SET head = ?1, updated_at = ?2 WHERE name = ?3",
+            rusqlite::params![&head.0.to_vec(), now, name],
+        )?;
+        Ok(())
+    }
+
+    fn list_branches(&self) -> StorageResult<Vec<Branch>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT name, head, created_at, updated_at FROM branches ORDER BY name"
+        )?;
+
+        let branches = stmt
+            .query_map([], |row| {
+                let name: String = row.get(0)?;
+                let head_bytes: Vec<u8> = row.get(1)?;
+                let mut head_arr = [0u8; 32];
+                head_arr.copy_from_slice(&head_bytes);
+                let created_at: i64 = row.get(2)?;
+                let updated_at: i64 = row.get(3)?;
+
+                Ok(Branch {
+                    name,
+                    head: ContentId(head_arr).into(),
+                    created_at,
+                    updated_at,
+                })
+            })
+            .map_err(|e| crate::StorageError::Database(e))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(branches)
+    }
+
+    fn delete_branch(&self, name: &str) -> StorageResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM branches WHERE name = ?1", rusqlite::params![name])?;
+        Ok(())
+    }
+}
+
+// Combined storage -
+
+/// Combined storage structure that also implements all storage traits
 pub struct StratumStorage {
     pub inner: SqliteStorage,
 }
@@ -719,7 +909,7 @@ mod tests {
         let snapshot = Snapshot::new_initial(file, delta.id);
         storage.store_snapshot(&snapshot, b"").unwrap();
 
-        // 创建分区
+        // Creating Partitions
         let partition = Partition::new(
             "test_partition".to_string(),
             PartitionType::Manual,
@@ -727,17 +917,17 @@ mod tests {
         );
         storage.create_partition(&partition).unwrap();
 
-        // 获取分区
+        // Get Partition
         let retrieved = storage.get_partition(&partition.id).unwrap();
         assert_eq!(retrieved.name, "test_partition");
         assert_eq!(retrieved.current_snapshot, snapshot.id);
         assert_eq!(retrieved.history.len(), 1);
 
-        // 按名称获取
+        // Get by Name
         let by_name = storage.get_partition_by_name("test_partition").unwrap();
         assert_eq!(by_name.id, partition.id);
 
-        // 更新指针
+        // Updating the pointer
         let snapshot2 = Snapshot::from_parent(&snapshot, delta.id, "manual".to_string());
         storage.store_snapshot(&snapshot2, b"").unwrap();
         storage.update_pointer(&partition.id, &snapshot2.id).unwrap();
@@ -820,12 +1010,12 @@ mod tests {
     fn test_transaction_rollback() {
         let storage = create_test_storage();
 
-        // 故意在事务中失败，验证回滚
+        // Deliberate failure in a transaction to validate rollback
         let result: StorageResult<()> = storage.with_transaction(|conn| {
             conn.execute("INSERT INTO layers (layer_type, partition_ids, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
                 params!["test_layer", b"[]", 1000, 1000])?;
 
-            // 制造一个错误 — 事务应回滚
+            // Create an error - transaction should be rolled back
             Err(crate::StorageError::Database(
                 rusqlite::Error::InvalidParameterName("rollback test".to_string()),
             ))
@@ -833,7 +1023,7 @@ mod tests {
 
         assert!(result.is_err());
 
-        // 验证事务已回滚，表应该为空
+        // Verify that the transaction has rolled back and the table should be empty
         let conn = storage.conn.lock().unwrap();
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM layers WHERE layer_type = ?1", params!["test_layer"], |row| row.get(0))
@@ -868,13 +1058,13 @@ mod tests {
         partition.advance(s3.id);
         assert_eq!(partition.history.len(), 3);
 
-        // 回退一步
+        // take a step back
         let prev = partition.rollback_one();
         assert_eq!(prev, Some(s2.id));
         assert_eq!(partition.current_snapshot, s2.id);
         assert_eq!(partition.history.len(), 2);
 
-        // 回退到指定位置
+        // Fallback to the specified position
         assert!(partition.rollback_to(&s1.id));
         assert_eq!(partition.current_snapshot, s1.id);
         assert_eq!(partition.history.len(), 1);

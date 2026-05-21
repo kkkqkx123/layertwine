@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Agent 实例 ID 类型
+/// Agent Instance ID Type
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AgentInstanceId(pub String);
 
@@ -23,23 +23,23 @@ impl From<String> for AgentInstanceId {
     }
 }
 
-/// 内容 ID — Blake3 哈希包装类型
+/// Content ID - Blake3 hash packing type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ContentId(pub [u8; 32]);
 
 impl ContentId {
-    /// 从字节数据计算内容 ID
+    /// Calculate content ID from byte data
     pub fn from_content(data: &[u8]) -> Self {
         let hash = blake3::hash(data);
         ContentId(*hash.as_bytes())
     }
 
-    /// 返回 16 进制字符串表示
+    /// Returns a hexadecimal string representation
     pub fn to_hex(&self) -> String {
         hex_encode(&self.0)
     }
 
-    /// 从 16 进制字符串解析
+    /// Parsing from hexadecimal strings
     pub fn from_hex(s: &str) -> Option<Self> {
         let bytes = hex_decode(s)?;
         if bytes.len() != 32 {
@@ -57,14 +57,14 @@ impl fmt::Display for ContentId {
     }
 }
 
-/// 类型别名
+/// type alias
 pub type SnapshotId = ContentId;
 pub type DeltaId = ContentId;
 pub type CheckpointId = ContentId;
 pub type BackupId = ContentId;
 pub type PartitionId = uuid::Uuid;
 
-/// 来源类型
+/// Type of source
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SourceType {
     Manual,
@@ -72,7 +72,7 @@ pub enum SourceType {
     Backup,
 }
 
-/// 分层类型
+/// Layering type
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum LayerType {
     ManualEdit,
@@ -92,33 +92,46 @@ impl LayerType {
     }
 }
 
-/// 分区类型
+/// Partition type
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PartitionType {
-    /// manual_edit 唯一分区
+    /// manual_edit Unique partition
     Manual,
-    /// agent_edit 按 Agent ID 分区
+    /// agent_edit Partitioning by Agent ID
     Agent(AgentInstanceId),
-    /// approval 按实例分区
+    /// approval Partitioning by instance
     Approval(AgentInstanceId),
-    /// INTEGRATED 合并区
+    /// INTEGRATED Merged area
     Integrated(String),
-    /// UNIFIED 汇总区
+    /// UNIFIED catchment area
     Unified,
-    /// staged 唯一分区
+    /// staged unique partition
     Staged,
 }
 
-/// Diff 操作类型
+impl PartitionType {
+    pub fn name(&self) -> String {
+        match self {
+            PartitionType::Manual => "manual".to_string(),
+            PartitionType::Agent(id) => format!("agent/{}", id),
+            PartitionType::Approval(id) => format!("approval/{}", id),
+            PartitionType::Integrated(name) => format!("integrated/{}", name),
+            PartitionType::Unified => "unified".to_string(),
+            PartitionType::Staged => "staged".to_string(),
+        }
+    }
+}
+
+/// Diff operation type
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DiffOp {
-    /// 保留 (相同行)
+    /// Reservation (same line)
     Equal { count: u32 },
-    /// 删除
+    /// removing
     Delete { old_start: u32, count: u32 },
-    /// 插入
+    /// stick
     Insert { new_start: u32, lines: Vec<String> },
-    /// 替换
+    /// interchangeability
     Replace {
         old_start: u32,
         old_count: u32,
@@ -127,7 +140,7 @@ pub enum DiffOp {
     },
 }
 
-/// Hunk — 连续的差异块
+/// Hunk - a continuous block of differences
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hunk {
     pub old_start: u32,
@@ -137,13 +150,13 @@ pub struct Hunk {
     pub ops: Vec<DiffOp>,
 }
 
-/// 行级差异
+/// Row level differences
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LineDiff {
     pub hunks: Vec<Hunk>,
 }
 
-// ── 辅助函数 ──
+// Auxiliary functions -
 
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()

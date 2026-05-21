@@ -1,18 +1,18 @@
 use serde::{Deserialize, Serialize};
 use crate::core::types::{PartitionId, PartitionType, SnapshotId};
 
-/// Partition — 分区（可变指针）
+/// Partition - partition (variable pointer)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Partition {
-    /// 分区 ID
+    /// Partition ID
     pub id: PartitionId,
-    /// 分区名
+    /// partition name
     pub name: String,
-    /// 当前生效快照 ID（指针）
+    /// Current active snapshot ID (pointer)
     pub current_snapshot: SnapshotId,
-    /// 历史快照 ID 列表（全量保留）
+    /// List of historical snapshot IDs (full retention)
     pub history: Vec<SnapshotId>,
-    /// 分区类型
+    /// Partition type
     pub partition_type: PartitionType,
 }
 
@@ -27,13 +27,13 @@ impl Partition {
         }
     }
 
-    /// 更新当前快照指针（保留历史）
+    /// Updating the current snapshot pointer (preserving history)
     pub fn advance(&mut self, new_snapshot: SnapshotId) {
         self.current_snapshot = new_snapshot;
         self.history.push(new_snapshot);
     }
 
-    /// 回退到历史中指定 ID（仅切换指针，不动数据）
+    /// Fall back to the specified ID in the history (only the pointer is switched, no data is moved)
     pub fn rollback_to(&mut self, target_snapshot: &SnapshotId) -> bool {
         if let Some(pos) = self.history.iter().position(|s| s == target_snapshot) {
             self.current_snapshot = *target_snapshot;
@@ -44,7 +44,7 @@ impl Partition {
         }
     }
 
-    /// 回退一步
+    /// take a step back
     pub fn rollback_one(&mut self) -> Option<SnapshotId> {
         if self.history.len() > 1 {
             let prev = self.history[self.history.len() - 2];

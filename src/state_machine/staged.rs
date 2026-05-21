@@ -1,0 +1,197 @@
+//! staged 层操作
+//!
+//! Staged 层是提交前的最后一层。Approval 层的内容合并到此层后，
+//! 可通过 commit 打包为 Checkpoint（占位，P4 实现具体逻辑）。
+
+use crate::core::delta::Delta;
+use crate::core::partition::Partition;
+use crate::core::snapshot::Snapshot;
+use crate::core::types::{PartitionId, PartitionType, SnapshotId, SourceType};
+use crate::engine::diff::diff_to_line_diff;
+use crate::error::{Result, StratumError};
+use crate::storage::repository::{DeltaStore, PartitionStore, SnapshotStore};
+use crate::storage::sqlite_storage::SqliteStorage;
+
+/// staged 分区的固定 ID
+pub fn staged_partition_id() -> PartitionId {
+    uuid::Uuid::from_u128(0x6000_0000_0000_0000_0000_0000_0000_0000)
+}
+
+/// 获取或创建 staged 分区
+pub fn ensure_staged_partition(
+    storage: &SqliteStorage,
+    initial_snapshot_id: SnapshotId,
+) -> Result<Partition> {
+    let pid = staged_partition_id();
+    match storage.get_partition(&pid) {
+        Ok(p) => Ok(p),
+        Err(_) => {
+            let partition = Partition::new(
+                "staged".to_string(),
+                PartitionType::Staged,
+                initial_snapshot_id,
+            );
+            storage
+                .create_partition(&partition)
+                .map_err(|e| StratumError::Storage(e.into()))?;
+            Ok(partition)
+        }
+    }
+}
+
+/// 将 approval Agent 分区的内容合并到 staged
+///
+/// 从 approval 层取指定 Agent 分区的当前快照，合并到 staged。
+pub fn merge_approval_to_staged(
+    storage: &SqliteStorage,
+    approval_partition_id: &PartitionId,
+) -> Result<SnapshotId> {
+    let staged_pid = staged_partition_id();
+
+    let approval_partition = storage
+        .get_partition(approval_partition_id)
+        .map_err(|_| StratumError::NotFound("approval partition not found".into()))?;
+    let staged_partition = storage
+        .get_partition(&staged_pid)
+        .map_err(|_| StratumError::NotFound("staged partition not found, call ensure_staged_partition first".into()))?;
+
+    let approval_snapshot = storage
+        .get_snapshot(&approval_partition.current_snapshot)
+        .map_err(|e| StratumError::Storage(e.into()))?;
+    let staged_snapshot = storage
+        .get_snapshot(&staged_partition.current_snapshot)
+        .map_err(|e| StratumError::Storage(e.into()))?;
+
+    let approval_text =
+        crate::state_machine::transition::reconstruct_text(storage, &approval_snapshot)?;
+    let staged_text =
+        crate::state_machine::transition::reconstruct_text(storage, &staged_snapshot)?;
+
+    let merge_diff = diff_to_line_diff(&staged_text, &approval_text);
+    if merge_diff.is_empty() {
+        return Ok(staged_partition.current_snapshot);
+    }
+
+    let merge_delta = Delta::new(
+        staged_snapshot.file.clone(),
+        merge_diff,
+        SourceType::Manual,
+    );
+    storage
+        .store_delta(&merge_delta)
+        .map_err(|e| StratumError::Storage(e.into()))?;
+
+    let new_snapshot = Snapshot::merge(
+        vec![&staged_snapshot, &approval_snapshot],
+        merge_delta.id,
+        PartitionType::Staged.name(),
+    );
+    storage
+        .store_snapshot(&new_snapshot, b"")
+        .map_err(|e| StratumError::Storage(e.into()))?;
+
+    storage
+        .update_pointer(&staged_pid, &new_snapshot.id)
+        .map_err(|e| StratumError::Storage(e.into()))?;
+
+    Ok(new_snapshot.id)
+}
+
+/// 将 staged 提交为 Checkpoint（占位，P4 实现具体逻辑）
+///
+/// 当前仅返回 staged 的当前快照 ID 和占位 CheckpointId。
+/// P4 中将实现完整的 Checkpoint 提交逻辑。
+pub fn commit_staged_to_checkpoint(
+    _storage: &SqliteStorage,
+    _message: &str,
+) -> Result<()> {
+    // P4 实现：将 staged 的当前快照打包为 Checkpoint
+    // 添加到 DAG，更新分支 head，清空 staged
+    Err(StratumError::Checkpoint(
+        "checkpoint commit not yet implemented in P3, see P4".into(),
+    ))
+}
+
+/// 清空 staged 分区（重置到初始状态）
+pub fn reset_staged(
+    storage: &SqliteStorage,
+    base_snapshot_id: SnapshotId,
+) -> Result<()> {
+    let pid = staged_partition_id();
+    storage
+        .update_pointer(&pid, &base_snapshot_id)
+        .map_err(|e| StratumError::Storage(e.into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::file_node::FileNode;
+    use crate::core::types::{AgentInstanceId, PartitionType, SourceType};
+    use crate::storage::repository::FileNodeStore;
+    use crate::storage::sqlite_storage::SqliteStorage;
+    use std::sync::Arc;
+
+    fn setup_storage() -> Arc<SqliteStorage> {
+        Arc::new(SqliteStorage::new_in_memory().unwrap())
+    }
+
+    fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {
+        let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
+        storage.store_file_node(&file_node, content.as_bytes()).unwrap();
+        let empty_diff = crate::core::delta::LineDiff::new(vec![]);
+        let delta = Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
+        storage.store_delta(&delta).unwrap();
+        let snapshot = Snapshot::new_initial(file_node, delta.id);
+        storage.store_snapshot(&snapshot, b"").unwrap();
+        snapshot.id
+    }
+
+    fn create_approval_partition(
+        storage: &SqliteStorage,
+        content: &str,
+    ) -> PartitionId {
+        let file_path = "test.txt";
+        let agent_id = AgentInstanceId("test-agent".into());
+        let initial_id = create_initial_snapshot(storage, "base\n");
+        let pid = crate::state_machine::approval::approval_agent_partition_id(&agent_id);
+        let partition = Partition::new(
+            format!("approval/{}", agent_id),
+            PartitionType::Approval(agent_id),
+            initial_id,
+        );
+        storage.create_partition(&partition).unwrap();
+
+        // 创建修改后的快照
+        let file_node = FileNode::new(std::path::PathBuf::from(file_path), content.as_bytes());
+        storage.store_file_node(&file_node, content.as_bytes()).unwrap();
+        let diff = diff_to_line_diff("base\n", content);
+        let delta = Delta::new(file_node, diff, SourceType::Manual);
+        storage.store_delta(&delta).unwrap();
+        let snap = storage.get_snapshot(&initial_id).unwrap();
+        let new_snap = Snapshot::from_parent(
+            &snap,
+            delta.id,
+            PartitionType::Approval(AgentInstanceId("test-agent".into())).name(),
+        );
+        storage.store_snapshot(&new_snap, b"").unwrap();
+        storage.update_pointer(&pid, &new_snap.id).unwrap();
+        pid
+    }
+
+    #[test]
+    fn test_merge_approval_to_staged() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+        ensure_staged_partition(&storage, initial_id).unwrap();
+
+        let approval_pid = create_approval_partition(&storage, "base\nmodified\n");
+        let merged_id = merge_approval_to_staged(&storage, &approval_pid).unwrap();
+
+        let staged = storage.get_partition(&staged_partition_id()).unwrap();
+        assert_eq!(staged.current_snapshot, merged_id);
+
+        let merged = storage.get_snapshot(&merged_id).unwrap();
+        assert_eq!(merged.parents.len(), 2);
+    }
+}

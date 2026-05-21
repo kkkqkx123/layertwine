@@ -1,75 +1,75 @@
 use thiserror::Error;
 
-/// Stratum 全局错误类型
+/// Stratum Global Error Type
 #[derive(Error, Debug)]
 pub enum StratumError {
-    // ── 存储层错误 ──
-    #[error("存储层错误: {0}")]
+    // Storage layer error.
+    #[error("Storage layer error: {0}")]
     Storage(#[from] StorageError),
 
-    // ── 引擎层错误 ──
-    #[error("引擎错误: {0}")]
+    // Engine-level error.
+    #[error("Engine error: {0}")]
     Engine(String),
 
-    // ── 状态机错误 ──
-    #[error("状态机错误: {0}")]
+    // State machine error.
+    #[error("State machine error: {0}")]
     StateMachine(String),
 
-    // ── 检查点错误 ──
-    #[error("检查点错误: {0}")]
+    // Checkpoint error.
+    #[error("Checkpoint error: {0}")]
     Checkpoint(String),
 
-    // ── Git 同步错误 ──
-    #[error("Git 同步错误: {0}")]
+    // Git synchronization error -
+    #[error("Git synchronization error: {0}")]
     GitSync(String),
 
-    // ── GC 错误 ──
-    #[error("GC 错误: {0}")]
+    // GC error.
+    #[error("GC error: {0}")]
     Gc(String),
 
-    // ── CLI 错误 ──
-    #[error("CLI 错误: {0}")]
+    // CLI error.
+    #[error("CLI error: {0}")]
     Cli(String),
 
-    // ── 通用错误 ──
+    // Generic error -
     #[error("{0}")]
     General(String),
 
-    // ── 序列化错误 ──
-    #[error("序列化错误: {0}")]
+    // Serialization error.
+    #[error("Serialization error: {0}")]
     Serialization(String),
 
-    // ── 未找到 ──
-    #[error("未找到: {0}")]
+    // Not found.
+    #[error("Not found: {0}")]
     NotFound(String),
 }
 
-/// 存储层专用错误
+/// Storage Tier Specific Errors
 #[derive(Error, Debug)]
 pub enum StorageError {
-    #[error("记录未找到: {0}")]
+    #[error("Record not found: {0}")]
     NotFound(String),
 
-    #[error("约束违反: {0}")]
+    #[error("Binding violation: {0}")]
     ConstraintViolation(String),
 
-    #[error("序列化错误: {0}")]
+    #[error("Serialization error: {0}")]
     Serialization(String),
 
-    #[error("数据库错误: {0}")]
+    #[error("Database error: {0}")]
     Database(#[from] rusqlite::Error),
 
-    #[error("迁移错误: {0}")]
+    #[error("Migration error: {0}")]
     Migration(String),
 
-    #[error("IO 错误: {0}")]
+    #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
 
-/// 便捷 Result 别名
+/// Convenient Result Alias
 pub type Result<T> = std::result::Result<T, StratumError>;
 
-/// 存储层 Result 别名
+/// Storage Layer Result Alias
 pub type StorageResult<T> = std::result::Result<T, StorageError>;
 
 impl From<serde_json::Error> for StratumError {

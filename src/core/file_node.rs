@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// FileNode — 文件基准
+/// FileNode - File Benchmarking
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FileNode {
-    /// 文件路径（相对于仓库根）
+    /// File path (relative to repository root)
     pub file_path: PathBuf,
-    /// 文件内容的 Blake3 哈希
+    /// Blake3 hash of file contents
     pub base_hash: [u8; 32],
 }
 
@@ -19,7 +19,7 @@ impl FileNode {
         }
     }
 
-    /// 返回文件路径的字符串表示
+    /// Returns a string representation of the file path
     pub fn path_str(&self) -> &str {
         self.file_path.to_str().unwrap_or("")
     }

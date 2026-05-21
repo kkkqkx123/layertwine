@@ -8,6 +8,6 @@ pub mod checkpoint;
 pub mod git_sync;
 pub mod cli;
 
-// 重导出常用类型
+// Re-export common types
 pub use error::{StorageError, StorageResult, StratumError};
 pub use crate::error as err;

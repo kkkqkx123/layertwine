@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 use crate::core::types::{LayerType, PartitionId};
 
-/// Layer — 分层（可变容器）
+/// Layer - Layers (variable containers)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Layer {
-    /// 分层类型
+    /// Layering type
     pub layer_type: LayerType,
-    /// 归属本层的所有分区 ID
+    /// IDs of all partitions belonging to this layer
     pub partitions: Vec<PartitionId>,
 }
 

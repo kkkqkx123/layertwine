@@ -1,4 +1,4 @@
-//! Engine module — Diff/Merge/Inverse 引擎 (Phase 2)
+//! Engine module - Diff/Merge/Inverse Engine (Phase 2)
 
 pub mod diff;
 pub mod merge;

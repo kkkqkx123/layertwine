@@ -1,8 +1,8 @@
-/// 数据库迁移 — 创建所有表
+/// Database Migration - Create All Tables
 ///
-/// 参考 architecture/07-Rust实现方案.md §7.6 的建表 SQL
+/// Refer to architecture/07-Rust-implementation.md §7.6 for table building SQL.
 pub const MIGRATION_SQL: &str = "
--- 文件节点表（不可变，INSERT ONLY）
+-- File Node Table (Immutable, INSERT ONLY)
 CREATE TABLE IF NOT EXISTS file_nodes (
     file_path    TEXT NOT NULL,
     base_hash    BLOB NOT NULL,
@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS file_nodes (
     PRIMARY KEY (file_path, base_hash)
 );
 
--- Delta 表（不可变，INSERT ONLY）
+-- Delta Table (Immutable, INSERT ONLY)
 CREATE TABLE IF NOT EXISTS deltas (
     id           BLOB PRIMARY KEY,
     file_path    TEXT NOT NULL,
@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS deltas (
     created_at   INTEGER NOT NULL
 );
 
--- Snapshot 表（不可变，INSERT ONLY）
+-- Snapshot Table (Immutable, INSERT ONLY)
 CREATE TABLE IF NOT EXISTS snapshots (
     id              BLOB PRIMARY KEY,
     file_path       TEXT NOT NULL,
@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS snapshots (
     created_at      INTEGER NOT NULL
 );
 
--- 分区表
+-- Partition Table
 CREATE TABLE IF NOT EXISTS partitions (
     id              BLOB PRIMARY KEY,
     name            TEXT NOT NULL UNIQUE,
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS partitions (
     updated_at      INTEGER NOT NULL
 );
 
--- 分区历史快照关联表
+-- Partition History Snapshot Correlation Table
 CREATE TABLE IF NOT EXISTS partition_history (
     partition_id    BLOB NOT NULL,
     snapshot_id     BLOB NOT NULL,
@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS partition_history (
     FOREIGN KEY (partition_id) REFERENCES partitions(id)
 );
 
--- 分层表
+-- Layer Table
 CREATE TABLE IF NOT EXISTS layers (
     layer_type      TEXT PRIMARY KEY,
     partition_ids   BLOB NOT NULL,
@@ -63,14 +63,14 @@ CREATE TABLE IF NOT EXISTS layers (
     updated_at      INTEGER NOT NULL
 );
 
--- 索引
+-- Indexes
 CREATE INDEX IF NOT EXISTS idx_snapshots_file ON snapshots(file_path);
 CREATE INDEX IF NOT EXISTS idx_snapshots_partition ON snapshots(partition_type);
 CREATE INDEX IF NOT EXISTS idx_deltas_file ON deltas(file_path);
 CREATE INDEX IF NOT EXISTS idx_partition_history_snapshot ON partition_history(snapshot_id);
 ";
 
-/// 检查点相关表（在 P4 中使用）
+/// Checkpoint correlation table (used in P4)
 pub const MIGRATION_CHECKPOINT_SQL: &str = "
 CREATE TABLE IF NOT EXISTS checkpoints (
     id              BLOB PRIMARY KEY,
@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS branches (
 );
 ";
 
-/// 初始化数据库，应用所有迁移
+/// Initialize the database and apply all migrations
 pub fn initialize_database(conn: &rusqlite::Connection) -> Result<(), crate::StorageError> {
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
     conn.execute_batch("PRAGMA foreign_keys=ON;")?;
@@ -98,7 +98,7 @@ pub fn initialize_database(conn: &rusqlite::Connection) -> Result<(), crate::Sto
     Ok(())
 }
 
-/// 应用完整迁移（含检查点相关表）
+/// Apply full migration (with checkpoint related tables)
 pub fn initialize_full(conn: &rusqlite::Connection) -> Result<(), crate::StorageError> {
     initialize_database(conn)?;
     conn.execute_batch(MIGRATION_CHECKPOINT_SQL)?;

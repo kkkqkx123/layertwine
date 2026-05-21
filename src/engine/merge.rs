@@ -1,23 +1,23 @@
-//! Merge 引擎 — 三路合并 & Delta 应用
+//! Merge Engine - Three Way Merge & Delta Applications
 //!
-//! 提供两个核心能力：
-//! 1. apply_deltas: 从基准内容 + Delta 链重建完整文件内容
-//! 2. merge_texts: 三路文本合并（含冲突检测）
+//! Provide two core competencies:
+//! 1. apply_deltas: rebuilds the complete file content from the baseline content + Delta chains
+//! 2. merge_texts: three-way text merge (with conflict detection)
 
 use crate::core::delta::{Delta, LineDiff};
 #[allow(unused_imports)]
 use crate::core::types::{DiffOp, Hunk};
 use crate::error::{Result, StratumError};
 
-/// 从基准内容依次应用 Delta，重建完整文件内容
+/// Apply Delta sequentially from the baseline content to rebuild the complete file content.
 ///
-/// 每个 Delta 按内部 Hunks 定义的变换依次应用到当前内容。
-/// Hunks 按 old_start 排序后顺序处理，每个 Hunk 从旧内容中
-/// 定位 `old_start..old_start+old_len` 区域，然后执行：
-/// - Equal: 保留对应行
-/// - Delete: 跳过对应行
-/// - Insert: 插入新行
-/// - Replace: 跳过旧行并插入新行
+/// Each Delta is applied to the current content in turn according to the transformations defined by the internal Hunks.
+/// Hunks are processed in order after sorting by old_start, and each Hunk is processed from the old contents of the
+/// Locate the `old_start..old_start+old_len` area and execute:
+/// - Equal: Retains the corresponding line
+/// - Delete: skips the corresponding line
+/// - Insert: Inserts a new line
+/// - Replace: skips the old line and inserts a new one
 pub fn apply_deltas(content: &str, deltas: &[Delta]) -> Result<String> {
     let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
 
@@ -28,12 +28,12 @@ pub fn apply_deltas(content: &str, deltas: &[Delta]) -> Result<String> {
     Ok(lines.join("\n"))
 }
 
-/// 应用单个 LineDiff 到行数组
+/// Apply a single LineDiff to an array of rows.
 fn apply_line_diff(lines: &[String], diff: &LineDiff) -> Result<Vec<String>> {
     let mut result: Vec<String> = Vec::with_capacity(lines.len());
     let mut old_pos = 0usize;
 
-    // 按 old_start 排序
+    // Sort by old_start
     let mut hunks = diff.hunks.clone();
     hunks.sort_by_key(|h| h.old_start);
 
@@ -41,28 +41,28 @@ fn apply_line_diff(lines: &[String], diff: &LineDiff) -> Result<Vec<String>> {
         let hunk_start = (hunk.old_start.saturating_sub(1)) as usize;
         let hunk_end = hunk_start + hunk.old_len as usize;
 
-        // 确保 hunk 位置不重叠且不越界
+        // Ensure that hunk locations do not overlap and do not cross boundaries
         if hunk_start < old_pos {
             return Err(StratumError::Engine(format!(
-                "重叠的 hunk: old_start={}, 已处理到位置 {}",
+                "Overlapping hunk: old_start={}, processed to position {}",
                 hunk.old_start, old_pos
             )));
         }
         if hunk_end > lines.len() {
             return Err(StratumError::Engine(format!(
-                "Hunk 超出范围: old_start={}, old_len={}, 总行数={}",
+                "Hunk out of range: old_start={}, old_len={}, total rows={}",
                 hunk.old_start,
                 hunk.old_len,
                 lines.len()
             )));
         }
 
-        // 复制 hunk 前未变的部分
+        // Copy the unchanged part before the hunk
         if hunk_start > old_pos {
             result.extend_from_slice(&lines[old_pos..hunk_start]);
         }
 
-        // 处理 hunk 内的操作
+        // Handling operations within a hunk
         let mut hunk_pos = hunk_start;
         for op in &hunk.ops {
             match op {
@@ -91,7 +91,7 @@ fn apply_line_diff(lines: &[String], diff: &LineDiff) -> Result<Vec<String>> {
         old_pos = hunk_end;
     }
 
-    // 剩余未变行
+    // Remaining unchanged rows
     if old_pos < lines.len() {
         result.extend_from_slice(&lines[old_pos..]);
     }
@@ -99,21 +99,21 @@ fn apply_line_diff(lines: &[String], diff: &LineDiff) -> Result<Vec<String>> {
     Ok(result)
 }
 
-/// 合并冲突
+/// Merger conflicts
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeConflict {
-    /// 在最终输出中的起始行号（0-indexed）
+    /// Starting line number in the final output (0-indexed)
     pub start_line: usize,
-    /// 基准版本的内容
+    /// Content of the baseline version
     pub base: Vec<String>,
-    /// 我们的版本的内容
+    /// The contents of our version
     pub ours: Vec<String>,
-    /// 他们的版本的内容
+    /// The contents of their version
     pub theirs: Vec<String>,
 }
 
 impl MergeConflict {
-    /// 生成类似 Git 的冲突标记格式
+    /// Generate a Git-like format for conflict markup
     pub fn to_conflict_marker(&self) -> String {
         let mut buf = String::new();
         buf.push_str("<<<<<<< ours\n");
@@ -131,12 +131,12 @@ impl MergeConflict {
     }
 }
 
-/// 三路文本合并
+/// Three-way text merge
 ///
-/// 基于 diff_to_line_diff 计算 base→ours 和 base→theirs 的差异，
-/// 然后同步应用两个差异。当同一区域被两边以不同方式修改时产生冲突。
+/// Calculate the difference between base→ours and base→theirs based on diff_to_line_diff.
+/// The two differences are then applied synchronously. Conflicts arise when the same area is modified by two sides in different ways.
 ///
-/// 返回合并后的文本和冲突列表（如有冲突）。
+/// Returns the merged text and a list of conflicts (if any).
 pub fn merge_texts(base: &str, ours: &str, theirs: &str) -> (String, Vec<MergeConflict>) {
     use crate::engine::diff::diff_to_line_diff;
 
@@ -147,14 +147,14 @@ pub fn merge_texts(base: &str, ours: &str, theirs: &str) -> (String, Vec<MergeCo
     let ours_lines: Vec<&str> = ours.lines().collect();
     let theirs_lines: Vec<&str> = theirs.lines().collect();
 
-    // 收集两边在 base 上的修改
+    // Collect the changes made by both sides on the base
     let mut our_changes: Vec<ChangeRange> = Vec::new();
     let mut their_changes: Vec<ChangeRange> = Vec::new();
 
     collect_changes_from_diff(&diff_ours, &ours_lines, &mut our_changes);
     collect_changes_from_diff(&diff_theirs, &theirs_lines, &mut their_changes);
 
-    // 合并两边变更（使用类似 jj 的逐行标记法）
+    // Merge changes on both sides (using jj-like line-by-line markup)
     let mut result: Vec<String> = Vec::new();
     let mut conflicts: Vec<MergeConflict> = Vec::new();
     let mut base_pos = 0usize;
@@ -163,20 +163,20 @@ pub fn merge_texts(base: &str, ours: &str, theirs: &str) -> (String, Vec<MergeCo
     let mut their_idx = 0usize;
 
     while our_idx < our_changes.len() || their_idx < their_changes.len() {
-        // 取当前位置更早的变更
+        // Takes an earlier change from the current position
         let our_change = our_changes.get(our_idx);
         let their_change = their_changes.get(their_idx);
 
         match (our_change, their_change) {
             (None, Some(tc)) => {
-                // 只有他们改了
+                // They're the only ones who changed.
                 append_unchanged(&mut result, &base_lines, base_pos, tc.base_start);
                 append_change(&mut result, tc);
                 base_pos = tc.base_start + tc.base_len;
                 their_idx += 1;
             }
             (Some(oc), None) => {
-                // 只有我们改了
+                // We're the only ones who changed.
                 append_unchanged(&mut result, &base_lines, base_pos, oc.base_start);
                 append_change(&mut result, oc);
                 base_pos = oc.base_start + oc.base_len;
@@ -184,33 +184,33 @@ pub fn merge_texts(base: &str, ours: &str, theirs: &str) -> (String, Vec<MergeCo
             }
             (Some(oc), Some(tc)) => {
                 if oc.base_start < tc.base_start {
-                    // 我们的变更更早
+                    // Our change was earlier.
                     append_unchanged(&mut result, &base_lines, base_pos, oc.base_start);
                     append_change(&mut result, oc);
                     base_pos = oc.base_start + oc.base_len;
                     our_idx += 1;
                 } else if tc.base_start < oc.base_start {
-                    // 他们的变更更早
+                    // They changed earlier.
                     append_unchanged(&mut result, &base_lines, base_pos, tc.base_start);
                     append_change(&mut result, tc);
                     base_pos = tc.base_start + tc.base_len;
                     their_idx += 1;
                 } else {
-                    // 两边从同一位置开始修改 — 检查是否冲突
+                    // Both sides are modified from the same position - check for conflicts
                     let oc_end = oc.base_start + oc.base_len;
                     let tc_end = tc.base_start + tc.base_len;
 
                     if oc.base_len == tc.base_len && oc.new_lines == tc.new_lines {
-                        // 两边做了相同的修改 — 只应用一次
+                        // Same modifications made on both sides - applied only once
                         append_unchanged(&mut result, &base_lines, base_pos, oc.base_start);
                         append_change(&mut result, oc);
                         base_pos = oc_end;
                     } else {
-                        // 重叠或相同范围但不同内容 = 冲突
+                        // Overlapping or same scope but different content = conflict
                         append_unchanged(&mut result, &base_lines, base_pos, oc.base_start);
 
                         let conflict_start_line = result.len();
-                        // 输出 ours
+                        // Output ours
                         for line in &oc.new_lines {
                             result.push(line.clone());
                         }
@@ -234,7 +234,7 @@ pub fn merge_texts(base: &str, ours: &str, theirs: &str) -> (String, Vec<MergeCo
         }
     }
 
-    // 剩余未变行
+    // Remaining unchanged rows
     if base_pos < base_lines.len() {
         for line in &base_lines[base_pos..] {
             result.push(line.to_string());
@@ -244,7 +244,7 @@ pub fn merge_texts(base: &str, ours: &str, theirs: &str) -> (String, Vec<MergeCo
     (result.join("\n"), conflicts)
 }
 
-/// 变更范围：标记 base 中一段被替换为新内容
+/// Scope of the change: a paragraph in the tag base is replaced with the new content.
 #[derive(Debug, Clone)]
 struct ChangeRange {
     base_start: usize,
@@ -252,10 +252,10 @@ struct ChangeRange {
     new_lines: Vec<String>,
 }
 
-/// 从 LineDiff（我们的内部类型）收集变更
+/// Collecting changes from LineDiff (our internal type)
 ///
-/// 跳过 Equal 上下文，只提取实际的变更区域（Delete/Insert/Replace）。
-/// 每个 hunk 可能产生多个 ChangeRange（Equal 分隔的多个变更区段）。
+/// Skips the Equal context and extracts only the actual change area (Delete/Insert/Replace).
+/// Each hunk may generate multiple ChangeRanges (Equal segregated multiple change segments).
 fn collect_changes_from_diff(
     diff: &LineDiff,
     _new_lines: &[&str],
@@ -353,7 +353,7 @@ fn append_unchanged(
     }
 }
 
-/// 追加一个变更的内容
+/// Addition of a change
 fn append_change(result: &mut Vec<String>, change: &ChangeRange) {
     for line in &change.new_lines {
         result.push(line.clone());
@@ -465,8 +465,8 @@ mod tests {
                 DiffOp::Equal { count: 1 }, // keep "b"
             ],
         };
-        // 注意：插入后内容变为 a\nx\nb\nc\n
-        // 再次修改行 3 (原 b)
+        // Note: After insertion the content becomes a\nx\nb\nc\n
+        // Revise line 3 again (former b)
         let hunk2 = Hunk {
             old_start: 3,
             old_len: 1,

@@ -1,6 +1,6 @@
-//! Diff 引擎 — 基于 similar crate 的行级差异计算
+//! Diff Engine - Row-level diff calculation based on similar crate
 //!
-//! 将 similar::TextDiff 的输出转换为 Stratum 内部的 Delta 表示。
+//! Convert the output of similar::TextDiff to a Delta representation within Stratum.
 
 use std::path::PathBuf;
 use similar::{ChangeTag, TextDiff};
@@ -8,28 +8,17 @@ use crate::core::delta::{Delta, LineDiff};
 use crate::core::file_node::FileNode;
 use crate::core::types::{DiffOp, Hunk, SourceType};
 
-/// 从 similar diff slice 中提取行内容，去除末尾换行符
-fn slice_to_line(s: &str) -> String {
-    if s.ends_with('\n') {
-        let trimmed = s.trim_end_matches('\n');
-        if trimmed.ends_with('\r') {
-            trimmed.trim_end_matches('\r').to_string()
-        } else {
-            trimmed.to_string()
-        }
-    } else {
-        s.to_string()
-    }
+fn strip_newline(s: &str) -> String {
+    s.trim_end_matches('\n').trim_end_matches('\r').to_string()
 }
 
-/// 计算两个文本的行级差异，返回 LineDiff
+/// Calculates the line level difference between two texts, returns LineDiff
 ///
-/// 使用 similar::TextDiff::from_lines 生成行级 diff，
-/// 按 grouped_ops(3) 分组为 Hunk 列表，上下文行数 = 3。
+/// Generate a line-level diff using similar::TextDiff::from_lines.
+/// Grouped as Hunk list by grouped_ops(3), context rows = 3.
 pub fn diff_to_line_diff(old: &str, new: &str) -> LineDiff {
     let diff = TextDiff::from_lines(old, new);
     let grouped = diff.grouped_ops(3);
-    let new_lines: Vec<String> = diff.new_slices().iter().map(|s| slice_to_line(s)).collect();
 
     let hunks: Vec<Hunk> = grouped
         .iter()
@@ -65,8 +54,9 @@ pub fn diff_to_line_diff(old: &str, new: &str) -> LineDiff {
                         });
                     }
                     similar::DiffTag::Insert => {
-                        let lines: Vec<String> = new_lines[n_range.start..n_range.end]
-                            .to_vec();
+                        let lines: Vec<String> = diff.iter_changes(op)
+                            .map(|c| strip_newline(c.value()))
+                            .collect();
                         my_ops.push(DiffOp::Insert {
                             new_start: n_range.start as u32 + 1,
                             lines,
@@ -74,8 +64,10 @@ pub fn diff_to_line_diff(old: &str, new: &str) -> LineDiff {
                     }
                     similar::DiffTag::Replace => {
                         let old_cnt = (o_range.end - o_range.start) as u32;
-                        let lines: Vec<String> = new_lines[n_range.start..n_range.end]
-                            .to_vec();
+                        let lines: Vec<String> = diff.iter_changes(op)
+                            .filter(|c| c.tag() == ChangeTag::Insert)
+                            .map(|c| strip_newline(c.value()))
+                            .collect();
                         my_ops.push(DiffOp::Replace {
                             old_start: o_range.start as u32 + 1,
                             old_count: old_cnt,
@@ -99,16 +91,16 @@ pub fn diff_to_line_diff(old: &str, new: &str) -> LineDiff {
     LineDiff { hunks }
 }
 
-/// 从 diff 中收集所有变更，构建完整的 Delta
+/// Gather all changes from diff and build the complete Delta
 ///
-/// 使用 iter_all_changes() 遍历所有行变更，构建包含完整内容映射的 Delta。
+/// Use iter_all_changes() to iterate over all row changes and construct a Delta containing the full content mapping.
 pub fn collect_changes_from_diff<'a>(
-    diff: &'a TextDiff<'a, 'a, 'a, str>,
+    diff: &'a TextDiff<'a, 'a, str>,
     path: PathBuf,
     old_content: &[u8],
     source_type: SourceType,
 ) -> Delta {
-    // 从 iter_all_changes 构建 LineDiff
+    // Building LineDiff from iter_all_changes
     let mut equal_ops: Vec<DiffOp> = Vec::new();
     let mut hunks: Vec<Hunk> = Vec::new();
     let mut current_ops = Vec::new();
@@ -120,13 +112,13 @@ pub fn collect_changes_from_diff<'a>(
         match change.tag() {
             ChangeTag::Equal => {
                 if in_change {
-                    // 结束上一个 change block
+                    // End the previous change block
                     if !current_ops.is_empty() {
                         let old_start = old_pos.saturating_sub(1).max(0) as u32;
                         let new_start = new_pos.saturating_sub(1).max(0) as u32;
                         hunks.push(Hunk {
                             old_start,
-                            old_len: 0, // 会在下面修正
+                            old_len: 0, // Will be amended below
                             new_start,
                             new_len: 0,
                             ops: std::mem::take(&mut current_ops),
@@ -157,7 +149,7 @@ pub fn collect_changes_from_diff<'a>(
         }
     }
 
-    // 最后一段 change
+    // Last paragraph change
     if !current_ops.is_empty() {
         let old_start = old_pos.saturating_sub(1).max(0) as u32;
         let new_start = new_pos.saturating_sub(1).max(0) as u32;
@@ -170,7 +162,7 @@ pub fn collect_changes_from_diff<'a>(
         });
     }
 
-    // 修正 Hunk 的 len 字段
+    // Fix the len field in Hunk
     for hunk in &mut hunks {
         let mut old_len = 0u32;
         let mut new_len = 0u32;
@@ -202,7 +194,7 @@ pub fn collect_changes_from_diff<'a>(
     Delta::new(file_node, line_diff, source_type)
 }
 
-/// 统一 diff 输出（保留上下文），用于显示
+/// Unified diff output (with context preserved) for displaying the
 pub fn format_unified_diff(old: &str, new: &str, context: usize) -> String {
     let diff = TextDiff::from_lines(old, new);
     diff.unified_diff()

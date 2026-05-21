@@ -2,27 +2,27 @@ use serde::{Deserialize, Serialize};
 use crate::core::types::{ContentId, DeltaId, DiffOp, SourceType};
 use crate::core::file_node::FileNode;
 
-/// Delta — 最小不可变增量
+/// Delta - minimum non-variable increment
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Delta {
-    /// 唯一 ID（内容寻址）
+    /// Unique ID (content addressing)
     pub id: DeltaId,
-    /// 关联的文件基准
+    /// Linked document benchmarks
     pub file: FileNode,
-    /// 行级差异
+    /// Row level differences
     pub diff: LineDiff,
-    /// 来源
+    /// source (of information etc)
     pub source: SourceType,
-    /// 创建时间戳（Unix 毫秒）
+    /// Creating timestamps (Unix milliseconds)
     pub timestamp: i64,
 }
 
 impl Delta {
-    /// 创建新 Delta（自动计算 ID）
+    /// Creating a new Delta (automatic ID calculation)
     pub fn new(file: FileNode, diff: LineDiff, source: SourceType) -> Self {
         let timestamp = chrono::Utc::now().timestamp_millis();
         let mut delta = Delta {
-            id: ContentId([0u8; 32]), // 占位
+            id: ContentId([0u8; 32]), // occupy a position
             file,
             diff,
             source,
@@ -32,14 +32,14 @@ impl Delta {
         delta
     }
 
-    /// 根据内容计算 ID
+    /// Calculate ID based on content
     pub fn compute_id(&self) -> DeltaId {
         let json = serde_json::to_vec(self).unwrap_or_default();
         ContentId::from_content(&json)
     }
 }
 
-/// 行级差异
+/// Row level differences
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LineDiff {
     pub hunks: Vec<super::types::Hunk>,
@@ -50,7 +50,7 @@ impl LineDiff {
         LineDiff { hunks }
     }
 
-    /// 判断是否为空 diff
+    /// Determine if it is empty diff
     pub fn is_empty(&self) -> bool {
         self.hunks.is_empty()
     }
@@ -65,7 +65,7 @@ pub struct DeltaSummary {
 }
 
 impl Delta {
-    /// 统计变化量
+    /// Volume of statistical change
     pub fn summary(&self) -> DeltaSummary {
         let mut inserts = 0;
         let mut deletes = 0;
