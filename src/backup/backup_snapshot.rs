@@ -13,6 +13,8 @@ pub struct BackupSnapshot {
     pub label: Option<String>,
     pub backed_at: i64,
     pub metadata: HashMap<String, String>,
+    pub agent_id: Option<String>,
+    pub source_type: Option<String>,
 }
 
 impl BackupSnapshot {
@@ -31,18 +33,34 @@ impl BackupSnapshot {
             label,
             backed_at: now,
             metadata: HashMap::new(),
+            agent_id: None,
+            source_type: None,
         };
         bs.id = bs.compute_id();
         bs
     }
 
     pub fn compute_id(&self) -> BackupId {
-        let json = serde_json::to_vec(self).unwrap_or_default();
+        let mut clone = self.clone();
+        clone.backed_at = 0; // Exclude timestamp from content hash
+        let json = serde_json::to_vec(&clone).unwrap_or_default();
         BackupId::from_content(&json)
     }
 
     pub fn with_metadata(mut self, key: &str, value: &str) -> Self {
         self.metadata.insert(key.to_string(), value.to_string());
+        self.id = self.compute_id();
+        self
+    }
+
+    pub fn with_agent_id(mut self, agent_id: &str) -> Self {
+        self.agent_id = Some(agent_id.to_string());
+        self.id = self.compute_id();
+        self
+    }
+
+    pub fn with_source_type(mut self, source_type: &str) -> Self {
+        self.source_type = Some(source_type.to_string());
         self.id = self.compute_id();
         self
     }
@@ -55,6 +73,8 @@ pub struct BackupFilter {
     pub label: Option<String>,
     pub metadata_key: Option<String>,
     pub metadata_value: Option<String>,
+    pub agent_id: Option<String>,
+    pub source_type: Option<String>,
 }
 
 impl BackupFilter {
@@ -80,6 +100,16 @@ impl BackupFilter {
     pub fn with_metadata(mut self, key: &str, value: &str) -> Self {
         self.metadata_key = Some(key.to_string());
         self.metadata_value = Some(value.to_string());
+        self
+    }
+
+    pub fn with_agent_id(mut self, agent_id: &str) -> Self {
+        self.agent_id = Some(agent_id.to_string());
+        self
+    }
+
+    pub fn with_source_type(mut self, source_type: &str) -> Self {
+        self.source_type = Some(source_type.to_string());
         self
     }
 }

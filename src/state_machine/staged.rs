@@ -1,15 +1,16 @@
 //! staged layer operation
 //!
 //The Staged layer is the last layer before submission. The Staged layer is the last layer before the commit, and the contents of the Approval layer are merged into this layer.
-//! can be packaged as a Checkpoint via commit (placeholder, P4 implements specific logic).
+//! can be packaged as a Checkpoint via commit.
 
+use crate::checkpoint::checkpoint::{Checkpoint, CheckpointMetadata};
 use crate::core::delta::Delta;
 use crate::core::partition::Partition;
 use crate::core::snapshot::Snapshot;
-use crate::core::types::{PartitionId, PartitionType, SnapshotId, SourceType};
+use crate::core::types::{CheckpointId, PartitionId, PartitionType, SnapshotId, SourceType};
 use crate::engine::diff::diff_to_line_diff;
 use crate::error::{Result, StratumError};
-use crate::storage::repository::{DeltaStore, PartitionStore, SnapshotStore};
+use crate::storage::repository::{BranchStore, CheckpointStore, DagStore, DeltaStore, PartitionStore, SnapshotStore};
 use crate::storage::sqlite_storage::SqliteStorage;
 
 /// Fixed ID of the staged partition
@@ -26,11 +27,13 @@ pub fn ensure_staged_partition(
     match storage.get_partition(&pid) {
         Ok(p) => Ok(p),
         Err(_) => {
-            let partition = Partition::new(
-                "staged".to_string(),
-                PartitionType::Staged,
-                initial_snapshot_id,
-            );
+            let partition = Partition {
+                id: pid,
+                name: "staged".to_string(),
+                current_snapshot: initial_snapshot_id,
+                history: vec![initial_snapshot_id],
+                partition_type: PartitionType::Staged,
+            };
             storage
                 .create_partition(&partition)
                 .map_err(|e| StratumError::Storage(e.into()))?;
@@ -97,19 +100,69 @@ pub fn merge_approval_to_staged(
     Ok(new_snapshot.id)
 }
 
-/// Submit staged as Checkpoint (placeholder, P4 implements specific logic)
+/// Submit staged as Checkpoint
 ///
-/// Currently only the staged current snapshot ID and placeholder CheckpointId are returned.
-/// The full Checkpoint submission logic will be implemented in P4.
+/// 1. Get staged partition current snapshot
+/// 2. Get current branch head from BranchStore
+/// 3. Build a Checkpoint with the snapshot as baseline
+/// 4. Store the checkpoint via CheckpointStore
+/// 5. Store updated DAG via DagStore
+/// 6. Update branch head via BranchStore
+/// 7. Return the new CheckpointId
 pub fn commit_staged_to_checkpoint(
-    _storage: &SqliteStorage,
-    _message: &str,
-) -> Result<()> {
-    // P4 Implementation: Packaging the staged current snapshot as a Checkpoint
-    // Add to DAG, update branch head, clear staged
-    Err(StratumError::Checkpoint(
-        "checkpoint commit not yet implemented in P3, see P4".into(),
-    ))
+    storage: &SqliteStorage,
+    message: &str,
+    author: &str,
+) -> Result<CheckpointId> {
+    // 1. Get staged partition
+    let staged_pid = staged_partition_id();
+    let staged_partition = storage
+        .get_partition(&staged_pid)
+        .map_err(|_| StratumError::NotFound("staged partition not found".into()))?;
+    let current_snapshot_id = staged_partition.current_snapshot;
+
+    // 2. Get or create a default "main" branch
+    let branch_name = "main";
+    let branch_head = match storage.get_branch(branch_name) {
+        Ok(b) => b.head,
+        Err(_) => {
+            // First commit: create initial branch pointing to the staged snapshot
+            let branch = crate::checkpoint::branch::Branch::new(branch_name, current_snapshot_id);
+            storage.store_branch(&branch).map_err(|e| StratumError::Storage(e.into()))?;
+            current_snapshot_id
+        }
+    };
+
+    // 3. Build Checkpoint
+    let metadata = CheckpointMetadata::new(author, message);
+    let cp = Checkpoint::new(
+        vec![current_snapshot_id],
+        vec![branch_head],
+        metadata,
+    );
+    let cp_id = cp.id;
+
+    // 4. Store checkpoint
+    storage
+        .store_checkpoint(&cp)
+        .map_err(|e| StratumError::Storage(e.into()))?;
+
+    // 5. Update DAG (load, add edge, store)
+    let mut dag = storage
+        .load_dag()
+        .map_err(|e| StratumError::Storage(e.into()))?;
+    dag.add_node(cp_id);
+    dag.add_edge(branch_head, cp_id);
+    storage
+        .store_dag(&dag)
+        .map_err(|e| StratumError::Storage(e.into()))?;
+
+    // 6. Update branch head
+    storage
+        .update_branch_head(branch_name, &cp_id)
+        .map_err(|e| StratumError::Storage(e.into()))?;
+
+    Ok(cp_id)
 }
 
 /// Empty staged partition (reset to initial state)
@@ -155,11 +208,13 @@ mod tests {
         let agent_id = AgentInstanceId("test-agent".into());
         let initial_id = create_initial_snapshot(storage, "base\n");
         let pid = crate::state_machine::approval::approval_agent_partition_id(&agent_id);
-        let partition = Partition::new(
-            format!("approval/{}", agent_id),
-            PartitionType::Approval(agent_id),
-            initial_id,
-        );
+        let partition = Partition {
+            id: pid,
+            name: format!("approval/{}", agent_id),
+            current_snapshot: initial_id,
+            history: vec![initial_id],
+            partition_type: PartitionType::Approval(agent_id.clone()),
+        };
         storage.create_partition(&partition).unwrap();
 
         // Creating a modified snapshot

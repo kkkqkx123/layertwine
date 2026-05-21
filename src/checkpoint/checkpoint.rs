@@ -72,7 +72,9 @@ impl Checkpoint {
 
     /// Content-based ID calculation (content addressing)
     pub fn compute_id(&self) -> CheckpointId {
-        let json = serde_json::to_vec(self).unwrap_or_default();
+        let mut clone = self.clone();
+        clone.created_at = 0; // Exclude timestamp from content hash
+        let json = serde_json::to_vec(&clone).unwrap_or_default();
         CheckpointId::from_content(&json)
     }
 }

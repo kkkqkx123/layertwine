@@ -321,18 +321,22 @@ mod tests {
         let integrated_pid = integrated_partition_id(integrated_name);
 
         // Creating Partitions
-        let approval_part = Partition::new(
-            "approval/test-agent".into(),
-            PartitionType::Approval(agent_id.clone()),
-            initial_id,
-        );
+        let approval_part = Partition {
+            id: approval_pid,
+            name: "approval/test-agent".into(),
+            current_snapshot: initial_id,
+            history: vec![initial_id],
+            partition_type: PartitionType::Approval(agent_id.clone()),
+        };
         storage.create_partition(&approval_part).unwrap();
 
-        let integrated_part = Partition::new(
-            format!("integrated/{}", integrated_name),
-            PartitionType::Integrated(integrated_name.to_string()),
-            initial_id,
-        );
+        let integrated_part = Partition {
+            id: integrated_pid,
+            name: format!("integrated/{}", integrated_name),
+            current_snapshot: initial_id,
+            history: vec![initial_id],
+            partition_type: PartitionType::Integrated(integrated_name.to_string()),
+        };
         storage.create_partition(&integrated_part).unwrap();
 
         // Creating a new snapshot for approval

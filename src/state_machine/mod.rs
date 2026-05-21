@@ -11,9 +11,9 @@ pub mod transition;
 
 use crate::core::layer::Layer;
 use crate::core::partition::Partition;
-use crate::core::types::{LayerType, PartitionId, SnapshotId};
+use crate::core::types::{CheckpointId, LayerType, PartitionId, PartitionType, SnapshotId};
 use crate::error::{Result, StratumError};
-use crate::storage::repository::PartitionStore;
+use crate::storage::repository::{BranchStore, CheckpointStore, PartitionStore};
 use crate::storage::sqlite_storage::SqliteStorage;
 use std::sync::Arc;
 
@@ -87,6 +87,50 @@ impl StateMachine {
     /// Creating a Default Layer
     pub fn create_layer(&self, layer_type: &LayerType) -> Layer {
         Layer::new(layer_type.clone())
+    }
+
+    /// Switch branches and synchronize the layer status
+    ///
+    /// 1. Get the head checkpoint for the target branch
+    /// 2. Reset the staged partition to the first snapshot in the checkpoint
+    /// 3. Clear other layer states (approval, agent_edit) if needed
+    pub fn switch_branch(&self, branch_name: &str) -> Result<CheckpointId> {
+        let branch = self
+            .storage
+            .get_branch(branch_name)
+            .map_err(|e| StratumError::Storage(e.into()))?;
+        let head_cp = self
+            .storage
+            .get_checkpoint(&branch.head)
+            .map_err(|e| StratumError::Storage(e.into()))?;
+        if head_cp.baseline_snapshots.is_empty() {
+             return Err(StratumError::Checkpoint(
+                 "branch head checkpoint has no snapshots".into(),
+             ));
+         }
+         let base_snapshot = head_cp.baseline_snapshots[0];
+
+         // Reset staged partition to the branch's base snapshot
+         let staged_pid = crate::state_machine::staged::staged_partition_id();
+         match self.storage.get_partition(&staged_pid) {
+             Ok(_) => {
+                 self.storage
+                     .update_pointer(&staged_pid, &base_snapshot)
+                     .map_err(|e| StratumError::Storage(e.into()))?;
+             }
+             Err(_) => {
+                 let partition = Partition::new(
+                     "staged".to_string(),
+                     PartitionType::Staged,
+                     base_snapshot,
+                 );
+                 self.storage
+                     .create_partition(&partition)
+                     .map_err(|e| StratumError::Storage(e.into()))?;
+             }
+         }
+
+         Ok(branch.head)
     }
 
     // Transaction support -

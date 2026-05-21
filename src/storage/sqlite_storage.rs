@@ -1,5 +1,6 @@
 use crate::checkpoint::branch::Branch;
 use crate::checkpoint::checkpoint::Checkpoint;
+use crate::checkpoint::dag::CheckpointDag;
 use crate::core::delta::{Delta, LineDiff};
 use crate::core::file_node::FileNode;
 use crate::core::partition::Partition;
@@ -7,7 +8,7 @@ use crate::core::snapshot::Snapshot;
 use crate::core::types::{CheckpointId, ContentId, DeltaId, PartitionId, PartitionType, SnapshotId};
 use crate::storage::migrations;
 use crate::storage::repository::{
-    BranchStore, CheckpointStore, DeltaStore, FileNodeStore, PartitionStore, SnapshotStore,
+    BranchStore, CheckpointStore, DagStore, DeltaStore, FileNodeStore, PartitionStore, SnapshotStore,
 };
 use crate::StorageResult;
 use rusqlite::{params, Connection};
@@ -641,6 +642,21 @@ impl CheckpointStore for SqliteStorage {
         }
         Ok(result)
     }
+
+    fn delete_checkpoint(&self, id: &CheckpointId) -> StorageResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn.execute(
+            "DELETE FROM checkpoints WHERE id = ?1",
+            rusqlite::params![&id.0.to_vec()],
+        )?;
+        if affected == 0 {
+            return Err(crate::StorageError::NotFound(format!(
+                "checkpoint {} not found",
+                id
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl BranchStore for SqliteStorage {
@@ -726,6 +742,40 @@ impl BranchStore for SqliteStorage {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM branches WHERE name = ?1", rusqlite::params![name])?;
         Ok(())
+    }
+}
+
+// DagStore implementation -
+
+impl DagStore for SqliteStorage {
+    fn store_dag(&self, dag: &CheckpointDag) -> StorageResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let json = serde_json::to_vec(dag)
+            .map_err(|e| crate::StorageError::Serialization(e.to_string()))?;
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "INSERT OR REPLACE INTO dag_store (key, value, updated_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params!["checkpoint_dag", json, now],
+        )?;
+        Ok(())
+    }
+
+    fn load_dag(&self) -> StorageResult<CheckpointDag> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT value FROM dag_store WHERE key = ?1"
+        )?;
+        let result = stmt.query_row(rusqlite::params!["checkpoint_dag"], |row| {
+            let json: Vec<u8> = row.get(0)?;
+            let dag: CheckpointDag = serde_json::from_slice(&json)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            Ok(dag)
+        });
+        match result {
+            Ok(dag) => Ok(dag),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(CheckpointDag::new()),
+            Err(e) => Err(crate::StorageError::Database(e)),
+        }
     }
 }
 
@@ -816,6 +866,51 @@ impl PartitionStore for StratumStorage {
     }
     fn list_partitions(&self) -> StorageResult<Vec<Partition>> {
         self.inner.list_partitions()
+    }
+}
+
+impl CheckpointStore for StratumStorage {
+    fn store_checkpoint(&self, checkpoint: &Checkpoint) -> StorageResult<()> {
+        self.inner.store_checkpoint(checkpoint)
+    }
+    fn get_checkpoint(&self, id: &CheckpointId) -> StorageResult<Checkpoint> {
+        self.inner.get_checkpoint(id)
+    }
+    fn checkpoint_exists(&self, id: &CheckpointId) -> StorageResult<bool> {
+        self.inner.checkpoint_exists(id)
+    }
+    fn list_checkpoints(&self) -> StorageResult<Vec<Checkpoint>> {
+        self.inner.list_checkpoints()
+    }
+    fn delete_checkpoint(&self, id: &CheckpointId) -> StorageResult<()> {
+        self.inner.delete_checkpoint(id)
+    }
+}
+
+impl BranchStore for StratumStorage {
+    fn store_branch(&self, branch: &Branch) -> StorageResult<()> {
+        self.inner.store_branch(branch)
+    }
+    fn get_branch(&self, name: &str) -> StorageResult<Branch> {
+        self.inner.get_branch(name)
+    }
+    fn update_branch_head(&self, name: &str, head: &CheckpointId) -> StorageResult<()> {
+        self.inner.update_branch_head(name, head)
+    }
+    fn list_branches(&self) -> StorageResult<Vec<Branch>> {
+        self.inner.list_branches()
+    }
+    fn delete_branch(&self, name: &str) -> StorageResult<()> {
+        self.inner.delete_branch(name)
+    }
+}
+
+impl DagStore for StratumStorage {
+    fn store_dag(&self, dag: &CheckpointDag) -> StorageResult<()> {
+        self.inner.store_dag(dag)
+    }
+    fn load_dag(&self) -> StorageResult<CheckpointDag> {
+        self.inner.load_dag()
     }
 }
 

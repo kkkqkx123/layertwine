@@ -71,6 +71,8 @@ pub trait CheckpointStore {
     fn checkpoint_exists(&self, id: &CheckpointId) -> StorageResult<bool>;
     /// List all checkpoints
     fn list_checkpoints(&self) -> StorageResult<Vec<Checkpoint>>;
+    /// Delete Checkpoint
+    fn delete_checkpoint(&self, id: &CheckpointId) -> StorageResult<()>;
 }
 
 /// Branch storage trait

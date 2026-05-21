@@ -3,8 +3,9 @@
 //! Define all allowed forward/reverse flow operations, and state machine irony checks.
 //! Flow rules reference architecture/03-hierarchical-state-machines.md §3.4 Iron laws of state machines.
 
+use crate::backup::backup_repo::BackupRepo;
 use crate::core::snapshot::Snapshot;
-use crate::core::types::{LayerType, PartitionId, SnapshotId};
+use crate::core::types::{BackupId, LayerType, PartitionId, SnapshotId};
 use crate::engine::merge::apply_deltas;
 use crate::error::{Result, StratumError};
 use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
@@ -216,14 +217,15 @@ pub fn rollback_staged_to_layer(
     )))
 }
 
-/// Merge backup snapshots into staged (placeholder, P5 implements specific logic)
+/// Merge backup snapshots into staged
+///
+/// Uses BackupRepo to restore a backup into the staged partition.
 pub fn merge_backup_to_staged(
-    _storage: &SqliteStorage,
-    _backup_snapshot_id: &SnapshotId,
+    storage: &SqliteStorage,
+    backup_repo: &BackupRepo,
+    backup_id: &BackupId,
 ) -> Result<SnapshotId> {
-    Err(StratumError::StateMachine(
-        "backup merge not yet implemented in P3, see P5".into(),
-    ))
+    backup_repo.merge_to_staged(backup_id, storage)
 }
 
 // ===== Utility functions =====
@@ -318,7 +320,13 @@ mod tests {
         let storage = setup_storage();
         let initial_id = create_initial_snapshot(&storage, "v1\n");
         let pid = crate::state_machine::staged::staged_partition_id();
-        let partition = Partition::new("test".into(), PartitionType::Staged, initial_id);
+        let partition = crate::core::partition::Partition {
+            id: pid,
+            name: "test".into(),
+            current_snapshot: initial_id,
+            history: vec![initial_id],
+            partition_type: crate::core::types::PartitionType::Staged,
+        };
         storage.create_partition(&partition).unwrap();
 
         // advance

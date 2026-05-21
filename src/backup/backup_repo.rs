@@ -21,11 +21,15 @@ CREATE TABLE IF NOT EXISTS backup_snapshots (
     deltas          BLOB NOT NULL,
     label           TEXT,
     backed_at       INTEGER NOT NULL,
-    metadata        BLOB NOT NULL
+    metadata        BLOB NOT NULL,
+    agent_id        TEXT,
+    source_type     TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_backup_label ON backup_snapshots(label);
 CREATE INDEX IF NOT EXISTS idx_backup_backed_at ON backup_snapshots(backed_at);
+CREATE INDEX IF NOT EXISTS idx_backup_agent_id ON backup_snapshots(agent_id);
+CREATE INDEX IF NOT EXISTS idx_backup_source_type ON backup_snapshots(source_type);
 ";
 
 fn map_db_err(e: rusqlite::Error) -> StratumError {
@@ -83,8 +87,8 @@ impl BackupRepo {
         let metadata_json = serde_json::to_vec(&backup.metadata)?;
 
         conn.execute(
-            "INSERT OR IGNORE INTO backup_snapshots (id, source_snapshot, file_path, file_hash, deltas, label, backed_at, metadata)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT OR IGNORE INTO backup_snapshots (id, source_snapshot, file_path, file_hash, deltas, label, backed_at, metadata, agent_id, source_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 &backup.id.0.to_vec(),
                 &backup.source_snapshot.0.to_vec(),
@@ -94,6 +98,8 @@ impl BackupRepo {
                 backup.label,
                 backup.backed_at,
                 metadata_json,
+                backup.agent_id,
+                backup.source_type,
             ],
         )?;
         Ok(())
@@ -105,7 +111,7 @@ impl BackupRepo {
         })?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, source_snapshot, file_path, file_hash, deltas, label, backed_at, metadata
+                "SELECT id, source_snapshot, file_path, file_hash, deltas, label, backed_at, metadata, agent_id, source_type
                  FROM backup_snapshots WHERE id = ?1",
             )
             .map_err(map_db_err)?;
@@ -129,6 +135,8 @@ impl BackupRepo {
                 let label: Option<String> = row.get(5)?;
                 let backed_at: i64 = row.get(6)?;
                 let metadata_json: Vec<u8> = row.get(7)?;
+                let agent_id: Option<String> = row.get(8)?;
+                let source_type: Option<String> = row.get(9)?;
 
                 let deltas: Vec<Delta> = serde_json::from_slice(&deltas_json)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
@@ -146,6 +154,8 @@ impl BackupRepo {
                     label,
                     backed_at,
                     metadata,
+                    agent_id,
+                    source_type,
                 })
             })
             .map_err(map_db_err)?;
@@ -159,7 +169,7 @@ impl BackupRepo {
         })?;
 
         let mut sql = String::from(
-            "SELECT id, source_snapshot, file_path, file_hash, deltas, label, backed_at, metadata
+            "SELECT id, source_snapshot, file_path, file_hash, deltas, label, backed_at, metadata, agent_id, source_type
              FROM backup_snapshots WHERE 1=1",
         );
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -176,6 +186,14 @@ impl BackupRepo {
         if let Some(label) = &filter.label {
             sql.push_str(" AND label = ?");
             param_values.push(Box::new(label.clone()));
+        }
+        if let Some(agent_id) = &filter.agent_id {
+            sql.push_str(" AND agent_id = ?");
+            param_values.push(Box::new(agent_id.clone()));
+        }
+        if let Some(source_type) = &filter.source_type {
+            sql.push_str(" AND source_type = ?");
+            param_values.push(Box::new(source_type.clone()));
         }
 
         sql.push_str(" ORDER BY backed_at DESC");
@@ -204,6 +222,8 @@ impl BackupRepo {
                 let label: Option<String> = row.get(5)?;
                 let backed_at: i64 = row.get(6)?;
                 let metadata_json: Vec<u8> = row.get(7)?;
+                let agent_id: Option<String> = row.get(8)?;
+                let source_type: Option<String> = row.get(9)?;
 
                 let deltas: Vec<Delta> = serde_json::from_slice(&deltas_json).unwrap_or_default();
                 let metadata: HashMap<String, String> =
@@ -220,6 +240,8 @@ impl BackupRepo {
                     label,
                     backed_at,
                     metadata,
+                    agent_id,
+                    source_type,
                 })
             })
             .map_err(map_db_err)?;
@@ -283,12 +305,20 @@ impl BackupRepo {
         let backup = self.get_backup(backup_id)?;
 
         let integrity_ok = {
-            let recomputed = BackupSnapshot::new(
+            let mut recomputed = BackupSnapshot::new(
                 backup.source_snapshot,
                 backup.file.clone(),
                 backup.deltas.clone(),
                 backup.label.clone(),
             );
+            // Preserve original backed_at so the recomputed ID matches
+            recomputed.backed_at = backup.backed_at;
+            if let Some(agent_id) = &backup.agent_id {
+                recomputed = recomputed.with_agent_id(agent_id);
+            }
+            if let Some(source_type) = &backup.source_type {
+                recomputed = recomputed.with_source_type(source_type);
+            }
             recomputed.id == backup.id
         };
         if !integrity_ok {

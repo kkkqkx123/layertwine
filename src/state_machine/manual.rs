@@ -26,11 +26,13 @@ pub fn ensure_manual_partition(storage: &SqliteStorage, initial_snapshot_id: Sna
     match storage.get_partition(&pid) {
         Ok(p) => Ok(p),
         Err(_) => {
-            let partition = Partition::new(
-                "manual_edit".to_string(),
-                PartitionType::Manual,
-                initial_snapshot_id,
-            );
+            let partition = Partition {
+                id: pid,
+                name: "manual_edit".to_string(),
+                current_snapshot: initial_snapshot_id,
+                history: vec![initial_snapshot_id],
+                partition_type: PartitionType::Manual,
+            };
             storage
                 .create_partition(&partition)
                 .map_err(|e| StratumError::Storage(e.into()))?;

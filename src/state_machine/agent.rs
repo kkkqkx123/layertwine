@@ -38,11 +38,13 @@ pub fn ensure_agent_partition(
     match storage.get_partition(&pid) {
         Ok(p) => Ok(p),
         Err(_) => {
-            let partition = Partition::new(
-                format!("agent_edit/{}", agent_id),
-                PartitionType::Agent(agent_id.clone()),
-                initial_snapshot_id,
-            );
+            let partition = Partition {
+                id: pid,
+                name: format!("agent_edit/{}", agent_id),
+                current_snapshot: initial_snapshot_id,
+                history: vec![initial_snapshot_id],
+                partition_type: PartitionType::Agent(agent_id.clone()),
+            };
             storage
                 .create_partition(&partition)
                 .map_err(|e| StratumError::Storage(e.into()))?;

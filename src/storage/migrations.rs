@@ -88,6 +88,12 @@ CREATE TABLE IF NOT EXISTS branches (
     created_at      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS dag_store (
+    key             TEXT PRIMARY KEY,
+    value           BLOB NOT NULL,
+    updated_at      INTEGER NOT NULL
+);
 ";
 
 /// Initialize the database and apply all migrations
