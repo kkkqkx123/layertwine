@@ -134,22 +134,24 @@ fn test_agent_edit_unknown_file() {
     assert_eq!(code, 0, "agent edit on new path should succeed");
 }
 
+use stratum::api::cli::commands::Commands;
+
 // ===== Helper command builders for push/pull/gc =====
 
-fn cmd_push() -> stratum::cli::commands::Commands {
-    stratum::cli::commands::Commands::Push {
+fn cmd_push() -> Commands {
+    Commands::Push {
         remote: "origin".to_string(),
         message: "test".to_string(),
     }
 }
 
-fn cmd_pull() -> stratum::cli::commands::Commands {
-    stratum::cli::commands::Commands::Pull {
+fn cmd_pull() -> Commands {
+    Commands::Pull {
         remote: "origin".to_string(),
         git_ref: "HEAD".to_string(),
     }
 }
 
-fn cmd_gc() -> stratum::cli::commands::Commands {
-    stratum::cli::commands::Commands::Gc
+fn cmd_gc() -> Commands {
+    Commands::Gc
 }

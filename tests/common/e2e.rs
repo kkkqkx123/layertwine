@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use stratum::cli::commands::{Cli, Commands, AgentCommands, BranchCommands};
-use stratum::cli::run_with_cli;
+use stratum::api::cli::commands::{Cli, Commands, AgentCommands, BranchCommands};
+use stratum::api::cli::run_with_cli;
 use stratum::core::types::SnapshotId;
 use stratum::state_machine::StateMachine;
-use stratum::storage::repository::{PartitionStore, CheckpointStore};
+use stratum::storage::repository::PartitionStore;
 use stratum::storage::sqlite_storage::SqliteStorage;
 
 use tempfile::TempDir;

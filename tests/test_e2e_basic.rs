@@ -160,13 +160,13 @@ fn test_edit_no_change() {
 fn test_json_output() {
     let fx = e2e::E2eFixture::new();
 
-    let cli = stratum::cli::commands::Cli {
+    let cli = stratum::api::cli::commands::Cli {
         db_path: fx.db_path_str().to_string(),
         git_repo: None,
         json: true,
         command: e2e::cmd_init(),
     };
-    let code = stratum::cli::run_with_cli(cli);
+    let code = stratum::api::cli::run_with_cli(cli);
     assert_eq!(code, 0, "init --json should succeed");
 
     let code = e2e::run_cmd_json(fx.db_path_str(), e2e::cmd_status());

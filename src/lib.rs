@@ -6,7 +6,7 @@ pub mod state_machine;
 pub mod backup;
 pub mod checkpoint;
 pub mod git_sync;
-pub mod cli;
+pub mod api;
 
 // Re-export common types
 pub use error::{StorageError, StorageResult, StratumError};

@@ -1,0 +1,585 @@
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::backup::backup_repo::BackupRepo;
+use crate::checkpoint::branch::Branch;
+use crate::checkpoint::checkpoint::Checkpoint;
+use crate::checkpoint::repo::CheckpointRepo;
+use crate::core::delta::Delta;
+use crate::core::file_node::FileNode;
+use crate::core::snapshot::Snapshot;
+use crate::core::types::{
+    AgentInstanceId, ContentId, PartitionType, SnapshotId, SourceType,
+};
+use crate::error::{Result as StratumResult, StratumError};
+use crate::git_sync::gc::collect_garbage;
+use crate::git_sync::git_bridge::GitBridge;
+use crate::state_machine::StateMachine;
+use crate::storage::repository::{
+    BranchStore, CheckpointStore, DagStore, DeltaStore, FileNodeStore, PartitionStore,
+    SnapshotStore,
+};
+use crate::storage::sqlite_storage::SqliteStorage;
+
+use super::types::*;
+
+/// Unified service configuration
+#[derive(Debug, Clone)]
+pub struct ServiceConfig {
+    pub db_path: String,
+    pub git_repo: Option<String>,
+}
+
+impl Default for ServiceConfig {
+    fn default() -> Self {
+        ServiceConfig {
+            db_path: ".stratum/stratum.db".into(),
+            git_repo: None,
+        }
+    }
+}
+
+/// Unified API service trait
+///
+/// All operations are synchronous (the underlying storage layer is synchronous).
+/// HTTP/gRPC transport layers should wrap calls in `tokio::task::spawn_blocking`.
+pub trait ApiService: Send + Sync {
+    fn init(&self, req: InitRequest) -> ApiResult<InitResponse>;
+    fn status(&self) -> ApiResult<StatusResponse>;
+    fn edit(&self, req: EditRequest) -> ApiResult<EditResponse>;
+    fn agent_edit(&self, req: AgentEditRequest) -> ApiResult<EditResponse>;
+    fn agent_submit(&self, req: AgentSubmitRequest) -> ApiResult<SubmitResponse>;
+    fn approve(&self, req: ApproveRequest) -> ApiResult<ApproveResponse>;
+    fn commit(&self, req: CommitRequest) -> ApiResult<CommitResponse>;
+    fn log(&self, req: LogRequest) -> ApiResult<LogResponse>;
+    fn branch_create(&self, req: BranchCreateRequest) -> ApiResult<BranchCreateResponse>;
+    fn branch_switch(&self, req: BranchSwitchRequest) -> ApiResult<BranchSwitchResponse>;
+    fn branch_list(&self) -> ApiResult<BranchListResponse>;
+    fn merge(&self, req: MergeRequest) -> ApiResult<MergeResponse>;
+    fn backup(&self, req: BackupRequest) -> ApiResult<BackupResponse>;
+    fn restore(&self, req: RestoreRequest) -> ApiResult<RestoreResponse>;
+    fn gc(&self, _req: GcRequest) -> ApiResult<GcResponse>;
+    fn push(&self, req: PushRequest) -> ApiResult<PushResponse>;
+    fn pull(&self, req: PullRequest) -> ApiResult<PullResponse>;
+}
+
+// ── Helpers ──
+
+fn open_storage(db_path: &str) -> StratumResult<Arc<SqliteStorage>> {
+    let path = Path::new(db_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| StratumError::General(format!("failed to create db directory: {}", e)))?;
+    }
+    let storage = SqliteStorage::new_full(path)
+        .map_err(|e| StratumError::Storage(e))?;
+    Ok(Arc::new(storage))
+}
+
+fn load_checkpoint_repo(storage: &SqliteStorage) -> StratumResult<CheckpointRepo> {
+    let checkpoints = storage
+        .list_checkpoints()
+        .map_err(|e| StratumError::Storage(e))?;
+    let branches = storage
+        .list_branches()
+        .map_err(|e| StratumError::Storage(e))?;
+    let dag = storage
+        .load_dag()
+        .map_err(|e| StratumError::Storage(e))?;
+
+    let mut repo = CheckpointRepo::new_single(SnapshotId::from_content(b"dummy"));
+    repo.branches.clear();
+    repo.branches.extend(branches);
+    repo.checkpoint_dag = dag;
+    repo.checkpoints.clear();
+    for cp in checkpoints {
+        repo.checkpoints.insert(cp.id, cp);
+    }
+    if repo.branches.is_empty() {
+        repo.branches
+            .push(Branch::new("main", ContentId::from_content(b"root")));
+    }
+    repo.current_branch = 0;
+    Ok(repo)
+}
+
+fn map_error(e: StratumError) -> ApiError {
+    match e {
+        StratumError::Storage(se) => ApiError::storage(se.to_string()),
+        StratumError::Engine(s) => ApiError::engine(s),
+        StratumError::StateMachine(s) => ApiError::state_machine(s),
+        StratumError::Checkpoint(s) => ApiError::checkpoint(s),
+        StratumError::GitSync(s) => ApiError::git_sync(s),
+        StratumError::Gc(s) => ApiError::gc(s),
+        StratumError::NotFound(s) => ApiError::not_found(s),
+        StratumError::Cli { context, suggestion } => ApiError {
+            code: "CLI_ERROR".into(),
+            message: context,
+            suggestion,
+            details: None,
+        },
+        StratumError::Serialization(s) => ApiError::internal(format!("serialization: {}", s)),
+        StratumError::General(s) => ApiError::general(s),
+    }
+}
+
+fn snapshot_id_to_hex(id: &SnapshotId) -> String {
+    id.to_hex()
+}
+
+fn checkpoint_to_info(cp: &Checkpoint) -> CheckpointInfo {
+    CheckpointInfo {
+        id: cp.id.to_hex(),
+        author: cp.metadata.author.clone(),
+        message: cp.metadata.message.clone(),
+        parents: cp.parents.iter().map(|p| p.to_hex()).collect(),
+        snapshots: cp.baseline_snapshots.iter().map(|s| s.to_hex()).collect(),
+        created_at: cp.created_at,
+        git_anchor: cp.metadata.git_anchor.clone(),
+    }
+}
+
+// ── ApiServiceImpl ──
+
+/// Default implementation of ApiService
+///
+/// Wraps StateMachine and SqliteStorage, providing a structured API
+/// that all transport layers (CLI, HTTP, gRPC) can use.
+pub struct ApiServiceImpl {
+    storage: Arc<SqliteStorage>,
+    state_machine: StateMachine,
+    db_path: String,
+    git_repo: Option<String>,
+}
+
+impl ApiServiceImpl {
+    /// Open an existing stratum repository
+    pub fn open(config: ServiceConfig) -> ApiResult<Self> {
+        let storage = open_storage(&config.db_path).map_err(map_error)?;
+        let state_machine = StateMachine::new(storage.clone());
+        Ok(ApiServiceImpl {
+            storage,
+            state_machine,
+            db_path: config.db_path,
+            git_repo: config.git_repo,
+        })
+    }
+}
+
+impl ApiService for ApiServiceImpl {
+    fn init(&self, req: InitRequest) -> ApiResult<InitResponse> {
+        let db_path = req.db_path.clone().unwrap_or_else(|| self.db_path.clone());
+        let storage = open_storage(&db_path).map_err(map_error)?;
+
+        if let Some(git_repo_path) = &req.git_repo {
+            let git_path = Path::new(git_repo_path);
+            let ref_name = req.git_ref.as_deref().unwrap_or("HEAD");
+            let initial_snapshot = ContentId::from_content(b"stratum-git-init-placeholder");
+            let mut checkpoint_repo = CheckpointRepo::new_single(initial_snapshot);
+
+            GitBridge::init_from_git(git_path, &*storage, &mut checkpoint_repo, ref_name)
+                .map_err(map_error)?;
+            for cp in checkpoint_repo.checkpoints.values() {
+                storage.store_checkpoint(cp).map_err(|e| map_error(StratumError::Storage(e)))?;
+            }
+            for branch in &checkpoint_repo.branches {
+                storage.store_branch(branch).map_err(|e| map_error(StratumError::Storage(e)))?;
+            }
+            storage.store_dag(&checkpoint_repo.checkpoint_dag).map_err(|e| map_error(StratumError::Storage(e)))?;
+
+            Ok(InitResponse {
+                db_path: db_path.clone(),
+                manual_partition_id: String::new(),
+                staged_partition_id: String::new(),
+                branch: "main".into(),
+            })
+        } else {
+            let file_node = FileNode::new(PathBuf::from(".stratum/init"), b"");
+            storage.store_file_node(&file_node, b"").map_err(|e| map_error(StratumError::Storage(e)))?;
+            let empty_diff = Delta::new(
+                file_node.clone(),
+                crate::core::delta::LineDiff::new(vec![]),
+                SourceType::Manual,
+            );
+            storage.store_delta(&empty_diff).map_err(|e| map_error(StratumError::Storage(e)))?;
+            let initial_snapshot = Snapshot::new_initial(file_node, empty_diff.id);
+            storage.store_snapshot(&initial_snapshot, b"").map_err(|e| map_error(StratumError::Storage(e)))?;
+
+            let manual_partition =
+                crate::state_machine::manual::ensure_manual_partition(storage.as_ref(), initial_snapshot.id)
+                    .map_err(map_error)?;
+            let staged_partition =
+                crate::state_machine::staged::ensure_staged_partition(storage.as_ref(), initial_snapshot.id)
+                    .map_err(map_error)?;
+
+            let branch = Branch::new("main", ContentId::from_content(b"stratum-root"));
+            storage.store_branch(&branch).map_err(|e| map_error(StratumError::Storage(e)))?;
+
+            let dag = crate::checkpoint::dag::CheckpointDag::new();
+            storage.store_dag(&dag).map_err(|e| map_error(StratumError::Storage(e)))?;
+
+            Ok(InitResponse {
+                db_path: db_path.clone(),
+                manual_partition_id: manual_partition.id.to_string(),
+                staged_partition_id: staged_partition.id.to_string(),
+                branch: "main".into(),
+            })
+        }
+    }
+
+    fn status(&self) -> ApiResult<StatusResponse> {
+        let partitions = self.storage.list_partitions()
+            .map_err(|e| map_error(StratumError::Storage(e)))?;
+        let infos = partitions.iter().map(|p| {
+            let layer = match &p.partition_type {
+                PartitionType::Manual => "manual_edit",
+                PartitionType::Agent(_) => "agent_edit",
+                PartitionType::Approval(_) => "approval",
+                PartitionType::Integrated(_) => "approval",
+                PartitionType::Unified => "approval",
+                PartitionType::Staged => "staged",
+            };
+            PartitionInfo {
+                layer: layer.into(),
+                name: p.name.clone(),
+                current_snapshot: p.current_snapshot.to_hex(),
+                history_len: p.history.len(),
+            }
+        }).collect();
+        Ok(StatusResponse { partitions: infos })
+    }
+
+    fn edit(&self, req: EditRequest) -> ApiResult<EditResponse> {
+        let content = req.content.as_deref().unwrap_or("");
+        let snapshot_id = crate::state_machine::manual::apply_manual_edit(
+            self.storage.as_ref(),
+            &req.file,
+            content,
+        ).map_err(map_error)?;
+
+        let staged_snapshot_id = crate::state_machine::manual::merge_manual_to_staged(
+            self.storage.as_ref(),
+        ).map_err(map_error).ok();
+
+        Ok(EditResponse {
+            snapshot_id: snapshot_id_to_hex(&snapshot_id),
+            staged_snapshot_id: staged_snapshot_id.map(|id| snapshot_id_to_hex(&id)),
+        })
+    }
+
+    fn agent_edit(&self, req: AgentEditRequest) -> ApiResult<EditResponse> {
+        let agent_instance = AgentInstanceId(req.agent_id.clone());
+        let content = req.content.as_deref().unwrap_or("");
+
+        let staged_pid = crate::state_machine::staged::staged_partition_id();
+        let initial_snapshot = match self.storage.get_partition(&staged_pid) {
+            Ok(p) => p.current_snapshot,
+            Err(_) => {
+                let file_node = FileNode::new(PathBuf::from(&req.file), content.as_bytes());
+                self.storage.store_file_node(&file_node, content.as_bytes())
+                    .map_err(|e| map_error(StratumError::Storage(e)))?;
+                let delta = Delta::new(
+                    file_node,
+                    crate::core::delta::LineDiff::new(vec![]),
+                    SourceType::Agent(agent_instance.clone()),
+                );
+                self.storage.store_delta(&delta)
+                    .map_err(|e| map_error(StratumError::Storage(e)))?;
+                let snapshot = Snapshot::new_initial(
+                    FileNode::new(PathBuf::from(&req.file), content.as_bytes()),
+                    delta.id,
+                );
+                self.storage.store_snapshot(&snapshot, content.as_bytes())
+                    .map_err(|e| map_error(StratumError::Storage(e)))?;
+                snapshot.id
+            }
+        };
+
+        let _ = crate::state_machine::agent::ensure_agent_partition(
+            self.storage.as_ref(),
+            &agent_instance,
+            initial_snapshot,
+        ).map_err(map_error)?;
+
+        let snapshot_id = crate::state_machine::agent::apply_agent_edit(
+            self.storage.as_ref(),
+            &agent_instance,
+            &req.file,
+            content,
+        ).map_err(map_error)?;
+
+        Ok(EditResponse {
+            snapshot_id: snapshot_id_to_hex(&snapshot_id),
+            staged_snapshot_id: None,
+        })
+    }
+
+    fn agent_submit(&self, req: AgentSubmitRequest) -> ApiResult<SubmitResponse> {
+        let agent_instance = AgentInstanceId(req.agent_id.clone());
+
+        let staged_pid = crate::state_machine::staged::staged_partition_id();
+        let base_snapshot = self.storage.get_partition(&staged_pid)
+            .map_err(|_| ApiError::invalid_params("no staged partition found. Make edits first."))?
+            .current_snapshot;
+
+        let _ = crate::state_machine::approval::ensure_approval_agent_partition(
+            self.storage.as_ref(),
+            &agent_instance,
+            base_snapshot,
+        ).map_err(map_error)?;
+
+        let snapshot_id = crate::state_machine::agent::move_agent_to_approval(
+            self.storage.as_ref(),
+            &agent_instance,
+        ).map_err(map_error)?;
+
+        Ok(SubmitResponse {
+            snapshot_id: snapshot_id_to_hex(&snapshot_id),
+        })
+    }
+
+    fn approve(&self, req: ApproveRequest) -> ApiResult<ApproveResponse> {
+        let agent_instance = AgentInstanceId(req.agent_id.clone());
+
+        let integrated_id = crate::state_machine::approval::move_approval_to_integrated(
+            self.storage.as_ref(),
+            &agent_instance,
+            &req.agent_id,
+        ).map_err(map_error)?;
+
+        let integration_names: Vec<String> = self.storage.list_partitions()
+            .map_err(|e| map_error(StratumError::Storage(e)))?
+            .into_iter()
+            .filter_map(|p| match &p.partition_type {
+                PartitionType::Integrated(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+
+        if !integration_names.is_empty() {
+            crate::state_machine::approval::move_integrated_to_unified(
+                self.storage.as_ref(),
+                &integration_names,
+            ).map_err(map_error)?;
+        }
+
+        let staged_id = crate::state_machine::staged::merge_unified_to_staged(
+            self.storage.as_ref(),
+        ).map_err(map_error)?;
+
+        Ok(ApproveResponse {
+            integrated_snapshot_id: snapshot_id_to_hex(&integrated_id),
+            staged_snapshot_id: snapshot_id_to_hex(&staged_id),
+        })
+    }
+
+    fn commit(&self, req: CommitRequest) -> ApiResult<CommitResponse> {
+        let author = req.author.as_deref().unwrap_or("user");
+        let cp_id = crate::state_machine::staged::commit_staged_to_checkpoint(
+            self.storage.as_ref(),
+            &req.message,
+            author,
+        ).map_err(map_error)?;
+
+        Ok(CommitResponse {
+            checkpoint_id: cp_id.to_hex(),
+            message: req.message.clone(),
+        })
+    }
+
+    fn log(&self, req: LogRequest) -> ApiResult<LogResponse> {
+        let count = req.count.unwrap_or(20);
+        let mut checkpoints = self.storage.list_checkpoints()
+            .map_err(|e| map_error(StratumError::Storage(e)))?;
+        checkpoints.truncate(count);
+        let total = checkpoints.len();
+        Ok(LogResponse {
+            checkpoints: checkpoints.iter().map(checkpoint_to_info).collect(),
+            total,
+        })
+    }
+
+    fn branch_create(&self, req: BranchCreateRequest) -> ApiResult<BranchCreateResponse> {
+        let branches = self.storage.list_branches()
+            .map_err(|e| map_error(StratumError::Storage(e)))?;
+        if branches.iter().any(|b| b.name == req.name) {
+            return Err(ApiError::invalid_params(format!("branch '{}' already exists", req.name)));
+        }
+        let head = match self.storage.list_checkpoints() {
+            Ok(cps) if !cps.is_empty() => cps[0].id,
+            _ => return Err(ApiError::invalid_params("no checkpoints yet. Make a commit first.")),
+        };
+        let branch = Branch::new(&req.name, head);
+        self.storage.store_branch(&branch)
+            .map_err(|e| map_error(StratumError::Storage(e)))?;
+        Ok(BranchCreateResponse {
+            name: req.name,
+            head: head.to_hex(),
+        })
+    }
+
+    fn branch_switch(&self, req: BranchSwitchRequest) -> ApiResult<BranchSwitchResponse> {
+        let _ = self.storage.get_branch(&req.name)
+            .map_err(|_| ApiError::not_found(format!("branch '{}'", req.name)))?;
+        let cp_id = self.state_machine.switch_branch(&req.name)
+            .map_err(map_error)?;
+        Ok(BranchSwitchResponse {
+            name: req.name,
+            checkpoint_id: cp_id.to_hex(),
+        })
+    }
+
+    fn branch_list(&self) -> ApiResult<BranchListResponse> {
+        let branches = self.storage.list_branches()
+            .map_err(|e| map_error(StratumError::Storage(e)))?;
+        let infos = branches.iter().map(|b| BranchInfo {
+            name: b.name.clone(),
+            head: b.head.to_hex(),
+            updated_at: b.updated_at.to_string(),
+            is_current: false,
+        }).collect();
+        Ok(BranchListResponse {
+            branches: infos,
+            current: None,
+        })
+    }
+
+    fn merge(&self, req: MergeRequest) -> ApiResult<MergeResponse> {
+        let mut repo = load_checkpoint_repo(self.storage.as_ref()).map_err(map_error)?;
+        let current_name = repo.current_branch_name().to_string();
+
+        let staged_pid = crate::state_machine::staged::staged_partition_id();
+        let snapshot_ids = match self.storage.get_partition(&staged_pid) {
+            Ok(p) => vec![p.current_snapshot],
+            Err(_) => return Err(ApiError::invalid_params("staged partition not found")),
+        };
+
+        let msg = req.message.clone().unwrap_or_else(|| "merge".into());
+        let cp_id = repo.merge_branches(&req.branch, snapshot_ids, &msg, "user")
+            .map_err(map_error)?;
+
+        for cp in repo.checkpoints.values() {
+            let _ = self.storage.store_checkpoint(cp);
+        }
+        for branch in &repo.branches {
+            let _ = self.storage.store_branch(branch);
+        }
+        let _ = self.storage.store_dag(&repo.checkpoint_dag);
+
+        Ok(MergeResponse {
+            checkpoint_id: cp_id.to_hex(),
+            source_branch: req.branch,
+            target_branch: current_name,
+        })
+    }
+
+    fn backup(&self, req: BackupRequest) -> ApiResult<BackupResponse> {
+        let snapshot_id = ContentId::from_hex(&req.snapshot_id)
+            .ok_or_else(|| ApiError::invalid_params(format!("invalid snapshot ID '{}'", req.snapshot_id)))?;
+
+        let backup_path = Path::new(&self.db_path).parent().unwrap_or(Path::new("."));
+        let backup_db_path = backup_path.join("stratum-backup.db");
+        let backup_repo = BackupRepo::new(&backup_db_path)
+            .map_err(|e| map_error(StratumError::Storage(e)))?;
+
+        let backup_id = backup_repo.backup_snapshot(
+            self.storage.as_ref(),
+            snapshot_id,
+            req.label.clone(),
+        ).map_err(|e| map_error(e))?;
+
+        Ok(BackupResponse {
+            backup_id: backup_id.to_hex(),
+            source_snapshot_id: req.snapshot_id,
+            label: req.label,
+        })
+    }
+
+    fn restore(&self, req: RestoreRequest) -> ApiResult<RestoreResponse> {
+        let backup_id = ContentId::from_hex(&req.backup_id)
+            .ok_or_else(|| ApiError::invalid_params(format!("invalid backup ID '{}'", req.backup_id)))?;
+
+        let backup_path = Path::new(&self.db_path).parent().unwrap_or(Path::new("."));
+        let backup_db_path = backup_path.join("stratum-backup.db");
+        let backup_repo = BackupRepo::new(&backup_db_path)
+            .map_err(|e| map_error(StratumError::Storage(e)))?;
+
+        let backup = backup_repo.get_backup(&backup_id)
+            .map_err(|e| map_error(e))?;
+
+        let delta_count = backup.deltas.len();
+        for delta in &backup.deltas {
+            self.storage.store_delta(delta)
+                .map_err(|e| map_error(StratumError::Storage(e)))?;
+        }
+
+        Ok(RestoreResponse {
+            backup_id: req.backup_id,
+            file: backup.file.path_str().to_string(),
+            deltas_restored: delta_count,
+        })
+    }
+
+    fn gc(&self, _req: GcRequest) -> ApiResult<GcResponse> {
+        let mut repo = load_checkpoint_repo(self.storage.as_ref()).map_err(map_error)?;
+        let stats = collect_garbage(&mut repo).map_err(map_error)?;
+        let _ = self.storage.store_dag(&repo.checkpoint_dag);
+        Ok(GcResponse {
+            removed_checkpoints: stats.removed_checkpoints as usize,
+            removed_snapshots: stats.removed_snapshots as usize,
+            freed_bytes: stats.freed_bytes,
+            delta_chain_depth_triggered: stats.delta_chain_depth_triggered,
+        })
+    }
+
+    fn push(&self, req: PushRequest) -> ApiResult<PushResponse> {
+        let remote = req.remote.unwrap_or_else(|| "origin".into());
+        let message = req.message.unwrap_or_else(|| "sync from stratum".into());
+
+        let repo = load_checkpoint_repo(self.storage.as_ref()).map_err(map_error)?;
+        let git_hash = GitBridge::push_to_remote(
+            self.storage.as_ref(),
+            Path::new(&req.git_repo),
+            &repo,
+            repo.current_branch_name(),
+            &remote,
+            &message,
+        ).map_err(map_error)?;
+
+        Ok(PushResponse {
+            remote,
+            git_commit_hash: git_hash,
+        })
+    }
+
+    fn pull(&self, req: PullRequest) -> ApiResult<PullResponse> {
+        let remote = req.remote.unwrap_or_else(|| "origin".into());
+        let git_ref = req.git_ref.unwrap_or_else(|| "HEAD".into());
+
+        GitBridge::fetch_from_remote(Path::new(&req.git_repo), &remote)
+            .map_err(map_error)?;
+
+        let mut repo = load_checkpoint_repo(self.storage.as_ref())
+            .unwrap_or_else(|_| CheckpointRepo::new_single(ContentId::from_content(b"stratum-pull")));
+
+        GitBridge::init_from_git(
+            Path::new(&req.git_repo),
+            self.storage.as_ref(),
+            &mut repo,
+            &git_ref,
+        ).map_err(map_error)?;
+
+        for cp in repo.checkpoints.values() {
+            let _ = self.storage.store_checkpoint(cp);
+        }
+        for branch in &repo.branches {
+            let _ = self.storage.store_branch(branch);
+        }
+        let _ = self.storage.store_dag(&repo.checkpoint_dag);
+
+        Ok(PullResponse {
+            remote,
+            git_ref,
+        })
+    }
+}

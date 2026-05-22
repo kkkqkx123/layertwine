@@ -1,12 +1,8 @@
-use crate::checkpoint::branch::Branch;
-use crate::checkpoint::checkpoint::Checkpoint;
+use crate::api::types::*;
 use crate::core::delta::{Delta, LineDiff};
 use crate::core::partition::Partition;
 use crate::core::snapshot::Snapshot;
-use crate::core::types::{DiffOp, PartitionType};
-use crate::state_machine::StateMachine;
-use crate::storage::repository::PartitionStore;
-use std::io::{self, Write};
+use crate::core::types::DiffOp;
 
 /// Output format mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,124 +11,50 @@ pub enum OutputFormat {
     Json,
 }
 
-/// Print status of all partition layers
-pub fn print_status(state_machine: &StateMachine, format: OutputFormat) {
-    let storage = state_machine.storage();
-    let mut output = StatusOutput::new();
-
-    match storage.list_partitions() {
-        Ok(partitions) => {
-            for partition in &partitions {
-                let layer_name = layer_name_for_partition(&partition.partition_type);
-                output.add_entry(
-                    layer_name,
-                    partition.name.clone(),
-                    partition.current_snapshot.to_hex(),
-                    partition.history.len(),
-                );
+/// Print status from ApiService response
+pub fn print_status_from_response(resp: &Result<StatusResponse, crate::api::types::ApiError>, format: OutputFormat) {
+    match resp {
+        Ok(r) => match format {
+            OutputFormat::Plain => {
+                if r.partitions.is_empty() {
+                    println!("No partitions found. Run 'stratum init' to initialize.");
+                    return;
+                }
+                println!("{:-<72}", "");
+                println!("{:<16} {:<24} {:<20} {}", "Layer", "Partition", "Current Snapshot", "History");
+                println!("{:-<72}", "");
+                for entry in &r.partitions {
+                    let short_hash = if entry.current_snapshot.len() > 12 {
+                        &entry.current_snapshot[..12]
+                    } else {
+                        &entry.current_snapshot
+                    };
+                    println!(
+                        "{:<16} {:<24} {:<20} {} snapshots",
+                        entry.layer, entry.name, short_hash, entry.history_len
+                    );
+                }
+                println!("{:-<72}", "");
             }
-        }
+            OutputFormat::Json => {
+                println!("{}", serde_json::to_string_pretty(r).unwrap());
+            }
+        },
         Err(e) => {
-            output.error = Some(e.to_string());
+            eprintln!("error reading status: {}", e);
         }
-    }
-
-    match format {
-        OutputFormat::Plain => output.print_plain(),
-        OutputFormat::Json => output.print_json(),
     }
 }
 
-struct StatusOutput {
-    entries: Vec<StatusEntry>,
-    error: Option<String>,
-}
-
-struct StatusEntry {
-    layer: String,
-    partition: String,
-    current_snapshot: String,
-    history_len: usize,
-}
-
-impl StatusOutput {
-    fn new() -> Self {
-        StatusOutput {
-            entries: Vec::new(),
-            error: None,
-        }
-    }
-
-    fn add_entry(&mut self, layer: String, partition: String, snapshot: String, history: usize) {
-        self.entries.push(StatusEntry {
-            layer,
-            partition,
-            current_snapshot: snapshot,
-            history_len: history,
-        });
-    }
-
-    fn print_plain(&self) {
-        if let Some(ref err) = self.error {
-            eprintln!("error reading status: {}", err);
-            return;
-        }
-        if self.entries.is_empty() {
-            println!("No partitions found. Run 'stratum init' to initialize.");
-            return;
-        }
-        println!("{:-<72}", "");
-        println!(
-            "{:<16} {:<24} {:<20} {}",
-            "Layer", "Partition", "Current Snapshot", "History"
-        );
-        println!("{:-<72}", "");
-        for entry in &self.entries {
-            let short_hash = if entry.current_snapshot.len() > 12 {
-                &entry.current_snapshot[..12]
-            } else {
-                &entry.current_snapshot
-            };
-            println!(
-                "{:<16} {:<24} {:<20} {} snapshots",
-                entry.layer, entry.partition, short_hash, entry.history_len
-            );
-        }
-        println!("{:-<72}", "");
-    }
-
-    fn print_json(&self) {
-        let json = serde_json::json!({
-            "status": if self.error.is_some() { "error" } else { "ok" },
-            "partitions": self.entries.iter().map(|e| {
-                serde_json::json!({
-                    "layer": e.layer,
-                    "partition": e.partition,
-                    "current_snapshot": e.current_snapshot,
-                    "history_len": e.history_len,
-                })
-            }).collect::<Vec<_>>(),
-        });
-        println!("{}", serde_json::to_string_pretty(&json).unwrap());
-    }
-}
-
-fn layer_name_for_partition(pt: &PartitionType) -> String {
-    match pt {
-        PartitionType::Manual => "manual_edit".to_string(),
-        PartitionType::Agent(_) => "agent_edit".to_string(),
-        PartitionType::Approval(_) => "approval".to_string(),
-        PartitionType::Integrated(_) => "approval".to_string(),
-        PartitionType::Unified => "approval".to_string(),
-        PartitionType::Staged => "staged".to_string(),
-    }
-}
-
-/// Print checkpoint history as a table
-pub fn print_log(checkpoints: &[Checkpoint], format: OutputFormat) {
+/// Print checkpoint history from ApiService response
+pub fn print_log_from_response(
+    resp: &LogResponse,
+    format: OutputFormat,
+    _checkpoints: Vec<crate::checkpoint::checkpoint::Checkpoint>,
+) {
     match format {
         OutputFormat::Plain => {
-            if checkpoints.is_empty() {
+            if resp.checkpoints.is_empty() {
                 println!("No checkpoints found.");
                 return;
             }
@@ -142,95 +64,55 @@ pub fn print_log(checkpoints: &[Checkpoint], format: OutputFormat) {
                 "Checkpoint ID", "Author", "Parents", "Snapshots", "Message"
             );
             println!("{:-<100}", "");
-            for cp in checkpoints.iter().rev() {
-                let short_id = &cp.id.to_hex()[..12];
-                let short_msg = if cp.metadata.message.len() > 27 {
-                    format!("{}...", &cp.metadata.message[..27])
+            for cp in resp.checkpoints.iter().rev() {
+                let short_id = &cp.id[..12];
+                let short_msg = if cp.message.len() > 27 {
+                    format!("{}...", &cp.message[..27])
                 } else {
-                    cp.metadata.message.clone()
+                    cp.message.clone()
                 };
-                let git_tag = if cp.metadata.git_anchor.is_some() {
-                    " [git]"
-                } else {
-                    ""
-                };
+                let git_tag = if cp.git_anchor.is_some() { " [git]" } else { "" };
                 println!(
                     "{:<20} {:<16} {:<12} {:<12} {:<30}",
                     format!("{}{}", short_id, git_tag),
-                    cp.metadata.author,
+                    cp.author,
                     cp.parents.len(),
-                    cp.baseline_snapshots.len(),
+                    cp.snapshots.len(),
                     short_msg,
                 );
             }
             println!("{:-<100}", "");
-            println!(
-                "Total: {} checkpoint(s)",
-                checkpoints.len()
-            );
+            println!("Total: {} checkpoint(s)", resp.checkpoints.len());
         }
         OutputFormat::Json => {
-            let json: Vec<serde_json::Value> = checkpoints
-                .iter()
-                .map(|cp| {
-                    serde_json::json!({
-                        "id": cp.id.to_hex(),
-                        "author": cp.metadata.author,
-                        "message": cp.metadata.message,
-                        "parents": cp.parents.iter().map(|p| p.to_hex()).collect::<Vec<_>>(),
-                        "snapshots": cp.baseline_snapshots.iter().map(|s| s.to_hex()).collect::<Vec<_>>(),
-                        "created_at": cp.created_at,
-                        "git_anchor": cp.metadata.git_anchor,
-                    })
-                })
-                .collect();
-            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            println!("{}", serde_json::to_string_pretty(resp).unwrap());
         }
     }
 }
 
-/// Print branch list
-pub fn print_branches(
-    branches: &[Branch],
-    current_name: Option<&str>,
-    format: OutputFormat,
-) {
+/// Print branch list from ApiService response
+pub fn print_branches_from_response(resp: &BranchListResponse, format: OutputFormat) {
     match format {
         OutputFormat::Plain => {
-            if branches.is_empty() {
+            if resp.branches.is_empty() {
                 println!("No branches found.");
                 return;
             }
             println!("{:-<60}", "");
             println!("{:<24} {:<20} {}", "Branch", "Head", "Updated");
             println!("{:-<60}", "");
-            for branch in branches {
-                let marker = if Some(branch.name.as_str()) == current_name {
-                    "* "
-                } else {
-                    "  "
-                };
-                let short_head = &branch.head.to_hex()[..12];
+            for b in &resp.branches {
+                let marker = if b.is_current { "* " } else { "  " };
+                let short_head = &b.head[..12];
                 println!(
                     "{}{:<22} {:<20} {}",
-                    marker, branch.name, short_head, branch.updated_at
+                    marker, b.name, short_head, b.updated_at
                 );
             }
             println!("{:-<60}", "");
         }
         OutputFormat::Json => {
-            let json: Vec<serde_json::Value> = branches
-                .iter()
-                .map(|b| {
-                    serde_json::json!({
-                        "name": b.name,
-                        "head": b.head.to_hex(),
-                        "created_at": b.created_at,
-                        "updated_at": b.updated_at,
-                    })
-                })
-                .collect();
-            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            println!("{}", serde_json::to_string_pretty(resp).unwrap());
         }
     }
 }
@@ -298,11 +180,7 @@ fn print_line_diff(diff: &LineDiff) {
                         println!("+{}", line);
                     }
                 }
-                DiffOp::Replace {
-                    old_count,
-                    lines,
-                    ..
-                } => {
+                DiffOp::Replace { old_count, lines, .. } => {
                     for _ in 0..*old_count {
                         println!("-{}", " ");
                     }
@@ -350,17 +228,6 @@ pub fn print_snapshot(snapshot: &Snapshot, format: OutputFormat) {
             println!("{}", serde_json::to_string_pretty(&json).unwrap());
         }
     }
-}
-
-/// Print a progress message to stderr
-pub fn print_progress(message: &str) {
-    eprint!("  {} ... ", message);
-    io::stderr().flush().ok();
-}
-
-/// Print a done message to stderr (completing a progress indicator)
-pub fn print_done() {
-    eprintln!("done");
 }
 
 /// Print a partition's details
@@ -426,23 +293,23 @@ pub fn print_backup_snapshot(
     }
 }
 
+/// Print a progress message to stderr
+pub fn print_progress(message: &str) {
+    eprint!("  {} ... ", message);
+    std::io::Write::flush(&mut std::io::stderr()).ok();
+}
+
+/// Print a done message to stderr (completing a progress indicator)
+pub fn print_done() {
+    eprintln!("done");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_layer_name_for_partition() {
-        assert_eq!(
-            layer_name_for_partition(&PartitionType::Manual),
-            "manual_edit"
-        );
-        assert_eq!(
-            layer_name_for_partition(&PartitionType::Staged),
-            "staged"
-        );
-        assert_eq!(
-            layer_name_for_partition(&PartitionType::Agent("agent-1".into())),
-            "agent_edit"
-        );
+    fn test_output_format_enum() {
+        assert_ne!(OutputFormat::Plain as u8, OutputFormat::Json as u8);
     }
 }
