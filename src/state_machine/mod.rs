@@ -166,4 +166,102 @@ impl StateMachine {
 
         result
     }
+
+    }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::delta::Delta;
+    use crate::core::file_node::FileNode;
+    use crate::core::snapshot::Snapshot;
+    use crate::core::types::SourceType;
+    use crate::storage::repository::{FileNodeStore, SnapshotStore, DeltaStore, PartitionStore};
+    use std::sync::Arc;
+
+    fn setup_storage() -> Arc<SqliteStorage> {
+        Arc::new(SqliteStorage::new_in_memory().unwrap())
+    }
+
+    fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {
+        let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
+        storage.store_file_node(&file_node, content.as_bytes()).unwrap();
+        let empty_diff = crate::core::delta::LineDiff::new(vec![]);
+        let delta = Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
+        storage.store_delta(&delta).unwrap();
+        let snapshot = Snapshot::new_initial(file_node, delta.id);
+        storage.store_snapshot(&snapshot, b"").unwrap();
+        snapshot.id
+    }
+
+    #[test]
+    fn test_state_machine_new() {
+        let storage = setup_storage();
+        let sm = StateMachine::new(storage.clone());
+        let _ = sm.get_partition(&LayerType::ManualEdit, &uuid::Uuid::new_v4());
+        // Should not panic - method returns error for non-existent partition
+    }
+
+    #[test]
+    fn test_state_machine_create_layer() {
+        let storage = setup_storage();
+        let sm = StateMachine::new(storage);
+
+        let manual_layer = sm.create_layer(&LayerType::ManualEdit);
+        assert_eq!(manual_layer.layer_type, LayerType::ManualEdit);
+        assert!(manual_layer.partitions.is_empty());
+
+        let agent_layer = sm.create_layer(&LayerType::AgentEdit);
+        assert_eq!(agent_layer.layer_type, LayerType::AgentEdit);
+
+        let approval_layer = sm.create_layer(&LayerType::Approval);
+        assert_eq!(approval_layer.layer_type, LayerType::Approval);
+
+        let staged_layer = sm.create_layer(&LayerType::Staged);
+        assert_eq!(staged_layer.layer_type, LayerType::Staged);
+    }
+
+    #[test]
+    fn test_state_machine_update_partition_pointer() {
+        let storage = setup_storage();
+        let sm = StateMachine::new(storage.clone());
+
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let pid = uuid::Uuid::new_v4();
+        let partition = Partition {
+            id: pid,
+            name: "test".to_string(),
+            current_snapshot: initial_id,
+            history: vec![initial_id],
+            partition_type: PartitionType::Manual,
+        };
+        storage.create_partition(&partition).unwrap();
+
+        // Create a new snapshot
+        let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), b"base\nmodified\n");
+        storage.store_file_node(&file_node, b"base\nmodified\n").unwrap();
+        let diff = crate::engine::diff::diff_to_line_diff("base\n", "base\nmodified\n");
+        let delta = Delta::new(file_node, diff, SourceType::Manual);
+        storage.store_delta(&delta).unwrap();
+        let snap = storage.get_snapshot(&initial_id).unwrap();
+        let new_snap = Snapshot::from_parent(&snap, delta.id, "manual".to_string());
+        storage.store_snapshot(&new_snap, b"").unwrap();
+
+        // Update pointer
+        let result = sm.update_partition_pointer(&pid, &new_snap.id);
+        assert!(result.is_ok());
+
+        let updated = storage.get_partition(&pid).unwrap();
+        assert_eq!(updated.current_snapshot, new_snap.id);
+    }
+
+    #[test]
+    fn test_state_machine_storage_accessor() {
+        let storage = setup_storage();
+        let sm = StateMachine::new(storage.clone());
+        let retrieved = sm.storage();
+        // Verify we can access the storage through the state machine
+        let partitions = retrieved.list_partitions();
+        assert!(partitions.is_ok());
+    }
 }

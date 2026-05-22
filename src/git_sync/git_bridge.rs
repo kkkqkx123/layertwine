@@ -539,4 +539,162 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn test_init_from_git_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let git_path = dir.path().join("git_repo");
+        std::fs::create_dir_all(&git_path).unwrap();
+        let git_repo = init_git_repo(&git_path);
+
+        let commit = git_repo.head().unwrap().peel_to_commit().unwrap();
+        let expected_hash = commit.id().to_string();
+        let expected_author = commit.author().name().unwrap_or("").to_string();
+        let expected_msg = commit.message().unwrap_or("").trim().to_string();
+
+        let storage = SqliteStorage::new_in_memory().unwrap();
+        let dummy_file_node = FileNode::new(PathBuf::from("dummy"), b"init");
+        let dummy_diff = LineDiff::new(vec![]);
+        let dummy_delta = Delta::new(dummy_file_node.clone(), dummy_diff, SourceType::Manual);
+        storage.store_delta(&dummy_delta).unwrap();
+        let dummy_snap = Snapshot::new_initial(dummy_file_node, dummy_delta.id);
+        storage.store_snapshot(&dummy_snap, b"init").unwrap();
+        let mut checkpoint_repo = CheckpointRepo::new_single(dummy_snap.id);
+
+        GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "HEAD").unwrap();
+
+        let head = checkpoint_repo.current_branch_head();
+        let cp = checkpoint_repo.get_checkpoint(&head).unwrap();
+        assert_eq!(
+            cp.metadata.git_anchor.as_deref(),
+            Some(expected_hash.as_str()),
+            "git_anchor should match the commit hash"
+        );
+        assert_eq!(
+            cp.metadata.author, expected_author,
+            "author should match git commit author"
+        );
+        assert_eq!(
+            cp.metadata.message, expected_msg,
+            "message should match git commit message"
+        );
+    }
+
+    #[test]
+    fn test_init_from_git_invalid_ref() {
+        let dir = tempfile::tempdir().unwrap();
+        let git_path = dir.path().join("git_repo");
+        std::fs::create_dir_all(&git_path).unwrap();
+        init_git_repo(&git_path);
+
+        let storage = SqliteStorage::new_in_memory().unwrap();
+        let dummy_file_node = FileNode::new(PathBuf::from("dummy"), b"init");
+        let dummy_diff = LineDiff::new(vec![]);
+        let dummy_delta = Delta::new(dummy_file_node.clone(), dummy_diff, SourceType::Manual);
+        storage.store_delta(&dummy_delta).unwrap();
+        let dummy_snap = Snapshot::new_initial(dummy_file_node, dummy_delta.id);
+        storage.store_snapshot(&dummy_snap, b"init").unwrap();
+        let mut checkpoint_repo = CheckpointRepo::new_single(dummy_snap.id);
+
+        let result = GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "nonexistent-ref");
+        assert!(result.is_err(), "should fail on invalid git ref");
+    }
+
+    #[test]
+    fn test_compare_status_in_sync() {
+        let dir = tempfile::tempdir().unwrap();
+        let git_path = dir.path().join("git_repo");
+        std::fs::create_dir_all(&git_path).unwrap();
+        let _git_repo = init_git_repo(&git_path);
+
+        let storage = SqliteStorage::new_in_memory().unwrap();
+        let dummy_file_node = FileNode::new(PathBuf::from("dummy"), b"init");
+        let dummy_diff = LineDiff::new(vec![]);
+        let dummy_delta = Delta::new(dummy_file_node.clone(), dummy_diff, SourceType::Manual);
+        storage.store_delta(&dummy_delta).unwrap();
+        let dummy_snap = Snapshot::new_initial(dummy_file_node, dummy_delta.id);
+        storage.store_snapshot(&dummy_snap, b"init").unwrap();
+        let mut checkpoint_repo = CheckpointRepo::new_single(dummy_snap.id);
+
+        GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "HEAD").unwrap();
+
+        let info = GitBridge::compare_status(&git_path, &checkpoint_repo, "main").unwrap();
+        assert_eq!(info.status, SyncStatus::InSync, "after init, status should be InSync");
+    }
+
+    #[test]
+    fn test_compare_status_no_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let git_path = dir.path().join("git_repo");
+        std::fs::create_dir_all(&git_path).unwrap();
+        init_git_repo(&git_path);
+
+        let storage = SqliteStorage::new_in_memory().unwrap();
+        let dummy_file_node = FileNode::new(PathBuf::from("dummy"), b"init");
+        let dummy_diff = LineDiff::new(vec![]);
+        let dummy_delta = Delta::new(dummy_file_node.clone(), dummy_diff, SourceType::Manual);
+        storage.store_delta(&dummy_delta).unwrap();
+        let dummy_snap = Snapshot::new_initial(dummy_file_node, dummy_delta.id);
+        storage.store_snapshot(&dummy_snap, b"init").unwrap();
+        let checkpoint_repo = CheckpointRepo::new_single(dummy_snap.id);
+
+        let info = GitBridge::compare_status(&git_path, &checkpoint_repo, "nonexistent").unwrap();
+        assert_eq!(
+            info.status,
+            SyncStatus::Ahead { unpushed_checkpoints: 1 },
+            "non-existent branch should report Ahead"
+        );
+        assert!(info.local_baseline_id.is_none());
+    }
+
+    #[test]
+    fn test_push_to_git_empty_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let git_path = dir.path().join("git_repo");
+        std::fs::create_dir_all(&git_path).unwrap();
+        init_git_repo(&git_path);
+
+        let storage = SqliteStorage::new_in_memory().unwrap();
+        let empty_content = b"empty test";
+        let file_node = FileNode::new(PathBuf::from("empty.txt"), empty_content);
+        storage.store_file_node(&file_node, empty_content).unwrap();
+        let diff = LineDiff::new(vec![]);
+        let delta = Delta::new(file_node.clone(), diff, SourceType::Manual);
+        storage.store_delta(&delta).unwrap();
+        let snapshot = Snapshot::new_initial(file_node, delta.id);
+        storage.store_snapshot(&snapshot, empty_content).unwrap();
+
+        let mut checkpoint_repo = CheckpointRepo::new_single(snapshot.id);
+        checkpoint_repo.commit_single(snapshot.id, "test", "user").unwrap();
+        let head = checkpoint_repo.current_branch_head();
+        let cp = checkpoint_repo.get_checkpoint_mut(&head).unwrap();
+        cp.baseline_snapshots.clear();
+        cp.id = cp.compute_id();
+
+        let result = GitBridge::push_to_git(&storage, &git_path, &checkpoint_repo, "main", "empty push");
+        assert!(result.is_err(), "push with empty checkpoint should fail");
+    }
+
+    #[test]
+    fn test_push_to_git_invalid_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let git_path = dir.path().join("git_repo");
+        std::fs::create_dir_all(&git_path).unwrap();
+        init_git_repo(&git_path);
+
+        let storage = SqliteStorage::new_in_memory().unwrap();
+        let content = b"branch test";
+        let file_node = FileNode::new(PathBuf::from("branch.txt"), content);
+        storage.store_file_node(&file_node, content).unwrap();
+        let diff = LineDiff::new(vec![]);
+        let delta = Delta::new(file_node.clone(), diff, SourceType::Manual);
+        storage.store_delta(&delta).unwrap();
+        let snapshot = Snapshot::new_initial(file_node, delta.id);
+        storage.store_snapshot(&snapshot, content).unwrap();
+
+        let checkpoint_repo = CheckpointRepo::new_single(snapshot.id);
+
+        let result = GitBridge::push_to_git(&storage, &git_path, &checkpoint_repo, "nonexistent-branch", "push");
+        assert!(result.is_err(), "push to non-existent branch should fail");
+    }
 }

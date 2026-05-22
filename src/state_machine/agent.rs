@@ -228,6 +228,10 @@ pub fn discard_agent_edit(
 mod tests {
     use super::*;
     use crate::core::types::SourceType;
+    use crate::core::delta::Delta;
+    use crate::core::file_node::FileNode;
+    use crate::core::snapshot::Snapshot;
+    use crate::storage::repository::{PartitionStore, SnapshotStore, FileNodeStore, DeltaStore};
     use crate::storage::sqlite_storage::SqliteStorage;
     use std::sync::Arc;
 
@@ -297,5 +301,113 @@ mod tests {
         let pb = storage.get_partition(&agent_partition_id(&agent_b)).unwrap();
         assert_eq!(pa.current_snapshot, a_id);
         assert_eq!(pb.current_snapshot, b_id);
+    }
+
+    #[test]
+    fn test_ensure_agent_partition_already_exists() {
+        let storage = setup_storage();
+        let agent_id = AgentInstanceId("agent-exists".into());
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+
+        let p1 = ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
+        let p2 = ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
+
+        assert_eq!(p1.id, p2.id, "should return same partition on second call");
+    }
+
+    #[test]
+    fn test_discard_agent_edit_no_parent() {
+        let storage = setup_storage();
+        let agent_id = AgentInstanceId("agent-noparent".into());
+        let initial_id = create_initial_snapshot(&storage, "only\n");
+        ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
+
+        // Initial snapshot has no parents → discard should fail
+        let result = discard_agent_edit(&storage, &agent_id);
+        assert!(result.is_err(), "discard with no parent should error");
+    }
+
+    #[test]
+    fn test_apply_agent_edit_no_changes() {
+        let storage = setup_storage();
+        let agent_id = AgentInstanceId("agent-nochange".into());
+        let initial_id = create_initial_snapshot(&storage, "same");
+        ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
+
+        // Apply same content → no new snapshot
+        let result_id = apply_agent_edit(&storage, &agent_id, "test.txt", "same").unwrap();
+        assert_eq!(result_id, initial_id, "no changes should return current snapshot id");
+    }
+
+    #[test]
+    fn test_move_agent_to_approval() {
+        let storage = setup_storage();
+        let agent_id = AgentInstanceId("agent-move".into());
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+
+        // Create agent partition
+        ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
+
+        // Create approval agent partition
+        let approval_pid = crate::state_machine::approval::approval_agent_partition_id(&agent_id);
+        let approval_part = Partition {
+            id: approval_pid,
+            name: format!("approval/{}", agent_id),
+            current_snapshot: initial_id,
+            history: vec![initial_id],
+            partition_type: PartitionType::Approval(agent_id.clone()),
+        };
+        storage.create_partition(&approval_part).unwrap();
+
+        // Apply agent edit
+        apply_agent_edit(&storage, &agent_id, "test.txt", "base\nmodified\n").unwrap();
+
+        // Move agent to approval
+        let result = move_agent_to_approval(&storage, &agent_id);
+        assert!(result.is_ok(), "move_agent_to_approval should succeed");
+
+        let approval_partition = storage.get_partition(&approval_pid).unwrap();
+        assert_ne!(approval_partition.current_snapshot, initial_id, "approval should have advanced");
+    }
+
+    #[test]
+    fn test_agent_sequential_edits() {
+        let storage = setup_storage();
+        let agent_id = AgentInstanceId("agent-seq".into());
+        let initial_id = create_initial_snapshot(&storage, "a\nb\n");
+        ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
+
+        let first = apply_agent_edit(&storage, &agent_id, "test.txt", "a\nmodified\n").unwrap();
+        assert_ne!(first, initial_id);
+
+        let second = apply_agent_edit(&storage, &agent_id, "test.txt", "a\nmodified\nc\n").unwrap();
+        assert_ne!(second, first);
+
+        let partition = storage.get_partition(&agent_partition_id(&agent_id)).unwrap();
+        assert_eq!(partition.current_snapshot, second);
+    }
+
+    #[test]
+    fn test_agent_edit_multiple_files() {
+        let storage = setup_storage();
+        let agent_id = AgentInstanceId("agent-mf".into());
+        let initial_id = create_initial_snapshot(&storage, "content1\n");
+        ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
+
+        // Create a second initial file node for a different file
+        let file_node2 = FileNode::new(std::path::PathBuf::from("other.txt"), b"content2\n");
+        storage.store_file_node(&file_node2, b"content2\n").unwrap();
+        let empty_diff2 = crate::core::delta::LineDiff::new(vec![]);
+        let delta2 = Delta::new(file_node2.clone(), empty_diff2, SourceType::Agent(agent_id.clone()));
+        storage.store_delta(&delta2).unwrap();
+        let init2 = Snapshot::new_initial(file_node2, delta2.id);
+        storage.store_snapshot(&init2, b"").unwrap();
+
+        // We need a different approach: just test editing two files sequentially
+        let id1 = apply_agent_edit(&storage, &agent_id, "test.txt", "content1\nmodified\n").unwrap();
+        assert_ne!(id1, initial_id);
+
+        let id2 = apply_agent_edit(&storage, &agent_id, "other.txt", "content2\nmodified\n").unwrap();
+        assert_ne!(id2, id1);
     }
 }

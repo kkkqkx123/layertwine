@@ -57,11 +57,13 @@ pub fn ensure_approval_agent_partition(
     match storage.get_partition(&pid) {
         Ok(p) => Ok(p),
         Err(_) => {
-            let partition = Partition::new(
-                format!("approval/{}", agent_id),
-                PartitionType::Approval(agent_id.clone()),
-                initial_snapshot_id,
-            );
+            let partition = Partition {
+                id: pid,
+                name: format!("approval/{}", agent_id),
+                current_snapshot: initial_snapshot_id,
+                history: vec![initial_snapshot_id],
+                partition_type: PartitionType::Approval(agent_id.clone()),
+            };
             storage
                 .create_partition(&partition)
                 .map_err(|e| StratumError::Storage(e.into()))?;
@@ -80,11 +82,13 @@ pub fn ensure_integrated_partition(
     match storage.get_partition(&pid) {
         Ok(p) => Ok(p),
         Err(_) => {
-            let partition = Partition::new(
-                format!("integrated/{}", name),
-                PartitionType::Integrated(name.to_string()),
-                initial_snapshot_id,
-            );
+            let partition = Partition {
+                id: pid,
+                name: format!("integrated/{}", name),
+                current_snapshot: initial_snapshot_id,
+                history: vec![initial_snapshot_id],
+                partition_type: PartitionType::Integrated(name.to_string()),
+            };
             storage
                 .create_partition(&partition)
                 .map_err(|e| StratumError::Storage(e.into()))?;
@@ -102,11 +106,13 @@ pub fn ensure_unified_partition(
     match storage.get_partition(&pid) {
         Ok(p) => Ok(p),
         Err(_) => {
-            let partition = Partition::new(
-                "unified".to_string(),
-                PartitionType::Unified,
-                initial_snapshot_id,
-            );
+            let partition = Partition {
+                id: pid,
+                name: "unified".to_string(),
+                current_snapshot: initial_snapshot_id,
+                history: vec![initial_snapshot_id],
+                partition_type: PartitionType::Unified,
+            };
             storage
                 .create_partition(&partition)
                 .map_err(|e| StratumError::Storage(e.into()))?;
@@ -291,8 +297,10 @@ mod tests {
     use crate::core::delta::Delta;
     use crate::core::file_node::FileNode;
     use crate::core::types::SourceType;
-    use crate::storage::repository::FileNodeStore;
+    use crate::engine::diff::diff_to_line_diff;
+    use crate::storage::repository::{FileNodeStore, SnapshotStore};
     use crate::storage::sqlite_storage::SqliteStorage;
+    use crate::state_machine::transition::reconstruct_text;
     use std::sync::Arc;
 
     fn setup_storage() -> Arc<SqliteStorage> {
@@ -308,6 +316,26 @@ mod tests {
         let snapshot = Snapshot::new_initial(file_node, delta.id);
         storage.store_snapshot(&snapshot, b"").unwrap();
         snapshot.id
+    }
+
+    fn create_snapshot_with_content(
+        storage: &SqliteStorage,
+        parent_id: &SnapshotId,
+        content: &str,
+        partition_type: &str,
+    ) -> SnapshotId {
+        let parent = storage.get_snapshot(parent_id).unwrap();
+        let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
+        storage.store_file_node(&file_node, content.as_bytes()).unwrap();
+
+        let parent_text = reconstruct_text(storage, &parent).unwrap();
+        let diff = diff_to_line_diff(&parent_text, content);
+        let delta = Delta::new(file_node, diff, SourceType::Manual);
+        storage.store_delta(&delta).unwrap();
+
+        let snap = Snapshot::from_parent(&parent, delta.id, partition_type.to_string());
+        storage.store_snapshot(&snap, b"").unwrap();
+        snap.id
     }
 
     #[test]
@@ -361,5 +389,141 @@ mod tests {
         migrate_between_partitions(&storage, &approval_pid, &integrated_pid).unwrap();
         let integrated = storage.get_partition(&integrated_pid).unwrap();
         assert_eq!(integrated.current_snapshot, new_snap.id);
+    }
+
+    #[test]
+    fn test_ensure_approval_agent_partition() {
+        let storage = setup_storage();
+        let agent_id = AgentInstanceId("test-agent".into());
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+
+        let p1 = ensure_approval_agent_partition(&storage, &agent_id, initial_id).unwrap();
+        let p2 = ensure_approval_agent_partition(&storage, &agent_id, initial_id).unwrap();
+        assert_eq!(p1.id, p2.id, "second call should return existing partition");
+    }
+
+    #[test]
+    fn test_ensure_integrated_partition() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+
+        let p1 = ensure_integrated_partition(&storage, "feat-1", initial_id).unwrap();
+        let p2 = ensure_integrated_partition(&storage, "feat-1", initial_id).unwrap();
+        assert_eq!(p1.id, p2.id);
+
+        let p3 = ensure_integrated_partition(&storage, "feat-2", initial_id).unwrap();
+        assert_ne!(p1.id, p3.id, "different names should produce different partition ids");
+    }
+
+    #[test]
+    fn test_ensure_unified_partition() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+
+        let p1 = ensure_unified_partition(&storage, initial_id).unwrap();
+        let p2 = ensure_unified_partition(&storage, initial_id).unwrap();
+        assert_eq!(p1.id, p2.id, "unified partition should be singleton");
+    }
+
+    #[test]
+    fn test_move_approval_to_integrated() {
+        let storage = setup_storage();
+        let agent_id = AgentInstanceId("test-agent".into());
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+
+        // Create approval partition
+        let approval_pid = approval_agent_partition_id(&agent_id);
+        let approval_part = Partition {
+            id: approval_pid,
+            name: format!("approval/{}", agent_id),
+            current_snapshot: initial_id,
+            history: vec![initial_id],
+            partition_type: PartitionType::Approval(agent_id.clone()),
+        };
+        storage.create_partition(&approval_part).unwrap();
+
+        // Create integrated partition
+        let integrated_name = "feat-integrated";
+        let integrated_pid = integrated_partition_id(integrated_name);
+        let integrated_part = Partition {
+            id: integrated_pid,
+            name: format!("integrated/{}", integrated_name),
+            current_snapshot: initial_id,
+            history: vec![initial_id],
+            partition_type: PartitionType::Integrated(integrated_name.to_string()),
+        };
+        storage.create_partition(&integrated_part).unwrap();
+
+        // Advance approval with modified content
+        let approval_new_id = create_snapshot_with_content(
+            &storage,
+            &initial_id,
+            "base\nmodified\n",
+            "approval/test-agent",
+        );
+        storage.update_pointer(&approval_pid, &approval_new_id).unwrap();
+
+        // Move approval to integrated
+        let result = move_approval_to_integrated(&storage, &agent_id, integrated_name);
+        assert!(result.is_ok());
+
+        let integrated = storage.get_partition(&integrated_pid).unwrap();
+        assert_ne!(integrated.current_snapshot, initial_id);
+    }
+
+    #[test]
+    fn test_move_integrated_to_unified() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+
+        // Create unified partition
+        ensure_unified_partition(&storage, initial_id).unwrap();
+
+        // Create two integrated partitions
+        let integrated_names = vec!["int-a".to_string(), "int-b".to_string()];
+
+        for name in &integrated_names {
+            let pid = integrated_partition_id(name);
+            let part = Partition {
+                id: pid,
+                name: format!("integrated/{}", name),
+                current_snapshot: initial_id,
+                history: vec![initial_id],
+                partition_type: PartitionType::Integrated(name.clone()),
+            };
+            storage.create_partition(&part).unwrap();
+
+            let new_id = create_snapshot_with_content(
+                &storage,
+                &initial_id,
+                &format!("base\nfrom-{}\n", name),
+                &format!("integrated/{}", name),
+            );
+            storage.update_pointer(&pid, &new_id).unwrap();
+        }
+
+        // Move integrated to unified
+        let result = move_integrated_to_unified(&storage, &integrated_names);
+        assert!(result.is_ok());
+
+        let unified = storage.get_partition(&unified_partition_id()).unwrap();
+        assert_ne!(unified.current_snapshot, initial_id);
+    }
+
+    #[test]
+    fn test_partition_id_uniqueness() {
+        let agent_a = AgentInstanceId("agent-a".into());
+        let agent_b = AgentInstanceId("agent-b".into());
+
+        let aa = approval_agent_partition_id(&agent_a);
+        let ab = approval_agent_partition_id(&agent_b);
+        assert_ne!(aa, ab, "different agents should have different approval partition ids");
+
+        let ia = integrated_partition_id("feat-a");
+        let ib = integrated_partition_id("feat-b");
+        assert_ne!(ia, ib, "different integrations should have different partition ids");
+
+        // Different partition types should also differ
+        assert_ne!(aa, ia, "approval and integrated partition ids should differ");
     }
 }

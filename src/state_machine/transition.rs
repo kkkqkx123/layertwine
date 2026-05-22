@@ -273,7 +273,10 @@ mod tests {
     use crate::core::delta::Delta;
     use crate::core::file_node::FileNode;
     use crate::core::partition::Partition;
-    use crate::core::types::{PartitionType, SourceType};
+    use crate::core::snapshot::Snapshot;
+    use crate::core::types::{PartitionType, SourceType, AgentInstanceId};
+    use crate::engine::diff::diff_to_line_diff;
+    use crate::storage::repository::{FileNodeStore, SnapshotStore, DeltaStore, PartitionStore};
     use crate::storage::sqlite_storage::SqliteStorage;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -306,6 +309,41 @@ mod tests {
     }
 
     #[test]
+    fn test_check_forward_invalid_all() {
+        let valid_pairs = [
+            (LayerType::ManualEdit, LayerType::Staged),
+            (LayerType::AgentEdit, LayerType::Approval),
+            (LayerType::Approval, LayerType::Staged),
+        ];
+
+        let all_pairs = [
+            (LayerType::ManualEdit, LayerType::ManualEdit),
+            (LayerType::ManualEdit, LayerType::AgentEdit),
+            (LayerType::ManualEdit, LayerType::Approval),
+            (LayerType::AgentEdit, LayerType::ManualEdit),
+            (LayerType::AgentEdit, LayerType::AgentEdit),
+            (LayerType::AgentEdit, LayerType::Staged),
+            (LayerType::Approval, LayerType::ManualEdit),
+            (LayerType::Approval, LayerType::AgentEdit),
+            (LayerType::Approval, LayerType::Approval),
+            (LayerType::Staged, LayerType::ManualEdit),
+            (LayerType::Staged, LayerType::AgentEdit),
+            (LayerType::Staged, LayerType::Approval),
+            (LayerType::Staged, LayerType::Staged),
+        ];
+
+        for (from, to) in &all_pairs {
+            let is_valid = valid_pairs.contains(&(from.clone(), to.clone()));
+            let result = check_forward_valid(from, to);
+            if is_valid {
+                assert!(result.is_ok(), "expected OK for {:?} -> {:?}", from, to);
+            } else {
+                assert!(result.is_err(), "expected Err for {:?} -> {:?}", from, to);
+            }
+        }
+    }
+
+    #[test]
     fn test_check_rollback_valid() {
         assert!(check_rollback_valid(&LayerType::Staged, &LayerType::ManualEdit).is_ok());
         assert!(check_rollback_valid(&LayerType::Staged, &LayerType::AgentEdit).is_ok());
@@ -316,16 +354,51 @@ mod tests {
     }
 
     #[test]
+    fn test_check_rollback_invalid_all() {
+        let valid_pairs = [
+            (LayerType::Staged, LayerType::ManualEdit),
+            (LayerType::Staged, LayerType::AgentEdit),
+            (LayerType::Staged, LayerType::Approval),
+            (LayerType::Approval, LayerType::AgentEdit),
+        ];
+
+        let all_pairs = [
+            (LayerType::ManualEdit, LayerType::ManualEdit),
+            (LayerType::ManualEdit, LayerType::AgentEdit),
+            (LayerType::ManualEdit, LayerType::Approval),
+            (LayerType::ManualEdit, LayerType::Staged),
+            (LayerType::AgentEdit, LayerType::ManualEdit),
+            (LayerType::AgentEdit, LayerType::AgentEdit),
+            (LayerType::AgentEdit, LayerType::Approval),
+            (LayerType::AgentEdit, LayerType::Staged),
+            (LayerType::Approval, LayerType::ManualEdit),
+            (LayerType::Approval, LayerType::Approval),
+            (LayerType::Approval, LayerType::Staged),
+            (LayerType::Staged, LayerType::Staged),
+        ];
+
+        for (from, to) in &all_pairs {
+            let is_valid = valid_pairs.contains(&(from.clone(), to.clone()));
+            let result = check_rollback_valid(from, to);
+            if is_valid {
+                assert!(result.is_ok(), "expected OK for {:?} -> {:?}", from, to);
+            } else {
+                assert!(result.is_err(), "expected Err for {:?} -> {:?}", from, to);
+            }
+        }
+    }
+
+    #[test]
     fn test_rollback_partition() {
         let storage = setup_storage();
         let initial_id = create_initial_snapshot(&storage, "v1\n");
         let pid = crate::state_machine::staged::staged_partition_id();
-        let partition = crate::core::partition::Partition {
+        let partition = Partition {
             id: pid,
             name: "test".into(),
             current_snapshot: initial_id,
             history: vec![initial_id],
-            partition_type: crate::core::types::PartitionType::Staged,
+            partition_type: PartitionType::Staged,
         };
         storage.create_partition(&partition).unwrap();
 
@@ -345,6 +418,25 @@ mod tests {
     }
 
     #[test]
+    fn test_rollback_partition_error() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "v1\n");
+        let pid = crate::state_machine::staged::staged_partition_id();
+        let partition = Partition {
+            id: pid,
+            name: "test".into(),
+            current_snapshot: initial_id,
+            history: vec![initial_id],
+            partition_type: PartitionType::Staged,
+        };
+        storage.create_partition(&partition).unwrap();
+
+        // Try rollback when history has only one entry
+        let result = rollback_partition(&storage, &pid);
+        assert!(result.is_err(), "should error when only one snapshot in history");
+    }
+
+    #[test]
     fn test_reconstruct_text() {
         let storage = setup_storage();
         let file_node = FileNode::new(PathBuf::from("test.txt"), b"hello\n");
@@ -360,5 +452,138 @@ mod tests {
 
         let text = reconstruct_text(&storage, &snapshot).unwrap();
         assert_eq!(text, "hello world");
+    }
+
+    #[test]
+    fn test_execute_forward_manual_to_staged() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+
+        crate::state_machine::manual::ensure_manual_partition(&storage, initial_id).unwrap();
+        crate::state_machine::staged::ensure_staged_partition(&storage, initial_id).unwrap();
+        crate::state_machine::manual::apply_manual_edit(&storage, "test.txt", "base\nmodified\n").unwrap();
+
+        let result = execute_forward(
+            &storage,
+            ForwardTransition::ManualToStaged,
+            &[],
+        );
+        assert!(result.is_ok());
+
+        let staged = storage.get_partition(&crate::state_machine::staged::staged_partition_id()).unwrap();
+        assert_ne!(staged.current_snapshot, initial_id);
+    }
+
+    #[test]
+    fn test_has_parent_of_type() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+
+        let file_node = FileNode::new(PathBuf::from("test.txt"), b"base\nmodified\n");
+        storage.store_file_node(&file_node, b"base\nmodified\n").unwrap();
+        let diff = diff_to_line_diff("base\n", "base\nmodified\n");
+        let delta = Delta::new(file_node, diff, SourceType::Manual);
+        storage.store_delta(&delta).unwrap();
+
+        let parent_snap = storage.get_snapshot(&initial_id).unwrap();
+
+        // Create a chain: parent_snap (type="") → manual_snap (type="manual_edit") → staged_snap (type="staged")
+        let manual_snap = Snapshot::from_parent(&parent_snap, delta.id, "manual_edit".to_string());
+        storage.store_snapshot(&manual_snap, b"").unwrap();
+
+        let file_node2 = FileNode::new(PathBuf::from("test.txt"), b"base\n");
+        storage.store_file_node(&file_node2, b"base\n").unwrap();
+        let diff2 = diff_to_line_diff("base\nmodified\n", "base\n");
+        let delta2 = Delta::new(file_node2, diff2, SourceType::Manual);
+        storage.store_delta(&delta2).unwrap();
+        let staged_snap = Snapshot::from_parent(&manual_snap, delta2.id, "staged".to_string());
+        storage.store_snapshot(&staged_snap, b"").unwrap();
+
+        // staged_snap has manual_snap as parent with "manual_edit" type
+        let has_manual = has_parent_of_type(&storage, &staged_snap, "manual").unwrap();
+        assert!(has_manual, "staged snapshot should have parent with 'manual'");
+
+        // Initial snapshot (no partition type) should not match
+        let has = has_parent_of_type(&storage, &parent_snap, "manual").unwrap();
+        assert!(!has, "initial snapshot has no parent");
+    }
+
+    #[test]
+    fn test_execute_forward_agent_to_approval() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let agent_id = AgentInstanceId("test-agent".into());
+
+        // Setup agent partition
+        crate::state_machine::agent::ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
+        crate::state_machine::agent::apply_agent_edit(&storage, &agent_id, "test.txt", "base\nmodified\n").unwrap();
+
+        // Setup approval partition
+        let approval_pid = crate::state_machine::approval::approval_agent_partition_id(&agent_id);
+        let approval_part = Partition {
+            id: approval_pid,
+            name: format!("approval/{}", agent_id),
+            current_snapshot: initial_id,
+            history: vec![initial_id],
+            partition_type: PartitionType::Approval(agent_id.clone()),
+        };
+        storage.create_partition(&approval_part).unwrap();
+
+        let result = execute_forward(
+            &storage,
+            ForwardTransition::AgentToApproval,
+            &["test-agent"],
+        );
+        assert!(result.is_ok());
+
+        let approval = storage.get_partition(&approval_pid).unwrap();
+        assert_ne!(approval.current_snapshot, initial_id);
+    }
+
+    #[test]
+    fn test_rollback_staged_to_layer_not_found() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+        crate::state_machine::staged::ensure_staged_partition(&storage, initial_id).unwrap();
+
+        let result = rollback_staged_to_layer(&storage, LayerType::ManualEdit);
+        assert!(result.is_err(), "should error when no suitable parent found");
+    }
+
+    #[test]
+    fn test_execute_forward_approval_to_staged() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+        crate::state_machine::staged::ensure_staged_partition(&storage, initial_id).unwrap();
+
+        // Create approval partition with content change
+        let agent_id = AgentInstanceId("test-agent".into());
+        let approval_pid = crate::state_machine::approval::approval_agent_partition_id(&agent_id);
+        let approval_part = Partition {
+            id: approval_pid,
+            name: format!("approval/{}", agent_id),
+            current_snapshot: initial_id,
+            history: vec![initial_id],
+            partition_type: PartitionType::Approval(agent_id),
+        };
+        storage.create_partition(&approval_part).unwrap();
+
+        // Create a new snapshot for the approval partition
+        let file_node = FileNode::new(PathBuf::from("test.txt"), b"base\nmodified\n");
+        storage.store_file_node(&file_node, b"base\nmodified\n").unwrap();
+        let diff = diff_to_line_diff("base\n", "base\nmodified\n");
+        let delta = Delta::new(file_node, diff, SourceType::Manual);
+        storage.store_delta(&delta).unwrap();
+        let snap = storage.get_snapshot(&initial_id).unwrap();
+        let new_snap = Snapshot::from_parent(&snap, delta.id, "approval".to_string());
+        storage.store_snapshot(&new_snap, b"").unwrap();
+        storage.update_pointer(&approval_pid, &new_snap.id).unwrap();
+
+        let result = execute_forward(
+            &storage,
+            ForwardTransition::ApprovalToStaged,
+            &[&approval_pid.to_string()],
+        );
+        assert!(result.is_ok());
     }
 }

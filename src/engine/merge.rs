@@ -496,6 +496,58 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_empty_content() {
+        let content = "";
+        let result = apply_deltas(content, &[]).unwrap();
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_apply_overlapping_hunks_error() {
+        let content = "a\nb\nc\n";
+        let hunk1 = Hunk {
+            old_start: 1,
+            old_len: 1,
+            new_start: 1,
+            new_len: 1,
+            ops: vec![DiffOp::Equal { count: 1 }],
+        };
+        let hunk_overlap = Hunk {
+            old_start: 1,
+            old_len: 1,
+            new_start: 1,
+            new_len: 1,
+            ops: vec![DiffOp::Equal { count: 1 }],
+        };
+        let diff = LineDiff::new(vec![hunk1, hunk_overlap]);
+        let result = apply_line_diff(
+            &content.lines().map(|l| l.to_string()).collect::<Vec<_>>(),
+            &diff,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_apply_out_of_range_hunks_error() {
+        let content = "a\nb\n";
+        let hunk = Hunk {
+            old_start: 10,
+            old_len: 1,
+            new_start: 10,
+            new_len: 1,
+            ops: vec![DiffOp::Equal { count: 1 }],
+        };
+        let diff = LineDiff::new(vec![hunk]);
+        let delta = Delta::new(
+            FileNode::new(PathBuf::from("test.txt"), b""),
+            diff,
+            SourceType::Manual,
+        );
+        let result = apply_deltas(content, &[delta]);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_merge_identical() {
         let base = "a\nb\nc\n";
         let (merged, conflicts) = merge_texts(base, base, base);
@@ -533,5 +585,72 @@ mod tests {
         let (merged, conflicts) = merge_texts(base, ours, theirs);
         assert!(conflicts.is_empty());
         assert_eq!(merged, "a\nX\nc");
+    }
+
+    #[test]
+    fn test_merge_multiline_conflict() {
+        let base = "a\nb\nc\nd\n";
+        let ours = "a\nX\nY\nc\nd\n";
+        let theirs = "a\nP\nQ\nc\nd\n";
+        let (merged, conflicts) = merge_texts(base, ours, theirs);
+        assert!(!conflicts.is_empty(), "should detect conflict");
+        assert_eq!(conflicts[0].ours, vec!["X", "Y"]);
+        assert_eq!(conflicts[0].theirs, vec!["P", "Q"]);
+        assert!(merged.contains("a\n"));
+    }
+
+    #[test]
+    fn test_merge_multiple_conflicts() {
+        let base = "a\nb\nc\nd\ne\nf\n";
+        let ours = "a\nX\nc\nd\nY\nf\n";
+        let theirs = "a\nP\nc\nd\nQ\nf\n";
+        let (_, conflicts) = merge_texts(base, ours, theirs);
+        assert_eq!(conflicts.len(), 2, "two separate conflicts should be detected");
+    }
+
+    #[test]
+    fn test_merge_empty_base() {
+        let base = "";
+        let ours = "a\nb\n";
+        let theirs = "";
+        let (merged, conflicts) = merge_texts(base, ours, theirs);
+        assert!(conflicts.is_empty());
+        assert_eq!(merged, "a\nb");
+    }
+
+    #[test]
+    fn test_merge_one_side_no_changes() {
+        let base = "a\nb\nc\n";
+        let ours = "a\nb\nc\n";
+        let theirs = "a\nX\nc\n";
+        let (merged, conflicts) = merge_texts(base, ours, theirs);
+        assert!(conflicts.is_empty());
+        assert_eq!(merged, "a\nX\nc");
+    }
+
+    #[test]
+    fn test_merge_insert_vs_delete() {
+        let base = "a\nb\nc\n";
+        let ours = "a\nc\n";
+        let theirs = "a\nX\nb\nc\n";
+        let (_merged, conflicts) = merge_texts(base, ours, theirs);
+        // Insert vs delete on overlapping area should produce a conflict
+        assert!(!conflicts.is_empty(), "insert vs delete on same line should conflict");
+    }
+
+    #[test]
+    fn test_conflict_marker_format() {
+        let conflict = MergeConflict {
+            start_line: 1,
+            base: vec!["b".to_string()],
+            ours: vec!["X".to_string()],
+            theirs: vec!["Y".to_string()],
+        };
+        let markers = conflict.to_conflict_marker();
+        assert!(markers.contains("<<<<<<< ours"));
+        assert!(markers.contains("======="));
+        assert!(markers.contains(">>>>>>> theirs"));
+        assert!(markers.contains("X"));
+        assert!(markers.contains("Y"));
     }
 }

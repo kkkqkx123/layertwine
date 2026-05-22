@@ -234,6 +234,62 @@ mod tests {
     }
 
     #[test]
+    fn test_diff_to_line_diff_delete_only() {
+        let old = "a\nb\nc\n";
+        let new = "a\nc\n";
+        let line_diff = diff_to_line_diff(old, new);
+        assert!(!line_diff.hunks.is_empty());
+
+        let has_delete = line_diff.hunks.iter().any(|h| {
+            h.ops.iter().any(|op| matches!(op, DiffOp::Delete { .. }))
+        });
+        assert!(has_delete);
+    }
+
+    #[test]
+    fn test_diff_to_line_diff_replace() {
+        let old = "a\nb\nc\n";
+        let new = "a\nx\nc\n";
+        let line_diff = diff_to_line_diff(old, new);
+        assert!(!line_diff.hunks.is_empty());
+
+        let has_replace = line_diff.hunks.iter().any(|h| {
+            h.ops.iter().any(|op| matches!(op, DiffOp::Replace { .. }))
+        });
+        assert!(has_replace);
+    }
+
+    #[test]
+    fn test_diff_to_line_diff_empty_old() {
+        let old = "";
+        let new = "a\nb\nc\n";
+        let line_diff = diff_to_line_diff(old, new);
+        assert!(!line_diff.hunks.is_empty());
+        assert_eq!(line_diff.hunks[0].old_start, 1);
+        assert_eq!(line_diff.hunks[0].new_start, 1);
+    }
+
+    #[test]
+    fn test_diff_to_line_diff_empty_new() {
+        let old = "a\nb\nc\n";
+        let new = "";
+        let line_diff = diff_to_line_diff(old, new);
+        assert!(!line_diff.hunks.is_empty());
+        let has_delete = line_diff.hunks.iter().any(|h| {
+            h.ops.iter().any(|op| matches!(op, DiffOp::Delete { .. }))
+        });
+        assert!(has_delete);
+    }
+
+    #[test]
+    fn test_diff_to_line_diff_multiple_hunks() {
+        let old = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm\nn\n";
+        let new = "a\nX\nc\nd\ne\nf\ng\nh\ni\nY\nk\nl\nm\nn\n";
+        let line_diff = diff_to_line_diff(old, new);
+        assert_eq!(line_diff.hunks.len(), 2, "two separated changes should produce 2 hunks");
+    }
+
+    #[test]
     fn test_collect_changes() {
         let old = "keep\nremove\nkeep\n";
         let new = "keep\nadded\nkeep\n";
@@ -248,11 +304,69 @@ mod tests {
     }
 
     #[test]
+    fn test_collect_changes_empty_diff() {
+        let old = "same\n";
+        let new = "same\n";
+        let diff = TextDiff::from_lines(old, new);
+        let delta = collect_changes_from_diff(
+            &diff,
+            PathBuf::from("test.txt"),
+            old.as_bytes(),
+            SourceType::Manual,
+        );
+        assert!(delta.diff.hunks.is_empty() || delta.diff.hunks.iter().all(|h| h.ops.is_empty()));
+    }
+
+    #[test]
+    fn test_collect_changes_only_insert() {
+        let old = "";
+        let new = "a\nb\nc\n";
+        let diff = TextDiff::from_lines(old, new);
+        let delta = collect_changes_from_diff(
+            &diff,
+            PathBuf::from("test.txt"),
+            old.as_bytes(),
+            SourceType::Manual,
+        );
+        assert!(!delta.diff.hunks.is_empty());
+        let has_insert = delta.diff.hunks.iter().any(|h| {
+            h.ops.iter().any(|op| matches!(op, DiffOp::Insert { .. }))
+        });
+        assert!(has_insert);
+    }
+
+    #[test]
     fn test_format_unified_diff() {
         let old = "a\nb\nc\n";
         let new = "a\nd\nc\n";
         let output = format_unified_diff(old, new, 1);
         assert!(output.contains("-b"));
         assert!(output.contains("+d"));
+    }
+
+    #[test]
+    fn test_format_unified_diff_no_changes() {
+        let text = "a\nb\nc\n";
+        let output = format_unified_diff(text, text, 1);
+        assert!(!output.contains('-'));
+        assert!(!output.contains('+'));
+    }
+
+    #[test]
+    fn test_diff_to_line_diff_single_char_no_newline() {
+        let diff = diff_to_line_diff("x", "y");
+        assert!(!diff.hunks.is_empty() || diff.hunks.iter().any(|h| !h.ops.is_empty()), "single char change should produce diff");
+    }
+
+    #[test]
+    fn test_diff_to_line_diff_both_empty() {
+        let diff = diff_to_line_diff("", "");
+        assert!(diff.is_empty(), "both empty should produce no diff");
+    }
+
+    #[test]
+    fn test_diff_to_line_diff_only_newlines() {
+        let diff = diff_to_line_diff("\n\n", "\n\n\n");
+        assert!(!diff.is_empty(), "different newline count should produce diff");
     }
 }

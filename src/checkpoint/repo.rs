@@ -16,7 +16,7 @@ pub struct CheckpointRepo {
     /// Checkpoint DAG
     pub checkpoint_dag: CheckpointDag,
     /// All checkpoints (ID → Checkpoint)
-    checkpoints: HashMap<CheckpointId, Checkpoint>,
+    pub(crate) checkpoints: HashMap<CheckpointId, Checkpoint>,
 }
 
 impl CheckpointRepo {

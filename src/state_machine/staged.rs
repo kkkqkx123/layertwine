@@ -181,7 +181,11 @@ mod tests {
     use super::*;
     use crate::core::file_node::FileNode;
     use crate::core::types::{AgentInstanceId, PartitionType, SourceType};
+    use crate::core::delta::Delta;
+    use crate::core::snapshot::Snapshot;
+    use crate::engine::diff::diff_to_line_diff;
     use crate::storage::repository::FileNodeStore;
+    use crate::storage::repository::{SnapshotStore, DeltaStore};
     use crate::storage::sqlite_storage::SqliteStorage;
     use std::sync::Arc;
 
@@ -248,5 +252,70 @@ mod tests {
 
         let merged = storage.get_snapshot(&merged_id).unwrap();
         assert_eq!(merged.parents.len(), 2);
+    }
+
+    #[test]
+    fn test_ensure_staged_partition() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+
+        let p1 = ensure_staged_partition(&storage, initial_id).unwrap();
+        let p2 = ensure_staged_partition(&storage, initial_id).unwrap();
+        assert_eq!(p1.id, p2.id);
+    }
+
+    #[test]
+    fn test_merge_approval_to_staged_no_changes() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+        ensure_staged_partition(&storage, initial_id).unwrap();
+
+        // Approval with same content as staged → no change
+        let approval_pid = create_approval_partition(&storage, "base\n");
+        let result = merge_approval_to_staged(&storage, &approval_pid);
+        assert!(result.is_ok());
+
+        let staged = storage.get_partition(&staged_partition_id()).unwrap();
+        assert_eq!(staged.current_snapshot, initial_id);
+    }
+
+    #[test]
+    fn test_reset_staged() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+        ensure_staged_partition(&storage, initial_id).unwrap();
+
+        // Advance staged by creating a new snapshot
+        let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), b"base\nmodified\n");
+        storage.store_file_node(&file_node, b"base\nmodified\n").unwrap();
+        let diff = diff_to_line_diff("base\n", "base\nmodified\n");
+        let delta = Delta::new(file_node, diff, SourceType::Manual);
+        storage.store_delta(&delta).unwrap();
+        let snap = storage.get_snapshot(&initial_id).unwrap();
+        let new_snap = Snapshot::from_parent(&snap, delta.id, PartitionType::Staged.name());
+        storage.store_snapshot(&new_snap, b"").unwrap();
+        let staged_pid = staged_partition_id();
+        storage.update_pointer(&staged_pid, &new_snap.id).unwrap();
+
+        // Verify staged advanced
+        let staged = storage.get_partition(&staged_pid).unwrap();
+        assert_ne!(staged.current_snapshot, initial_id);
+
+        // Reset staged
+        reset_staged(&storage, initial_id).unwrap();
+        let staged = storage.get_partition(&staged_pid).unwrap();
+        assert_eq!(staged.current_snapshot, initial_id);
+    }
+
+    #[test]
+    fn test_reset_staged_at_base() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+        ensure_staged_partition(&storage, initial_id).unwrap();
+
+        // Reset when already at base should be a no-op
+        reset_staged(&storage, initial_id).unwrap();
+        let staged = storage.get_partition(&staged_partition_id()).unwrap();
+        assert_eq!(staged.current_snapshot, initial_id);
     }
 }

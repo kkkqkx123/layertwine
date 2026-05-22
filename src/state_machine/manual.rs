@@ -180,6 +180,10 @@ pub fn merge_manual_to_staged(
 mod tests {
     use super::*;
     use crate::core::types::SourceType;
+    use crate::core::delta::Delta;
+    use crate::core::file_node::FileNode;
+    use crate::core::snapshot::Snapshot;
+    use crate::storage::repository::{SnapshotStore, FileNodeStore, DeltaStore};
     use crate::storage::sqlite_storage::SqliteStorage;
     use std::sync::Arc;
 
@@ -236,5 +240,90 @@ mod tests {
         // Verify the dual parent of the merge snapshot
         let merged = storage.get_snapshot(&merged_id).unwrap();
         assert_eq!(merged.parents.len(), 2);
+    }
+
+    #[test]
+    fn test_ensure_manual_partition_already_exists() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let p1 = ensure_manual_partition(&storage, initial_id).unwrap();
+        let p2 = ensure_manual_partition(&storage, initial_id).unwrap();
+        assert_eq!(p1.id, p2.id);
+    }
+
+    #[test]
+    fn test_apply_manual_edit_no_changes() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "same");
+        ensure_manual_partition(&storage, initial_id).unwrap();
+
+        let result = apply_manual_edit(&storage, "test.txt", "same").unwrap();
+        assert_eq!(result, initial_id, "no changes should return current snapshot");
+    }
+
+    #[test]
+    fn test_apply_manual_edit_no_partition() {
+        let storage = setup_storage();
+        // Don't call ensure_manual_partition
+        let result = apply_manual_edit(&storage, "test.txt", "content\n");
+        assert!(result.is_err(), "should error when manual partition doesn't exist");
+    }
+
+    #[test]
+    fn test_merge_manual_to_staged_no_changes() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "base\n");
+
+        ensure_manual_partition(&storage, initial_id).unwrap();
+        crate::state_machine::staged::ensure_staged_partition(&storage, initial_id).unwrap();
+
+        // No edits applied → merge should return current staged snapshot
+        let merged_id = merge_manual_to_staged(&storage).unwrap();
+        let staged = storage.get_partition(&crate::state_machine::staged::staged_partition_id()).unwrap();
+        assert_eq!(staged.current_snapshot, merged_id);
+    }
+
+    #[test]
+    fn test_manual_sequential_edits() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "line1\nline2\n");
+        ensure_manual_partition(&storage, initial_id).unwrap();
+
+        // First edit: modify line2
+        let first_id = apply_manual_edit(&storage, "test.txt", "line1\nmodified\n").unwrap();
+        assert_ne!(first_id, initial_id, "first edit should create new snapshot");
+
+        // Second edit: add a third line
+        let second_id = apply_manual_edit(&storage, "test.txt", "line1\nmodified\nline3\n").unwrap();
+        assert_ne!(second_id, first_id, "second edit should create another new snapshot");
+
+        // Verify partition pointer advanced
+        let partition = storage.get_partition(&manual_partition_id()).unwrap();
+        assert_eq!(partition.current_snapshot, second_id);
+        assert!(partition.history.len() >= 3, "history should have at least 3 entries");
+    }
+
+    #[test]
+    fn test_manual_edit_multiple_files() {
+        let storage = setup_storage();
+        let initial_id = create_initial_snapshot(&storage, "file1\n");
+        ensure_manual_partition(&storage, initial_id).unwrap();
+
+        // Override the stored file node for a different file path
+        let file_node2 = FileNode::new(std::path::PathBuf::from("file2.txt"), b"file2\n");
+        storage.store_file_node(&file_node2, b"file2\n").unwrap();
+        let empty_diff2 = crate::core::delta::LineDiff::new(vec![]);
+        let delta2 = Delta::new(file_node2.clone(), empty_diff2, SourceType::Manual);
+        storage.store_delta(&delta2).unwrap();
+        let init2 = Snapshot::new_initial(file_node2, delta2.id);
+        storage.store_snapshot(&init2, b"").unwrap();
+
+        // Edit first file
+        let id1 = apply_manual_edit(&storage, "test.txt", "file1\nmodified\n").unwrap();
+        assert_ne!(id1, initial_id, "edit first file should produce new snapshot");
+
+        // Edit second file
+        let id2 = apply_manual_edit(&storage, "file2.txt", "file2\nmodified\n").unwrap();
+        assert_ne!(id2, id1, "edit second file should produce another new snapshot");
     }
 }

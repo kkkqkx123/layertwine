@@ -126,6 +126,7 @@ mod tests {
     use crate::core::delta::LineDiff;
     use crate::core::file_node::FileNode;
     use crate::core::types::{DiffOp, Hunk, SourceType};
+    use crate::engine::diff::diff_to_line_diff;
     use std::path::PathBuf;
 
     #[test]
@@ -237,5 +238,175 @@ mod tests {
         let inv = inverse_delta(&delta, Some(content)).unwrap();
         let restored = crate::engine::merge::apply_deltas(&new_content, &[inv]).unwrap();
         assert_eq!(restored, content.trim_end_matches('\n'));
+    }
+
+    #[test]
+    fn test_inverse_replace() {
+        let hunk = Hunk {
+            old_start: 1,
+            old_len: 1,
+            new_start: 1,
+            new_len: 1,
+            ops: vec![DiffOp::Replace {
+                old_start: 1,
+                old_count: 1,
+                new_start: 1,
+                lines: vec!["new".to_string()],
+            }],
+        };
+        let diff = LineDiff::new(vec![hunk]);
+        let delta = Delta::new(
+            FileNode::new(PathBuf::from("test.txt"), b"content"),
+            diff,
+            SourceType::Manual,
+        );
+        let inv = inverse_delta(&delta, Some("old\n")).unwrap();
+        let has_replace = inv.diff.hunks.iter().any(|h| {
+            h.ops.iter().any(|op| matches!(op, DiffOp::Replace { .. }))
+        });
+        assert!(has_replace, "inverse of Replace should be Replace");
+
+        // Check that the old_start/new_start are swapped
+        for hunk in &inv.diff.hunks {
+            for op in &hunk.ops {
+                if let DiffOp::Replace { old_start, new_start, lines, .. } = op {
+                    assert_eq!(*old_start, 1, "old_start should be original new_start");
+                    assert_eq!(*new_start, 1, "new_start should be original old_start");
+                    assert_eq!(lines, &vec!["old".to_string()], "should contain original content");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_inverse_replace_roundtrip() {
+        let content = "old\n";
+        let file = FileNode::new(PathBuf::from("test.txt"), b"");
+
+        let hunk = Hunk {
+            old_start: 1,
+            old_len: 1,
+            new_start: 1,
+            new_len: 1,
+            ops: vec![DiffOp::Replace {
+                old_start: 1,
+                old_count: 1,
+                new_start: 1,
+                lines: vec!["new".to_string()],
+            }],
+        };
+        let diff = LineDiff::new(vec![hunk]);
+        let delta = Delta::new(file, diff, SourceType::Manual);
+
+        let new_content = crate::engine::merge::apply_deltas(content, &[delta.clone()]).unwrap();
+        assert_eq!(new_content, "new");
+
+        let inv = inverse_delta(&delta, Some(content)).unwrap();
+        let restored = crate::engine::merge::apply_deltas(&new_content, &[inv]).unwrap();
+        assert_eq!(restored, "old");
+    }
+
+    #[test]
+    fn test_inverse_preserves_equal() {
+        let hunk = Hunk {
+            old_start: 1,
+            old_len: 2,
+            new_start: 1,
+            new_len: 2,
+            ops: vec![DiffOp::Equal { count: 2 }],
+        };
+        let diff = LineDiff::new(vec![hunk]);
+        let delta = Delta::new(
+            FileNode::new(PathBuf::from("test.txt"), b"content"),
+            diff,
+            SourceType::Manual,
+        );
+        let inv = inverse_delta(&delta, None).unwrap();
+        let has_equal = inv.diff.hunks.iter().any(|h| {
+            h.ops.iter().any(|op| matches!(op, DiffOp::Equal { .. }))
+        });
+        assert!(has_equal, "inverse should preserve Equal ops");
+    }
+
+    #[test]
+    fn test_inverse_mixed_ops() {
+        let hunk = Hunk {
+            old_start: 1,
+            old_len: 3,
+            new_start: 1,
+            new_len: 4,
+            ops: vec![
+                DiffOp::Equal { count: 1 },
+                DiffOp::Delete { old_start: 2, count: 1 },
+                DiffOp::Insert { new_start: 3, lines: vec!["inserted".to_string()] },
+            ],
+        };
+        let diff = LineDiff::new(vec![hunk]);
+        let delta = Delta::new(
+            FileNode::new(PathBuf::from("test.txt"), b"keep\ndeleted\n"),
+            diff,
+            SourceType::Manual,
+        );
+        let inv = inverse_delta(&delta, Some("keep\ndeleted\n")).unwrap();
+
+        // Inverse: Delete becomes Insert, Insert becomes Delete, Equal stays
+        let has_delete = inv.diff.hunks.iter().any(|h| {
+            h.ops.iter().any(|op| matches!(op, DiffOp::Delete { .. }))
+        });
+        let has_insert = inv.diff.hunks.iter().any(|h| {
+            h.ops.iter().any(|op| matches!(op, DiffOp::Insert { .. }))
+        });
+        let has_equal = inv.diff.hunks.iter().any(|h| {
+            h.ops.iter().any(|op| matches!(op, DiffOp::Equal { .. }))
+        });
+
+        assert!(has_delete, "original Insert should become Delete");
+        assert!(has_insert, "original Delete should become Insert");
+        assert!(has_equal, "Equal should stay Equal");
+    }
+
+    #[test]
+    fn test_inverse_snapshot_error() {
+        let file_node = FileNode::new(PathBuf::from("test.txt"), b"content");
+        let empty_diff = LineDiff::new(vec![]);
+        let delta = Delta::new(file_node, empty_diff, SourceType::Manual);
+        let snapshot = crate::core::snapshot::Snapshot::new_initial(
+            delta.file.clone(),
+            delta.id,
+        );
+        let result = inverse_snapshot(&snapshot, &[]);
+        assert!(result.is_err(), "inverse_snapshot should return error (not yet implemented)");
+    }
+
+    #[test]
+    fn test_inverse_delta_empty() {
+        let diff = LineDiff::new(vec![]);
+        let file_node = FileNode::new(PathBuf::from("empty.txt"), b"content");
+        let delta = Delta::new(file_node, diff, SourceType::Manual);
+        let old_content = "content";
+        let inverse = inverse_delta(&delta, Some(old_content)).unwrap();
+        assert!(inverse.diff.is_empty(), "empty delta inverse should also be empty");
+    }
+
+    #[test]
+    fn test_inverse_insert_with_content() {
+        let diff = diff_to_line_diff("", "a\nb\nc\n");
+        let file_node = FileNode::new(PathBuf::from("new.txt"), b"a\nb\nc\n");
+        let delta = Delta::new(file_node, diff, SourceType::Manual);
+        let inverse = inverse_delta(&delta, Some("")).unwrap();
+        // Inverse of insert should be delete
+        let has_delete = inverse.diff.hunks.iter().any(|h| h.ops.iter().any(|op| matches!(op, DiffOp::Delete { .. })));
+        assert!(has_delete, "inverse of insert should contain Delete ops");
+    }
+
+    #[test]
+    fn test_inverse_delete_with_content() {
+        let diff = diff_to_line_diff("a\nb\nc\n", "a\nc\n");
+        let file_node = FileNode::new(PathBuf::from("del.txt"), b"a\nc\n");
+        let delta = Delta::new(file_node, diff, SourceType::Manual);
+        let inverse = inverse_delta(&delta, Some("a\nb\nc\n")).unwrap();
+        // Inverse of delete should be insert
+        let has_insert = inverse.diff.hunks.iter().any(|h| h.ops.iter().any(|op| matches!(op, DiffOp::Insert { .. })));
+        assert!(has_insert, "inverse of delete should contain Insert ops");
     }
 }

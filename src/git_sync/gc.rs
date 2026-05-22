@@ -252,4 +252,51 @@ mod tests {
         assert_eq!(stats.freed_bytes, 0);
         assert!(!stats.delta_chain_depth_triggered);
     }
+
+    #[test]
+    fn test_protected_includes_git_anchor() {
+        let snap1 = dummy_snapshot_id(1);
+        let mut repo = CheckpointRepo::new_single(snap1);
+        let snap2 = dummy_snapshot_id(2);
+        let cp_id = repo.commit_single(snap2, "anchored", "user").unwrap();
+
+        // Remove the branch reference to make the checkpoint orphaned
+        {
+            let cp = repo.get_checkpoint_mut(&cp_id).unwrap();
+            cp.metadata.git_anchor = Some("abc123".to_string());
+        }
+        // Remove branch "main" so cp would normally be orphaned
+        repo.branches.retain(|b| b.name != "main");
+
+        let protected = collect_protected_checkpoints(&repo);
+        assert!(
+            protected.contains(&cp_id),
+            "checkpoint with git_anchor should be protected even without branch"
+        );
+    }
+
+    #[test]
+    fn test_gc_real_orphan_removal() {
+        let snap1 = dummy_snapshot_id(1);
+        let mut repo = CheckpointRepo::new_single(snap1);
+
+        // Create a disconnected (orphan) checkpoint by directly adding to internal structures
+        let orphan_snap = dummy_snapshot_id(99);
+        let orphan_cp = crate::checkpoint::Checkpoint::new(
+            vec![orphan_snap],
+            vec![],
+            crate::checkpoint::CheckpointMetadata::new("orphan", "orphan checkpoint"),
+        );
+        let orphan_id = orphan_cp.id;
+
+        // Add to internal structures but NO edges to/from any protected checkpoint
+        repo.checkpoints.insert(orphan_id, orphan_cp);
+        repo.checkpoint_dag.add_node(orphan_id);
+
+        let stats = collect_garbage(&mut repo).unwrap();
+        assert!(
+            stats.removed_checkpoints > 0,
+            "GC should remove orphan checkpoint that has no connection to any branch"
+        );
+    }
 }
