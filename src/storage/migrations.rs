@@ -64,8 +64,8 @@ CREATE TABLE IF NOT EXISTS layers (
 );
 
 -- Indexes
-CREATE INDEX IF NOT EXISTS idx_snapshots_file ON snapshots(file_path);
-CREATE INDEX IF NOT EXISTS idx_snapshots_partition ON snapshots(partition_type);
+CREATE INDEX IF NOT EXISTS idx_snapshots_file_created ON snapshots(file_path, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_snapshots_partition_created ON snapshots(partition_type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_deltas_file ON deltas(file_path);
 CREATE INDEX IF NOT EXISTS idx_partition_history_snapshot ON partition_history(snapshot_id);
 ";
@@ -94,6 +94,8 @@ CREATE TABLE IF NOT EXISTS dag_store (
     value           BLOB NOT NULL,
     updated_at      INTEGER NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_checkpoints_created ON checkpoints(created_at DESC);
 ";
 
 /// Initialize the database and apply all migrations
