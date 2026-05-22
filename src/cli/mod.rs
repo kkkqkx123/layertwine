@@ -10,7 +10,7 @@ use crate::core::delta::Delta;
 use crate::core::file_node::FileNode;
 use crate::core::snapshot::Snapshot;
 use crate::core::types::{
-    AgentInstanceId, ContentId, SnapshotId, SourceType,
+    AgentInstanceId, ContentId, PartitionType, SnapshotId, SourceType,
 };
 use crate::error::{exit_codes, Result, StratumError};
 use crate::git_sync::gc::collect_garbage;
@@ -27,7 +27,11 @@ use output::{print_branches, print_log, print_progress, print_status, print_done
 
 /// Run the CLI with the given arguments and return an exit code
 pub fn run() -> i32 {
-    let cli = commands::parse_args();
+    run_with_cli(commands::parse_args())
+}
+
+/// Run the CLI with a pre-built Cli struct (useful for testing)
+pub fn run_with_cli(cli: Cli) -> i32 {
     let format = if cli.json {
         OutputFormat::Json
     } else {
@@ -410,7 +414,7 @@ fn execute_approve(
 ) -> i32 {
     let agent_instance = AgentInstanceId(agent_id.to_string());
 
-    // Move from approval to integrated
+    // Step 1: Move from approval agent partition to integrated
     match crate::state_machine::approval::move_approval_to_integrated(
         storage.as_ref(),
         &agent_instance,
@@ -429,26 +433,30 @@ fn execute_approve(
         }
     }
 
-    // Merge integrated to staged
-    let integration_names = vec![agent_id.to_string()];
-    match crate::state_machine::approval::move_integrated_to_unified(
-        storage.as_ref(),
-        &integration_names,
-    ) {
-        Ok(unified_id) => {
-            println!(
-                "Merged to unified -> snapshot {}",
-                &unified_id.to_hex()[..12]
-            );
-        }
-        Err(e) => {
-            eprintln!("Warning: failed to merge to unified: {}", e);
+    // Step 2: Collect all integrated partition names and merge to unified
+    let integration_names: Vec<String> = storage
+        .list_partitions()
+        .ok()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|p| match &p.partition_type {
+            PartitionType::Integrated(name) => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+
+    if !integration_names.is_empty() {
+        if let Err(e) = crate::state_machine::approval::move_integrated_to_unified(
+            storage.as_ref(),
+            &integration_names,
+        ) {
+            eprintln!("{}", e.format_cli());
+            return e.exit_code();
         }
     }
 
-    // Also try to merge approval agent partition into staged directly
-    let approval_pid = crate::state_machine::approval::approval_agent_partition_id(&agent_instance);
-    match crate::state_machine::staged::merge_approval_to_staged(storage.as_ref(), &approval_pid) {
+    // Step 3: Merge unified to staged
+    match crate::state_machine::staged::merge_unified_to_staged(storage.as_ref()) {
         Ok(staged_id) => {
             println!(
                 "Merged to staged -> snapshot {}",
@@ -456,7 +464,8 @@ fn execute_approve(
             );
         }
         Err(e) => {
-            eprintln!("Warning: failed to merge to staged: {}", e);
+            eprintln!("{}", e.format_cli());
+            return e.exit_code();
         }
     }
 

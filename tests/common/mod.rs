@@ -1,3 +1,5 @@
+pub mod e2e;
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 

@@ -126,6 +126,7 @@ pub fn ensure_unified_partition(
 /// Migrating the contents of an Agent Approval partition to an Integrated partition
 ///
 /// Takes the current snapshot from the Agent partition at the approval level and merges it into the Integrated partition with the specified name.
+/// If the Integrated partition does not exist, it is created automatically using the approval snapshot as the initial state.
 pub fn move_approval_to_integrated(
     storage: &SqliteStorage,
     agent_id: &AgentInstanceId,
@@ -137,18 +138,27 @@ pub fn move_approval_to_integrated(
     let approval_partition = storage
         .get_partition(&approval_pid)
         .map_err(|_| StratumError::NotFound(format!("approval agent partition {} not found", agent_id)))?;
-    let integrated_partition = storage
-        .get_partition(&integrated_pid)
-        .map_err(|_| StratumError::NotFound(format!("integrated partition {} not found", integrated_name)))?;
-
     let approval_snapshot = storage
         .get_snapshot(&approval_partition.current_snapshot)
         .map_err(|e| StratumError::Storage(e.into()))?;
+
+    // Get or create the integrated partition using the approval snapshot as initial state
+    let integrated_partition = ensure_integrated_partition(
+        storage,
+        integrated_name,
+        approval_partition.current_snapshot,
+    )?;
+
+    // If the integrated partition was just created (same snapshot as approval), no merge needed
+    if integrated_partition.current_snapshot == approval_partition.current_snapshot {
+        return Ok(integrated_partition.current_snapshot);
+    }
+
     let integrated_snapshot = storage
         .get_snapshot(&integrated_partition.current_snapshot)
         .map_err(|e| StratumError::Storage(e.into()))?;
 
-    // incorporation
+    // incorporate: diff from integrated to approval content
     let approval_text =
         crate::state_machine::transition::reconstruct_text(storage, &approval_snapshot)?;
     let integrated_text =
@@ -185,14 +195,36 @@ pub fn move_approval_to_integrated(
 }
 
 /// Merging Multiple Integrated Partitions into a Unified Partition
+///
+/// Merges the contents of the specified Integrated partitions into the Unified partition.
+/// If the Unified partition does not exist, it is created automatically using the first
+/// Integrated partition's current snapshot as the initial state.
 pub fn move_integrated_to_unified(
     storage: &SqliteStorage,
     integrated_names: &[String],
 ) -> Result<SnapshotId> {
     let unified_pid = unified_partition_id();
-    let unified_partition = storage
-        .get_partition(&unified_pid)
-        .map_err(|_| StratumError::NotFound("unified partition not found".into()))?;
+
+    // Determine the initial snapshot for the unified partition
+    // Use the first integrated partition's snapshot if available
+    let initial_snapshot = if integrated_names.is_empty() {
+        // No integrated partitions to merge, just ensure unified exists
+        // Use a zero-content hash as placeholder initial snapshot
+        let placeholder = SnapshotId::from_content(b"unified-placeholder");
+        let _ = ensure_unified_partition(storage, placeholder)?;
+        let unified = storage.get_partition(&unified_pid)
+            .map_err(|_| StratumError::NotFound("unified partition not found".into()))?;
+        return Ok(unified.current_snapshot);
+    } else {
+        let first_pid = integrated_partition_id(&integrated_names[0]);
+        let first_part = storage
+            .get_partition(&first_pid)
+            .map_err(|_| StratumError::NotFound(format!("integrated partition {} not found", integrated_names[0])))?;
+        first_part.current_snapshot
+    };
+
+    // Get or create unified partition
+    let unified_partition = ensure_unified_partition(storage, initial_snapshot)?;
     let unified_snapshot = storage
         .get_snapshot(&unified_partition.current_snapshot)
         .map_err(|e| StratumError::Storage(e.into()))?;

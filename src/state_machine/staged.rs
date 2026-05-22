@@ -100,6 +100,65 @@ pub fn merge_approval_to_staged(
     Ok(new_snapshot.id)
 }
 
+/// Merge the contents of the Unified partition into the staged
+///
+/// Takes the current snapshot of the Unified partition and merges it into staged.
+/// This is the final step of the approval pipeline: approval_agent → integrated → unified → staged.
+pub fn merge_unified_to_staged(
+    storage: &SqliteStorage,
+) -> Result<SnapshotId> {
+    let staged_pid = staged_partition_id();
+    let unified_pid = crate::state_machine::approval::unified_partition_id();
+
+    let unified_partition = storage
+        .get_partition(&unified_pid)
+        .map_err(|_| StratumError::NotFound("unified partition not found, call ensure_unified_partition first".into()))?;
+    let staged_partition = storage
+        .get_partition(&staged_pid)
+        .map_err(|_| StratumError::NotFound("staged partition not found, call ensure_staged_partition first".into()))?;
+
+    let unified_snapshot = storage
+        .get_snapshot(&unified_partition.current_snapshot)
+        .map_err(|e| StratumError::Storage(e.into()))?;
+    let staged_snapshot = storage
+        .get_snapshot(&staged_partition.current_snapshot)
+        .map_err(|e| StratumError::Storage(e.into()))?;
+
+    let unified_text =
+        crate::state_machine::transition::reconstruct_text(storage, &unified_snapshot)?;
+    let staged_text =
+        crate::state_machine::transition::reconstruct_text(storage, &staged_snapshot)?;
+
+    let merge_diff = diff_to_line_diff(&staged_text, &unified_text);
+    if merge_diff.is_empty() {
+        return Ok(staged_partition.current_snapshot);
+    }
+
+    let merge_delta = Delta::new(
+        staged_snapshot.file.clone(),
+        merge_diff,
+        SourceType::Manual,
+    );
+    storage
+        .store_delta(&merge_delta)
+        .map_err(|e| StratumError::Storage(e.into()))?;
+
+    let new_snapshot = Snapshot::merge(
+        vec![&staged_snapshot, &unified_snapshot],
+        merge_delta.id,
+        PartitionType::Staged.name(),
+    );
+    storage
+        .store_snapshot(&new_snapshot, b"")
+        .map_err(|e| StratumError::Storage(e.into()))?;
+
+    storage
+        .update_pointer(&staged_pid, &new_snapshot.id)
+        .map_err(|e| StratumError::Storage(e.into()))?;
+
+    Ok(new_snapshot.id)
+}
+
 /// Submit staged as Checkpoint
 ///
 /// 1. Get staged partition current snapshot
