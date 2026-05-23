@@ -371,7 +371,9 @@ impl ApiService for ApiServiceImpl {
     }
 
     fn edit(&self, req: EditRequest) -> ApiResult<EditResponse> {
-        let content = req.content.as_deref().unwrap_or("");
+        let content = req.content.as_deref().ok_or_else(|| {
+            ApiError::invalid_params("edit content is required (provide via -c/--content or pipe via stdin)")
+        })?;
         let snapshot_id = crate::state_machine::manual::apply_manual_edit(
             self.storage.as_ref(),
             &req.file,
@@ -390,7 +392,9 @@ impl ApiService for ApiServiceImpl {
 
     fn agent_edit(&self, req: AgentEditRequest) -> ApiResult<EditResponse> {
         let agent_instance = AgentInstanceId(req.agent_id.clone());
-        let content = req.content.as_deref().unwrap_or("");
+        let content = req.content.as_deref().ok_or_else(|| {
+            ApiError::invalid_params("edit content is required (provide via -c/--content or pipe via stdin)")
+        })?;
 
         let staged_pid = crate::state_machine::staged::staged_partition_id();
         let initial_snapshot = match self.storage.get_partition(&staged_pid) {

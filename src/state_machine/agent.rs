@@ -108,9 +108,6 @@ pub fn apply_agent_edit(
     storage
         .store_delta(&delta)
         .map_err(|e| StratumError::Storage(e.into()))?;
-    storage
-        .store_file_node(&file_node, new_content.as_bytes())
-        .map_err(|e| StratumError::Storage(e.into()))?;
 
     // Creating a New Snapshot
     let new_snapshot = Snapshot::from_parent(

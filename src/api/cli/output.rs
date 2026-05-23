@@ -50,7 +50,6 @@ pub fn print_status_from_response(resp: &Result<StatusResponse, crate::api::type
 pub fn print_log_from_response(
     resp: &LogResponse,
     format: OutputFormat,
-    _checkpoints: Vec<crate::checkpoint::checkpoint::Checkpoint>,
 ) {
     match format {
         OutputFormat::Plain => {

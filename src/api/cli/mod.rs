@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod output;
 
+use std::io::Read;
 use std::sync::Arc;
 
 use crate::api::service::{ApiService, ApiServiceImpl, ServiceConfig};
@@ -47,21 +48,29 @@ pub fn run_with_cli(cli: Cli) -> i32 {
             };
             let resp = service.status();
             print_status_from_response(&resp, format);
-            return exit_codes::SUCCESS;
+            // print_status_from_response handles both Ok/Err internally
+            Ok(())
         }
         Commands::Edit { file, content } => {
             let service = match open_service(&cli) {
                 Ok(s) => s,
                 Err(code) => return code,
             };
+            let content = if let Some(c) = content {
+                Some(c.clone())
+            } else {
+                let mut buf = String::new();
+                match std::io::stdin().read_to_string(&mut buf) {
+                    Ok(_) if !buf.is_empty() => Some(buf),
+                    _ => None,
+                }
+            };
             let resp = service.edit(EditRequest {
                 file: file.clone(),
-                content: content.clone(),
+                content,
             });
             if let Ok(ref r) = resp {
-                if content.is_some() {
-                    println!("Edited '{}' -> new snapshot {}", file, &r.snapshot_id[..12]);
-                }
+                println!("Edited '{}' -> new snapshot {}", file, &r.snapshot_id[..12]);
                 if let Some(ref staged) = r.staged_snapshot_id {
                     println!("Merged to staged -> snapshot {}", &staged[..12]);
                 }
@@ -75,20 +84,27 @@ pub fn run_with_cli(cli: Cli) -> i32 {
             };
             match action {
                 AgentCommands::Edit { file, content } => {
+                    let content = if let Some(c) = content {
+                        Some(c.clone())
+                    } else {
+                        let mut buf = String::new();
+                        match std::io::stdin().read_to_string(&mut buf) {
+                            Ok(_) if !buf.is_empty() => Some(buf),
+                            _ => None,
+                        }
+                    };
                     let resp = service.agent_edit(AgentEditRequest {
                         agent_id: agent_id.clone(),
                         file: file.clone(),
-                        content: content.clone(),
+                        content,
                     });
                     if let Ok(ref r) = resp {
-                        if content.is_some() {
-                            println!(
-                                "Agent '{}' edited '{}' -> snapshot {}",
-                                agent_id,
-                                file,
-                                &r.snapshot_id[..12]
-                            );
-                        }
+                        println!(
+                            "Agent '{}' edited '{}' -> snapshot {}",
+                            agent_id,
+                            file,
+                            &r.snapshot_id[..12]
+                        );
                     }
                     resp.map(|_| ()).map_err(|e| e)
                 }
@@ -152,17 +168,10 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 Err(code) => return code,
             };
             let resp = service.log(LogRequest { count: Some(*count) });
-            match resp {
-                Ok(r) => {
-                    let checkpoints: Vec<crate::checkpoint::checkpoint::Checkpoint> = vec![];
-                    print_log_from_response(&r, format, checkpoints);
-                    return exit_codes::SUCCESS;
-                }
-                Err(e) => {
-                    eprintln!("error: {}", e);
-                    return exit_codes::GENERAL_ERROR;
-                }
+            if let Ok(ref r) = resp {
+                print_log_from_response(r, format);
             }
+            resp.map(|_| ()).map_err(|e| e)
         }
         Commands::Branch { action } => {
             let service = match open_service(&cli) {
@@ -172,16 +181,10 @@ pub fn run_with_cli(cli: Cli) -> i32 {
             match action {
                 BranchCommands::List => {
                     let resp = service.branch_list();
-                    match resp {
-                        Ok(r) => {
-                            print_branches_from_response(&r, format);
-                            return exit_codes::SUCCESS;
-                        }
-                        Err(e) => {
-                            eprintln!("error: {}", e);
-                            return exit_codes::GENERAL_ERROR;
-                        }
+                    if let Ok(ref r) = resp {
+                        print_branches_from_response(r, format);
                     }
+                    resp.map(|_| ()).map_err(|e| e)
                 }
                 BranchCommands::Create { name } => {
                     let resp = service.branch_create(BranchCreateRequest { name: name.clone() });
@@ -274,23 +277,17 @@ pub fn run_with_cli(cli: Cli) -> i32 {
             eprint!("  Running garbage collection ... ");
             let _ = std::io::Write::flush(&mut std::io::stderr());
             let resp = service.gc(GcRequest {});
-            match resp {
-                Ok(r) => {
-                    eprintln!("done");
-                    println!(
-                        "GC complete: {} checkpoints removed, {} snapshots freed, {} bytes",
-                        r.removed_checkpoints, r.removed_snapshots, r.freed_bytes
-                    );
-                    if r.delta_chain_depth_triggered {
-                        println!("  Note: delta chain depth exceeded threshold");
-                    }
-                    return exit_codes::SUCCESS;
-                }
-                Err(e) => {
-                    eprintln!("error: {}", e);
-                    return exit_codes::GENERAL_ERROR;
+            if let Ok(ref r) = resp {
+                eprintln!("done");
+                println!(
+                    "GC complete: {} checkpoints removed, {} snapshots freed, {} bytes",
+                    r.removed_checkpoints, r.removed_snapshots, r.freed_bytes
+                );
+                if r.delta_chain_depth_triggered {
+                    println!("  Note: delta chain depth exceeded threshold");
                 }
             }
+            resp.map(|_| ()).map_err(|e| e)
         }
         Commands::Push { remote, message } => {
             let git_repo = match &cli.git_repo {
@@ -311,17 +308,11 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 git_repo,
                 message: Some(message.clone()),
             });
-            match resp {
-                Ok(r) => {
-                    eprintln!("done");
-                    println!("Pushed to remote '{}' (commit: {})", r.remote, r.git_commit_hash);
-                    return exit_codes::SUCCESS;
-                }
-                Err(e) => {
-                    eprintln!("error: {}", e);
-                    return exit_codes::GENERAL_ERROR;
-                }
+            if let Ok(ref r) = resp {
+                eprintln!("done");
+                println!("Pushed to remote '{}' (commit: {})", r.remote, r.git_commit_hash);
             }
+            resp.map(|_| ()).map_err(|e| e)
         }
         Commands::Show { show_what, target_id } => {
             let service = match open_service(&cli) {
@@ -332,16 +323,10 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 show_what: show_what.clone(),
                 target_id: target_id.clone(),
             });
-            match resp {
-                Ok(r) => {
-                    print_show_from_response(&r, format);
-                    return exit_codes::SUCCESS;
-                }
-                Err(e) => {
-                    eprintln!("error: {}", e);
-                    return exit_codes::GENERAL_ERROR;
-                }
+            if let Ok(ref r) = resp {
+                print_show_from_response(r, format);
             }
+            resp.map(|_| ()).map_err(|e| e)
         }
         Commands::Pull { remote, git_ref } => {
             let git_repo = match &cli.git_repo {
@@ -362,17 +347,11 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 git_repo,
                 git_ref: Some(git_ref.clone()),
             });
-            match resp {
-                Ok(r) => {
-                    eprintln!("done");
-                    println!("Pulled from remote '{}' ref '{}'", r.remote, r.git_ref);
-                    return exit_codes::SUCCESS;
-                }
-                Err(e) => {
-                    eprintln!("error: {}", e);
-                    return exit_codes::GENERAL_ERROR;
-                }
+            if let Ok(ref r) = resp {
+                eprintln!("done");
+                println!("Pulled from remote '{}' ref '{}'", r.remote, r.git_ref);
             }
+            resp.map(|_| ()).map_err(|e| e)
         }
     };
 

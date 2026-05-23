@@ -10,7 +10,7 @@ use axum::{
     Router,
     routing::{get, post},
     Json,
-    extract::{Path, State, Query},
+    extract::{Path, State, Query, DefaultBodyLimit},
     response::IntoResponse,
     http::StatusCode,
 };
@@ -62,6 +62,8 @@ pub async fn serve(service: Arc<dyn ApiService>, addr: SocketAddr) -> Result<(),
         .route("/api/v1/gc", post(handle_gc))
         .route("/api/v1/push", post(handle_push))
         .route("/api/v1/pull", post(handle_pull))
+        .route("/api/v1/show", get(handle_show))
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await
@@ -184,6 +186,12 @@ struct LogQuery {
     count: Option<usize>,
 }
 
+#[derive(serde::Deserialize)]
+struct ShowQuery {
+    show_what: String,
+    target_id: Option<String>,
+}
+
 async fn handle_log(
     State(state): State<Arc<AppState>>,
     Query(query): Query<LogQuery>,
@@ -282,5 +290,19 @@ async fn handle_pull(
     match state.service.pull(req) {
         Ok(r) => ok_response(r).into_response(),
         Err(e) => err_response::<PullResponse>(e).into_response(),
+    }
+}
+
+async fn handle_show(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ShowQuery>,
+) -> impl IntoResponse {
+    let req = ShowRequest {
+        show_what: query.show_what,
+        target_id: query.target_id,
+    };
+    match state.service.show(req) {
+        Ok(r) => ok_response(r).into_response(),
+        Err(e) => err_response::<ShowResponse>(e).into_response(),
     }
 }
