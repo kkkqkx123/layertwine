@@ -59,7 +59,6 @@ P1 → P2 → P3 → P4 → P6 → P7
 | rusqlite (bundled) | SQLite storage, zero external dep                                 |
 | blake3             | Content-addressed hashing (32-byte IDs)                           |
 | serde + serde_json | Serialization for ID computation + storage                        |
-| rkyv               | Declared but **not yet used** (zero-copy deser, planned)          |
 | similar            | Line-level diff engine (v3.x, current code needs fix for 3.x API) |
 | git2               | libgit2 bindings (stub, P6)                                       |
 | chrono             | Timestamps for Deltas, Snapshots, Partitions                      |

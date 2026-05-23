@@ -81,6 +81,16 @@ pub enum Commands {
         count: usize,
     },
 
+    /// Show diff for a target (staged, checkpoint, partition)
+    #[command(name = "show")]
+    Show {
+        /// Target to show diff for
+        show_what: String,
+        /// Target ID (optional)
+        #[arg(short = 'i', long = "id")]
+        target_id: Option<String>,
+    },
+
     /// Branch operations
     #[command(name = "branch")]
     Branch {

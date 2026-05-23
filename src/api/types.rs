@@ -210,6 +210,26 @@ pub struct PullRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GcRequest {}
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShowRequest {
+    pub show_what: String,
+    pub target_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShowResponse {
+    pub target: String,
+    pub diffs: Vec<FileDiff>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileDiff {
+    pub file_path: String,
+    pub unified_diff: String,
+    pub inserts: usize,
+    pub deletes: usize,
+}
+
 // ── Response types ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

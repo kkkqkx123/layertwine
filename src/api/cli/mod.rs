@@ -27,7 +27,6 @@ pub fn run_with_cli(cli: Cli) -> i32 {
         Commands::Init { git_ref } => {
             let service = match ApiServiceImpl::open(ServiceConfig {
                 db_path: cli.db_path.clone(),
-                git_repo: cli.git_repo.clone(),
             }) {
                 Ok(s) => Arc::new(s) as Arc<dyn ApiService>,
                 Err(e) => {
@@ -324,6 +323,26 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 }
             }
         }
+        Commands::Show { show_what, target_id } => {
+            let service = match open_service(&cli) {
+                Ok(s) => s,
+                Err(code) => return code,
+            };
+            let resp = service.show(ShowRequest {
+                show_what: show_what.clone(),
+                target_id: target_id.clone(),
+            });
+            match resp {
+                Ok(r) => {
+                    print_show_from_response(&r, format);
+                    return exit_codes::SUCCESS;
+                }
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    return exit_codes::GENERAL_ERROR;
+                }
+            }
+        }
         Commands::Pull { remote, git_ref } => {
             let git_repo = match &cli.git_repo {
                 Some(p) => p.clone(),
@@ -369,7 +388,6 @@ pub fn run_with_cli(cli: Cli) -> i32 {
 fn open_service(cli: &Cli) -> std::result::Result<Arc<dyn ApiService>, i32> {
     match ApiServiceImpl::open(ServiceConfig {
         db_path: cli.db_path.clone(),
-        git_repo: cli.git_repo.clone(),
     }) {
         Ok(s) => Ok(Arc::new(s)),
         Err(e) => {

@@ -5,11 +5,11 @@ use crate::backup::backup_repo::BackupRepo;
 use crate::checkpoint::branch::Branch;
 use crate::checkpoint::checkpoint::Checkpoint;
 use crate::checkpoint::repo::CheckpointRepo;
-use crate::core::delta::Delta;
+use crate::core::delta::{Delta, LineDiff};
 use crate::core::file_node::FileNode;
 use crate::core::snapshot::Snapshot;
 use crate::core::types::{
-    AgentInstanceId, ContentId, PartitionType, SnapshotId, SourceType,
+    AgentInstanceId, ContentId, DiffOp, PartitionType, SnapshotId, SourceType,
 };
 use crate::error::{Result as StratumResult, StratumError};
 use crate::git_sync::gc::collect_garbage;
@@ -27,14 +27,12 @@ use super::types::*;
 #[derive(Debug, Clone)]
 pub struct ServiceConfig {
     pub db_path: String,
-    pub git_repo: Option<String>,
 }
 
 impl Default for ServiceConfig {
     fn default() -> Self {
         ServiceConfig {
             db_path: ".stratum/stratum.db".into(),
-            git_repo: None,
         }
     }
 }
@@ -61,6 +59,7 @@ pub trait ApiService: Send + Sync {
     fn gc(&self, _req: GcRequest) -> ApiResult<GcResponse>;
     fn push(&self, req: PushRequest) -> ApiResult<PushResponse>;
     fn pull(&self, req: PullRequest) -> ApiResult<PullResponse>;
+    fn show(&self, req: ShowRequest) -> ApiResult<ShowResponse>;
 }
 
 // ── Helpers ──
@@ -149,7 +148,6 @@ pub struct ApiServiceImpl {
     storage: Arc<SqliteStorage>,
     state_machine: StateMachine,
     db_path: String,
-    git_repo: Option<String>,
 }
 
 impl ApiServiceImpl {
@@ -161,7 +159,130 @@ impl ApiServiceImpl {
             storage,
             state_machine,
             db_path: config.db_path,
-            git_repo: config.git_repo,
+        })
+    }
+
+    /// Reconstruct text from a snapshot by its ID
+    fn reconstruct_text_from_id(&self, snapshot_id: &SnapshotId) -> ApiResult<String> {
+        let snapshot = self.storage.get_snapshot(snapshot_id)
+            .map_err(|e| map_error(StratumError::Storage(e)))?;
+        crate::state_machine::transition::reconstruct_text(self.storage.as_ref(), &snapshot)
+            .map_err(map_error)
+    }
+
+    /// Get the "before" text from the last checkpoint (or empty string if none)
+    fn last_checkpoint_text(&self) -> String {
+        match self.storage.list_checkpoints() {
+            Ok(cps) if !cps.is_empty() => {
+                let cp = &cps[0];
+                cp.baseline_snapshots.first()
+                    .and_then(|sid| self.reconstruct_text_from_id(sid).ok())
+                    .unwrap_or_default()
+            }
+            _ => String::new(),
+        }
+    }
+
+    /// Compute diff stats from a LineDiff
+    fn diff_stats(diff: &LineDiff) -> (usize, usize) {
+        let mut inserts = 0usize;
+        let mut deletes = 0usize;
+        for hunk in &diff.hunks {
+            for op in &hunk.ops {
+                match op {
+                    DiffOp::Insert { lines, .. } => inserts += lines.len(),
+                    DiffOp::Delete { count, .. } => deletes += *count as usize,
+                    DiffOp::Replace { old_count, lines, .. } => {
+                        deletes += *old_count as usize;
+                        inserts += lines.len();
+                    }
+                    DiffOp::Equal { .. } => {}
+                }
+            }
+        }
+        (inserts, deletes)
+    }
+
+    /// Show staged changes vs last committed checkpoint
+    fn show_staged(&self) -> ApiResult<ShowResponse> {
+        let staged_pid = crate::state_machine::staged::staged_partition_id();
+        let staged_partition = self.storage.get_partition(&staged_pid)
+            .map_err(|e| map_error(StratumError::Storage(e)))?;
+        let staged_snapshot = self.storage.get_snapshot(&staged_partition.current_snapshot)
+            .map_err(|e| map_error(StratumError::Storage(e)))?;
+
+        let new_text = self.reconstruct_text_from_id(&staged_partition.current_snapshot)?;
+        let old_text = self.last_checkpoint_text();
+        let file_path = staged_snapshot.file.path_str().to_string();
+
+        let unified_diff = crate::engine::diff::format_unified_diff(&old_text, &new_text, 3);
+        let line_diff = crate::engine::diff::diff_to_line_diff(&old_text, &new_text);
+        let (inserts, deletes) = Self::diff_stats(&line_diff);
+
+        Ok(ShowResponse {
+            target: "staged".into(),
+            diffs: vec![FileDiff { file_path, unified_diff, inserts, deletes }],
+        })
+    }
+
+    /// Show diff for a checkpoint vs its parent
+    fn show_checkpoint(&self, id_str: &str) -> ApiResult<ShowResponse> {
+        let cp_id = ContentId::from_hex(id_str)
+            .ok_or_else(|| ApiError::invalid_params(format!("invalid checkpoint ID '{}'", id_str)))?;
+        let checkpoint = self.storage.get_checkpoint(&cp_id)
+            .map_err(|e| map_error(StratumError::Storage(e)))?;
+
+        // "After" text from the checkpoint's baseline snapshot
+        let new_snapshot_id = checkpoint.baseline_snapshots.first()
+            .ok_or_else(|| ApiError::internal("checkpoint has no baseline snapshots"))?;
+        let new_snapshot = self.storage.get_snapshot(new_snapshot_id)
+            .map_err(|e| map_error(StratumError::Storage(e)))?;
+        let new_text = self.reconstruct_text_from_id(new_snapshot_id)?;
+        let file_path = new_snapshot.file.path_str().to_string();
+
+        // "Before" text from the parent checkpoint's baseline snapshot
+        let old_text = match checkpoint.parents.first() {
+            Some(parent_id) => {
+                match self.storage.get_checkpoint(parent_id) {
+                    Ok(parent_cp) => {
+                        parent_cp.baseline_snapshots.first()
+                            .and_then(|sid| self.reconstruct_text_from_id(sid).ok())
+                            .unwrap_or_default()
+                    }
+                    Err(_) => String::new(),
+                }
+            }
+            None => String::new(),
+        };
+
+        let unified_diff = crate::engine::diff::format_unified_diff(&old_text, &new_text, 3);
+        let line_diff = crate::engine::diff::diff_to_line_diff(&old_text, &new_text);
+        let (inserts, deletes) = Self::diff_stats(&line_diff);
+
+        Ok(ShowResponse {
+            target: format!("checkpoint:{}", id_str),
+            diffs: vec![FileDiff { file_path, unified_diff, inserts, deletes }],
+        })
+    }
+
+    /// Show diff for a partition vs last checkpoint
+    fn show_partition(&self, name: &str) -> ApiResult<ShowResponse> {
+        let partition = self.storage.get_partition_by_name(name)
+            .map_err(|_| ApiError::not_found(format!("partition '{}'", name)))?;
+
+        let snapshot = self.storage.get_snapshot(&partition.current_snapshot)
+            .map_err(|e| map_error(StratumError::Storage(e)))?;
+        let new_text = self.reconstruct_text_from_id(&partition.current_snapshot)?;
+        let file_path = snapshot.file.path_str().to_string();
+        let old_text = self.last_checkpoint_text();
+
+        let unified_diff = crate::engine::diff::format_unified_diff(&old_text, &new_text, 3);
+        let line_diff = crate::engine::diff::diff_to_line_diff(&old_text, &new_text);
+        let (inserts, deletes) = Self::diff_stats(&line_diff);
+
+        Ok(ShowResponse {
+            target: format!("partition:{}", name),
+            diffs: vec![FileDiff { file_path, unified_diff, inserts, deletes }],
         })
     }
 }
@@ -581,5 +702,25 @@ impl ApiService for ApiServiceImpl {
             remote,
             git_ref,
         })
+    }
+
+    fn show(&self, req: ShowRequest) -> ApiResult<ShowResponse> {
+        match req.show_what.as_str() {
+            "staged" => self.show_staged(),
+            "checkpoint" => {
+                let id = req.target_id.as_deref()
+                    .ok_or_else(|| ApiError::invalid_params("checkpoint ID required for 'checkpoint' target"))?;
+                self.show_checkpoint(id)
+            }
+            "partition" => {
+                let name = req.target_id.as_deref()
+                    .ok_or_else(|| ApiError::invalid_params("partition name required for 'partition' target"))?;
+                self.show_partition(name)
+            }
+            other => Err(ApiError::invalid_params(format!(
+                "unknown show target '{}'. Use 'staged', 'checkpoint', or 'partition'",
+                other
+            ))),
+        }
     }
 }

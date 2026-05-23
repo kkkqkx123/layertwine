@@ -157,6 +157,22 @@ pub fn print_diff(delta: &Delta, format: OutputFormat) {
     }
 }
 
+/// Print show response (unified diff display)
+pub fn print_show_from_response(resp: &ShowResponse, format: OutputFormat) {
+    match format {
+        OutputFormat::Plain => {
+            for diff in &resp.diffs {
+                println!("--- a/{}", diff.file_path);
+                println!("+++ b/{}", diff.file_path);
+                println!("{}", diff.unified_diff);
+            }
+        }
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(resp).unwrap());
+        }
+    }
+}
+
 fn print_line_diff(diff: &LineDiff) {
     for hunk in &diff.hunks {
         println!(
