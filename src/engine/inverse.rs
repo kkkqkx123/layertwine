@@ -107,17 +107,37 @@ pub fn inverse_delta(delta: &Delta, old_content: Option<&str>) -> Result<Delta> 
 
 /// Generate a reverse Delta list for Snapshot's incremental chains
 ///
-/// You need to provide the old content that corresponds to each phase when building the snapshot.
-/// Generate a reverse Delta from the newest to the oldest, so that the sequential application returns to the initial state.
+/// Takes a Snapshot and its corresponding Deltas (ordered oldest → newest) plus the old content
+/// for each Delta when it was applied. Returns inverse Deltas in reverse order (newest → oldest),
+/// so that applying them sequentially undoes all changes back to the initial state.
+///
+/// Each `old_contents[i]` must be the file content BEFORE `deltas[i]` was applied.
 pub fn inverse_snapshot(
-    _snapshot: &crate::core::snapshot::Snapshot,
-    _contents: &[&str],
+    snapshot: &crate::core::snapshot::Snapshot,
+    deltas: &[Delta],
+    old_contents: &[&str],
 ) -> Result<Vec<Delta>> {
-    // This function needs to read from the storage layer to build the reverse chain
-    // Currently returns an empty list (placeholder), actual use requires integration with the storage layer
-    Err(StratumError::Engine(
-        "inverse_snapshot Not yet fully implemented: requires the storage layer to provide the contents of each version".to_string(),
-    ))
+    if deltas.len() != snapshot.deltas.len() {
+        return Err(StratumError::Engine(format!(
+            "deltas length ({}) does not match snapshot delta chain length ({})",
+            deltas.len(),
+            snapshot.deltas.len()
+        )));
+    }
+    if old_contents.len() != deltas.len() {
+        return Err(StratumError::Engine(format!(
+            "old_contents length ({}) does not match deltas length ({})",
+            old_contents.len(),
+            deltas.len()
+        )));
+    }
+
+    deltas
+        .iter()
+        .zip(old_contents.iter())
+        .rev()
+        .map(|(delta, content)| inverse_delta(delta, Some(content)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -366,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn test_inverse_snapshot_error() {
+    fn test_inverse_snapshot_empty_chain() {
         let file_node = FileNode::new(PathBuf::from("test.txt"), b"content");
         let empty_diff = LineDiff::new(vec![]);
         let delta = Delta::new(file_node, empty_diff, SourceType::Manual);
@@ -374,8 +394,43 @@ mod tests {
             delta.file.clone(),
             delta.id,
         );
-        let result = inverse_snapshot(&snapshot, &[]);
-        assert!(result.is_err(), "inverse_snapshot should return error (not yet implemented)");
+        let result = inverse_snapshot(&snapshot, &[delta], &[""]);
+        assert!(result.is_ok(), "inverse_snapshot should succeed");
+        let inverses = result.unwrap();
+        assert_eq!(inverses.len(), 1, "a single empty delta produces one trivial inverse");
+        assert!(inverses[0].diff.is_empty(), "inverse of empty delta should also be empty");
+    }
+
+    #[test]
+    fn test_inverse_snapshot_mismatched_length() {
+        let file_node = FileNode::new(PathBuf::from("test.txt"), b"content");
+        let empty_diff = LineDiff::new(vec![]);
+        let delta = Delta::new(file_node, empty_diff, SourceType::Manual);
+        let snapshot = crate::core::snapshot::Snapshot::new_initial(
+            delta.file.clone(),
+            delta.id,
+        );
+        let result = inverse_snapshot(&snapshot, &[], &[]);
+        assert!(result.is_err(), "mismatched lengths should error");
+    }
+
+    #[test]
+    fn test_inverse_snapshot_chain() {
+        let content0 = "a\nb\nc\n";
+        let content1 = "a\nX\nc\n";
+        let file = FileNode::new(PathBuf::from("test.txt"), b"");
+
+        let diff1 = diff_to_line_diff(content0, content1);
+        let delta1 = Delta::new(file.clone(), diff1, SourceType::Manual);
+
+        let snapshot = crate::core::snapshot::Snapshot::new_initial(
+            file.clone(),
+            delta1.id,
+        );
+
+        // snapshot has one delta, inverse should undo it
+        let result = inverse_snapshot(&snapshot, &[delta1], &[content0]).unwrap();
+        assert_eq!(result.len(), 1, "should produce one inverse delta");
     }
 
     #[test]

@@ -8,8 +8,10 @@ use crate::backup::backup_snapshot::{BackupFilter, BackupSnapshot};
 use crate::core::delta::Delta;
 use crate::core::snapshot::Snapshot;
 use crate::core::types::{BackupId, ContentId, SnapshotId};
+use crate::engine::diff::diff_to_line_diff;
+use crate::engine::merge::apply_deltas;
 use crate::error::{Result, StratumError};
-use crate::storage::repository::{DeltaStore, PartitionStore, SnapshotStore};
+use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
 use crate::{StorageError, StorageResult};
 
 const BACKUP_MIGRATION_SQL: &str = "
@@ -87,7 +89,7 @@ impl BackupRepo {
         let metadata_json = serde_json::to_vec(&backup.metadata)?;
 
         conn.execute(
-            "INSERT OR IGNORE INTO backup_snapshots (id, source_snapshot, file_path, file_hash, deltas, label, backed_at, metadata, agent_id, source_type)
+            "INSERT INTO backup_snapshots (id, source_snapshot, file_path, file_hash, deltas, label, backed_at, metadata, agent_id, source_type)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 &backup.id.0.to_vec(),
@@ -300,7 +302,7 @@ impl BackupRepo {
 
     pub fn merge_to_staged<S>(&self, backup_id: &BackupId, core_repo: &S) -> Result<SnapshotId>
     where
-        S: SnapshotStore + DeltaStore + PartitionStore,
+        S: SnapshotStore + DeltaStore + PartitionStore + FileNodeStore,
     {
         let backup = self.get_backup(backup_id)?;
 
@@ -311,7 +313,6 @@ impl BackupRepo {
                 backup.deltas.clone(),
                 backup.label.clone(),
             );
-            // Preserve original backed_at so the recomputed ID matches
             recomputed.backed_at = backup.backed_at;
             if let Some(agent_id) = &backup.agent_id {
                 recomputed = recomputed.with_agent_id(agent_id);
@@ -327,41 +328,48 @@ impl BackupRepo {
             ));
         }
 
-        let source_snapshot = core_repo
-            .get_snapshot(&backup.source_snapshot)
-            .map_err(|e| StratumError::Storage(e))?;
+        fn strip_trailing_newline(s: &str) -> &str {
+            s.strip_suffix('\n').unwrap_or(s)
+        }
 
-        let staged_partition = core_repo
-            .get_partition_by_name("staged")
-            .map_err(|e| StratumError::Storage(e))?;
+        // Step 1: Reconstruct the backed-up file content
+        let base_content = core_repo.get_file_content(&backup.file)?;
+        let base_str = String::from_utf8(base_content)
+            .map_err(|e| StratumError::General(format!("non-utf8 file content: {}", e)))?;
+        // Normalise trailing newlines - apply_deltas uses .lines() which strips them
+        let base_str = strip_trailing_newline(&base_str).to_string();
+        let backup_text = apply_deltas(&base_str, &backup.deltas)?;
 
-        let staged_snapshot = core_repo
-            .get_snapshot(&staged_partition.current_snapshot)
-            .map_err(|e| StratumError::Storage(e))?;
+        // Step 2: Get current staged content
+        let staged_partition = core_repo.get_partition_by_name("staged")?;
+        let staged_snapshot = core_repo.get_snapshot(&staged_partition.current_snapshot)?;
+        let staged_base = core_repo.get_file_content(&staged_snapshot.file)?;
+        let staged_base_str = String::from_utf8(staged_base)
+            .map_err(|e| StratumError::General(format!("non-utf8 file content: {}", e)))?;
+        let staged_deltas = core_repo.get_deltas(&staged_snapshot.deltas)?;
+        let staged_text = apply_deltas(strip_trailing_newline(&staged_base_str), &staged_deltas)?;
 
-        let merge_delta = Delta::new(
-            backup.file.clone(),
-            crate::core::delta::LineDiff::new(vec![]),
-            crate::core::types::SourceType::Backup,
-        );
+        // Step 3: Three-way merge
+        //   base = original file content (common ancestor)
+        //   ours = current staged content
+        //   theirs = backed-up content
+        let (merged_text, _conflicts) =
+            crate::engine::merge::merge_texts(&base_str, &staged_text, &backup_text);
 
+        // Step 4: Compute diff from base to merged result, create delta
+        let diff = diff_to_line_diff(&base_str, &merged_text);
+        let merge_delta = Delta::new(backup.file.clone(), diff, crate::core::types::SourceType::Backup);
+        core_repo.store_delta(&merge_delta)?;
+
+        // Step 5: Create merge snapshot with both parents
+        let source_snapshot = core_repo.get_snapshot(&backup.source_snapshot)?;
         let merged = Snapshot::merge(
             vec![&staged_snapshot, &source_snapshot],
             merge_delta.id,
             "staged".to_string(),
         );
-
-        core_repo
-            .store_snapshot(&merged, &[])
-            .map_err(|e| StratumError::Storage(e))?;
-
-        core_repo
-            .store_delta(&merge_delta)
-            .map_err(|e| StratumError::Storage(e))?;
-
-        core_repo
-            .update_pointer(&staged_partition.id, &merged.id)
-            .map_err(|e| StratumError::Storage(e))?;
+        core_repo.store_snapshot(&merged, &[])?;
+        core_repo.update_pointer(&staged_partition.id, &merged.id)?;
 
         Ok(merged.id)
     }
@@ -373,7 +381,7 @@ mod tests {
     use crate::core::delta::LineDiff;
     use crate::core::file_node::FileNode;
     use crate::core::snapshot::Snapshot;
-    use crate::core::types::SourceType;
+    use crate::core::types::{DeltaId, SnapshotId, SourceType};
     use crate::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
     use crate::storage::sqlite_storage::SqliteStorage;
     use std::path::PathBuf;
@@ -471,29 +479,139 @@ mod tests {
         assert_eq!(backup_repo.count().unwrap(), 0);
     }
 
+    /// Create a file node + delta + snapshot in a realistic chain.
+    /// Returns (file_node, delta_id, snapshot_id).
+    fn create_initial_snapshot(
+        store: &SqliteStorage,
+        path: &str,
+        content: &[u8],
+        source_type: SourceType,
+    ) -> (FileNode, DeltaId, SnapshotId) {
+        let file_node = FileNode::new(PathBuf::from(path), content);
+        store.store_file_node(&file_node, content).unwrap();
+
+        let diff = LineDiff::new(vec![]);
+        let delta = Delta::new(file_node.clone(), diff, source_type);
+        store.store_delta(&delta).unwrap();
+
+        let snapshot = Snapshot::new_initial(file_node.clone(), delta.id);
+        store.store_snapshot(&snapshot, content).unwrap();
+
+        (file_node, delta.id, snapshot.id)
+    }
+
+    /// Create a child snapshot from a parent with a real text edit diff.
+    fn create_edited_snapshot(
+        store: &SqliteStorage,
+        parent_id: SnapshotId,
+        file_node: &FileNode,
+        old_text: &str,
+        new_text: &str,
+        partition_type: &str,
+    ) -> (DeltaId, SnapshotId) {
+        let diff = diff_to_line_diff(old_text, new_text);
+        let delta = Delta::new(file_node.clone(), diff, SourceType::Manual);
+        store.store_delta(&delta).unwrap();
+
+        let parent = store.get_snapshot(&parent_id).unwrap();
+        let snapshot = Snapshot::from_parent(&parent, delta.id, partition_type.to_string());
+        store.store_snapshot(&snapshot, &[]).unwrap();
+
+        (delta.id, snapshot.id)
+    }
+
     #[test]
     fn test_merge_to_staged() {
         let core = setup_core_repo();
         let backup_repo = BackupRepo::new_in_memory().unwrap();
 
-        let initial_snap_id =
-            create_test_snapshot(&core, "file.txt", b"initial", SourceType::Manual);
-        create_staged_partition(&core, initial_snap_id);
+        // Setup: initial file content "a\nb\nc\n"
+        let (file_node, _delta_id, initial_id) =
+            create_initial_snapshot(&core, "file.txt", b"a\nb\nc\n", SourceType::Manual);
+        create_staged_partition(&core, initial_id);
 
-        let backup_snap_id =
-            create_test_snapshot(&core, "file.txt", b"modified", SourceType::Manual);
+        // Staged advances: edit "b" → "B" (diverges from backup branch)
+        let (_staged_delta_id, staged_id) = create_edited_snapshot(
+            &core,
+            initial_id,
+            &file_node,
+            "a\nb\nc\n",
+            "a\nB\nc\n",
+            "staged",
+        );
+        let staged_partition = core.get_partition_by_name("staged").unwrap();
+        core.update_pointer(&staged_partition.id, &staged_id).unwrap();
+
+        // Backup branch: edit "c" → "C"
+        let (_backup_delta_id, backup_snap_id) = create_edited_snapshot(
+            &core,
+            initial_id,
+            &file_node,
+            "a\nb\nc\n",
+            "a\nb\nC\n",
+            "manual",
+        );
+
         let backup_id = backup_repo
             .backup_snapshot(&core, backup_snap_id, Some("merge-test".to_string()))
             .unwrap();
 
+        // Restore: merge backup into staged
         let merged_id = backup_repo.merge_to_staged(&backup_id, &core).unwrap();
 
         let staged = core.get_partition_by_name("staged").unwrap();
         assert_eq!(staged.current_snapshot, merged_id);
 
         let merged_snapshot = core.get_snapshot(&merged_id).unwrap();
-        assert!(merged_snapshot.parents.contains(&initial_snap_id));
+        assert!(merged_snapshot.parents.contains(&staged_id));
         assert!(merged_snapshot.parents.contains(&backup_snap_id));
+        assert!(!merged_snapshot.parents.contains(&initial_id));
+
+        // Verify content combines both edits
+        let merged_base = core.get_file_content(&merged_snapshot.file).unwrap();
+        let merged_deltas = core.get_deltas(&merged_snapshot.deltas).unwrap();
+        let merged_content =
+            apply_deltas(&String::from_utf8(merged_base).unwrap(), &merged_deltas).unwrap();
+        assert_eq!(merged_content, "a\nB\nC");
+    }
+
+    #[test]
+    fn test_restore_from_backup_reconstructs_content() {
+        let core = setup_core_repo();
+        let backup_repo = BackupRepo::new_in_memory().unwrap();
+
+        // Setup: initial file content "line1\nline2\nline3\n"
+        let (file_node, _delta_id, initial_id) =
+            create_initial_snapshot(&core, "restore.txt", b"line1\nline2\nline3\n", SourceType::Manual);
+        create_staged_partition(&core, initial_id);
+
+        // Create a backup snapshot: edit "line2" → "modified"
+        let (_delta_id, backup_id) = create_edited_snapshot(
+            &core,
+            initial_id,
+            &file_node,
+            "line1\nline2\nline3\n",
+            "line1\nmodified\nline3\n",
+            "manual",
+        );
+
+        let backup_id = backup_repo
+            .backup_snapshot(&core, backup_id, Some("restore-test".to_string()))
+            .unwrap();
+
+        // Staged remains at initial, no divergence
+        let merged_id = backup_repo.merge_to_staged(&backup_id, &core).unwrap();
+
+        // Verify content matches the backed-up state
+        let staged = core.get_partition_by_name("staged").unwrap();
+        assert_eq!(staged.current_snapshot, merged_id);
+
+        let merged_snapshot = core.get_snapshot(&merged_id).unwrap();
+        let merged_base = core.get_file_content(&merged_snapshot.file).unwrap();
+        let merged_deltas = core.get_deltas(&merged_snapshot.deltas).unwrap();
+        let merged_content =
+            apply_deltas(&String::from_utf8(merged_base).unwrap(), &merged_deltas).unwrap();
+        assert_eq!(merged_content, "line1\nmodified\nline3");
     }
 
     #[test]

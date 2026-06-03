@@ -151,8 +151,8 @@ pub fn merge_texts(base: &str, ours: &str, theirs: &str) -> (String, Vec<MergeCo
     let mut our_changes: Vec<ChangeRange> = Vec::new();
     let mut their_changes: Vec<ChangeRange> = Vec::new();
 
-    collect_changes_from_diff(&diff_ours, &ours_lines, &mut our_changes);
-    collect_changes_from_diff(&diff_theirs, &theirs_lines, &mut their_changes);
+    extract_changes_from_line_diff(&diff_ours, &ours_lines, &mut our_changes);
+    extract_changes_from_line_diff(&diff_theirs, &theirs_lines, &mut their_changes);
 
     // Merge changes on both sides (using jj-like line-by-line markup)
     let mut result: Vec<String> = Vec::new();
@@ -252,11 +252,11 @@ struct ChangeRange {
     new_lines: Vec<String>,
 }
 
-/// Collecting changes from LineDiff (our internal type)
+/// Extracting changes from LineDiff into ChangeRange list
 ///
 /// Skips the Equal context and extracts only the actual change area (Delete/Insert/Replace).
 /// Each hunk may generate multiple ChangeRanges (Equal segregated multiple change segments).
-fn collect_changes_from_diff(
+fn extract_changes_from_line_diff(
     diff: &LineDiff,
     _new_lines: &[&str],
     changes: &mut Vec<ChangeRange>,

@@ -94,7 +94,7 @@ pub fn diff_to_line_diff(old: &str, new: &str) -> LineDiff {
 /// Gather all changes from diff and build the complete Delta
 ///
 /// Use iter_all_changes() to iterate over all row changes and construct a Delta containing the full content mapping.
-pub fn collect_changes_from_diff<'a>(
+fn collect_changes_from_diff<'a>(
     diff: &'a TextDiff<'a, 'a, str>,
     path: PathBuf,
     old_content: &[u8],
