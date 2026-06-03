@@ -71,9 +71,15 @@ impl Checkpoint {
     }
 
     /// Content-based ID calculation (content addressing)
+    ///
+    /// Excludes `created_at` and `git_anchor` from the hash:
+    /// - `created_at` is a runtime timestamp, not content
+    /// - `git_anchor` is post-hoc external metadata set after push,
+    ///   not part of the checkpoint's intrinsic content identity
     pub fn compute_id(&self) -> CheckpointId {
         let mut clone = self.clone();
-        clone.created_at = 0; // Exclude timestamp from content hash
+        clone.created_at = 0;
+        clone.metadata.git_anchor = None;
         let json = serde_json::to_vec(&clone).unwrap_or_default();
         CheckpointId::from_content(&json)
     }

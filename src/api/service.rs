@@ -661,15 +661,22 @@ impl ApiService for ApiServiceImpl {
         let remote = req.remote.unwrap_or_else(|| "origin".into());
         let message = req.message.unwrap_or_else(|| "sync from stratum".into());
 
-        let repo = load_checkpoint_repo(self.storage.as_ref()).map_err(map_error)?;
+        let mut repo = load_checkpoint_repo(self.storage.as_ref()).map_err(map_error)?;
+        let branch_name = repo.current_branch_name().to_string();
         let git_hash = GitBridge::push_to_remote(
             self.storage.as_ref(),
             Path::new(&req.git_repo),
-            &repo,
-            repo.current_branch_name(),
+            &mut repo,
+            &branch_name,
             &remote,
             &message,
         ).map_err(map_error)?;
+
+        // Persist the updated git_anchor and DAG
+        for cp in repo.checkpoints.values() {
+            let _ = self.storage.store_checkpoint(cp);
+        }
+        let _ = self.storage.store_dag(&repo.checkpoint_dag);
 
         Ok(PushResponse {
             remote,

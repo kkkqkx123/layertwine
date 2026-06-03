@@ -88,18 +88,17 @@ impl GitBridge {
             .unwrap_or(&default_msg)
             .trim();
 
-        // Use commit() to insert the checkpoint with the current head as parent,
-        // then update the git_anchor on the resulting checkpoint
-        let cp_id_result = checkpoint_repo.commit(
+        // Commit the baseline snapshots, then set git_anchor.
+        // git_anchor is excluded from content-addressed hashing, so
+        // setting it here does NOT invalidate the checkpoint ID.
+        let cp_id = checkpoint_repo.commit(
             snapshots.iter().map(|s| s.id).collect(),
             commit_msg,
             author_name,
         )?;
 
-        // Update the git_anchor on the newly created checkpoint
-        if let Ok(cp) = checkpoint_repo.get_checkpoint_mut(&cp_id_result) {
+        if let Ok(cp) = checkpoint_repo.get_checkpoint_mut(&cp_id) {
             cp.metadata.git_anchor = Some(git_commit_hash);
-            cp.id = cp.compute_id();
         }
 
         Ok(())
@@ -113,7 +112,7 @@ impl GitBridge {
     pub fn push_to_git<S>(
         storage: &S,
         git_repo_path: &Path,
-        checkpoint_repo: &CheckpointRepo,
+        checkpoint_repo: &mut CheckpointRepo,
         branch_name: &str,
         message: &str,
     ) -> Result<String>
@@ -217,7 +216,13 @@ impl GitBridge {
                 .map_err(|e| StratumError::GitSync(format!("failed to commit: {}", e)))?
         };
 
-        Ok(git_commit.to_string())
+        let git_commit_hash = git_commit.to_string();
+
+        if let Ok(cp) = checkpoint_repo.get_checkpoint_mut(&checkpoint_id) {
+            cp.metadata.git_anchor = Some(git_commit_hash.clone());
+        }
+
+        Ok(git_commit_hash)
     }
 
     /// Compare the status between the Git repo HEAD and the checkpoint repo baseline.
@@ -297,7 +302,7 @@ impl GitBridge {
     pub fn push_to_remote<S>(
         storage: &S,
         git_repo_path: &Path,
-        checkpoint_repo: &CheckpointRepo,
+        checkpoint_repo: &mut CheckpointRepo,
         branch_name: &str,
         remote_name: &str,
         message: &str,
@@ -305,7 +310,7 @@ impl GitBridge {
     where
         S: SnapshotStore + DeltaStore + FileNodeStore,
     {
-        // First commit to the local Git repo
+        // First commit to the local Git repo (also updates git_anchor)
         let git_hash = Self::push_to_git(storage, git_repo_path, checkpoint_repo, branch_name, message)?;
 
         let git_repo = git2::Repository::open(git_repo_path)
@@ -504,7 +509,7 @@ mod tests {
         let result = GitBridge::push_to_git(
             &storage,
             &git_path,
-            &checkpoint_repo,
+            &mut checkpoint_repo,
             "main",
             "push from stratum",
         );
@@ -669,9 +674,8 @@ mod tests {
         let head = checkpoint_repo.current_branch_head();
         let cp = checkpoint_repo.get_checkpoint_mut(&head).unwrap();
         cp.baseline_snapshots.clear();
-        cp.id = cp.compute_id();
 
-        let result = GitBridge::push_to_git(&storage, &git_path, &checkpoint_repo, "main", "empty push");
+        let result = GitBridge::push_to_git(&storage, &git_path, &mut checkpoint_repo, "main", "empty push");
         assert!(result.is_err(), "push with empty checkpoint should fail");
     }
 
@@ -692,9 +696,9 @@ mod tests {
         let snapshot = Snapshot::new_initial(file_node, delta.id);
         storage.store_snapshot(&snapshot, content).unwrap();
 
-        let checkpoint_repo = CheckpointRepo::new_single(snapshot.id);
+        let mut checkpoint_repo = CheckpointRepo::new_single(snapshot.id);
 
-        let result = GitBridge::push_to_git(&storage, &git_path, &checkpoint_repo, "nonexistent-branch", "push");
+        let result = GitBridge::push_to_git(&storage, &git_path, &mut checkpoint_repo, "nonexistent-branch", "push");
         assert!(result.is_err(), "push to non-existent branch should fail");
     }
 }

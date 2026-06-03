@@ -34,23 +34,26 @@ impl Default for GCStats {
 /// Collect all protected checkpoints that must never be removed.
 ///
 /// Protected set includes:
-/// 1. All branch head checkpoints and their ancestors (by parent chain)
+/// 1. All branch head checkpoints and their ancestors (via BFS over all parents)
 /// 2. All checkpoints bound to a git_anchor
 pub fn collect_protected_checkpoints(repo: &CheckpointRepo) -> HashSet<CheckpointId> {
     let mut protected = HashSet::new();
 
-    // All branch heads and their ancestors
+    // All branch heads and their ancestors (traverse ALL parents, not just first)
     for branch in repo.list_branches() {
-        let mut current = branch.head;
-        loop {
-            protected.insert(current);
-            if let Ok(cp) = repo.get_checkpoint(&current) {
-                if cp.parents.is_empty() {
-                    break;
+        let mut queue: VecDeque<CheckpointId> = VecDeque::new();
+        queue.push_back(branch.head);
+
+        while let Some(id) = queue.pop_front() {
+            if !protected.insert(id) {
+                continue;
+            }
+            if let Ok(cp) = repo.get_checkpoint(&id) {
+                for parent in &cp.parents {
+                    if !protected.contains(parent) {
+                        queue.push_back(*parent);
+                    }
                 }
-                current = cp.parents[0];
-            } else {
-                break;
             }
         }
     }
@@ -117,11 +120,6 @@ pub fn collect_garbage(repo: &mut CheckpointRepo) -> Result<GCStats> {
     for cp_id in &all_checkpoints {
         if to_keep.contains(cp_id) {
             continue;
-        }
-
-        if let Ok(cp) = repo.get_checkpoint(cp_id) {
-            stats.freed_bytes += std::mem::size_of_val(cp) as u64;
-            stats.removed_snapshots += 1;
         }
 
         if repo.remove_checkpoint(cp_id).is_ok() {
