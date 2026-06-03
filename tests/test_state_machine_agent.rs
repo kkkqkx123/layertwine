@@ -5,9 +5,9 @@ use stratum::core::file_node::FileNode;
 use stratum::core::partition::Partition;
 use stratum::core::snapshot::Snapshot;
 use stratum::core::types::{AgentInstanceId, PartitionType, SnapshotId, SourceType};
-use stratum::state_machine::agent;
-use stratum::state_machine::approval;
-use stratum::state_machine::transition::reconstruct_text;
+use stratum::layered::agent;
+use stratum::layered::approval;
+use stratum::layered::transition::reconstruct_text;
 use stratum::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
 use stratum::storage::sqlite_storage::SqliteStorage;
 

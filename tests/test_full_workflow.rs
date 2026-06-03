@@ -2,9 +2,9 @@ mod common;
 
 use stratum::core::partition::Partition;
 use stratum::core::types::{AgentInstanceId, PartitionType};
-use stratum::state_machine::agent;
-use stratum::state_machine::approval;
-use stratum::state_machine::manual;
+use stratum::layered::agent;
+use stratum::layered::approval;
+use stratum::layered::manual;
 use stratum::storage::repository::{PartitionStore, SnapshotStore};
 
 // FW-01: Manual edit → merge to staged → commit
@@ -18,7 +18,7 @@ fn test_edit_merge_commit_workflow() {
 
     let staged_id = manual::merge_manual_to_staged(&storage).unwrap();
     let staged_part = storage
-        .get_partition(&stratum::state_machine::staged::staged_partition_id())
+        .get_partition(&stratum::layered::staged::staged_partition_id())
         .unwrap();
     assert_eq!(staged_part.current_snapshot, staged_id);
 
@@ -46,7 +46,7 @@ fn test_agent_fork_merge_to_staged() {
     let storage = common::create_storage();
     let init_id = common::create_initial_snapshot(&storage, "shared.txt", "base\n");
     let manual_part = Partition {
-        id: stratum::state_machine::manual::manual_partition_id(),
+        id: stratum::layered::manual::manual_partition_id(),
         name: "manual_edit".into(),
         current_snapshot: init_id,
         history: vec![init_id],
@@ -54,7 +54,7 @@ fn test_agent_fork_merge_to_staged() {
     };
     storage.create_partition(&manual_part).unwrap();
     let staged_part = Partition {
-        id: stratum::state_machine::staged::staged_partition_id(),
+        id: stratum::layered::staged::staged_partition_id(),
         name: "staged".into(),
         current_snapshot: init_id,
         history: vec![init_id],
@@ -114,11 +114,11 @@ fn test_agent_fork_merge_to_staged() {
     approval::migrate_between_partitions(
         &storage,
         &approval::unified_partition_id(),
-        &stratum::state_machine::staged::staged_partition_id(),
+        &stratum::layered::staged::staged_partition_id(),
     )
     .unwrap();
     let staged = storage
-        .get_partition(&stratum::state_machine::staged::staged_partition_id())
+        .get_partition(&stratum::layered::staged::staged_partition_id())
         .unwrap();
     assert_eq!(staged.current_snapshot, unified_id);
 }
@@ -144,7 +144,7 @@ fn test_content_consistency_across_stages() {
 
     // Stage: original
     let staged = storage
-        .get_partition(&stratum::state_machine::staged::staged_partition_id())
+        .get_partition(&stratum::layered::staged::staged_partition_id())
         .unwrap();
     assert_eq!(
         common::reconstruct_text(&storage, &staged.current_snapshot),

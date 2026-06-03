@@ -14,7 +14,7 @@ use crate::core::types::{
 use crate::error::{Result as StratumResult, StratumError};
 use crate::git_sync::gc::collect_garbage;
 use crate::git_sync::git_bridge::GitBridge;
-use crate::state_machine::StateMachine;
+use crate::layered::StateMachine;
 use crate::storage::repository::{
     BranchStore, CheckpointStore, DagStore, DeltaStore, FileNodeStore, PartitionStore,
     SnapshotStore,
@@ -166,7 +166,7 @@ impl ApiServiceImpl {
     fn reconstruct_text_from_id(&self, snapshot_id: &SnapshotId) -> ApiResult<String> {
         let snapshot = self.storage.get_snapshot(snapshot_id)
             .map_err(|e| map_error(StratumError::Storage(e)))?;
-        crate::state_machine::transition::reconstruct_text(self.storage.as_ref(), &snapshot)
+        crate::layered::transition::reconstruct_text(self.storage.as_ref(), &snapshot)
             .map_err(map_error)
     }
 
@@ -205,7 +205,7 @@ impl ApiServiceImpl {
 
     /// Show staged changes vs last committed checkpoint
     fn show_staged(&self) -> ApiResult<ShowResponse> {
-        let staged_pid = crate::state_machine::staged::staged_partition_id();
+        let staged_pid = crate::layered::staged::staged_partition_id();
         let staged_partition = self.storage.get_partition(&staged_pid)
             .map_err(|e| map_error(StratumError::Storage(e)))?;
         let staged_snapshot = self.storage.get_snapshot(&staged_partition.current_snapshot)
@@ -327,10 +327,10 @@ impl ApiService for ApiServiceImpl {
             storage.store_snapshot(&initial_snapshot, b"").map_err(|e| map_error(StratumError::Storage(e)))?;
 
             let manual_partition =
-                crate::state_machine::manual::ensure_manual_partition(storage.as_ref(), initial_snapshot.id)
+                crate::layered::manual::ensure_manual_partition(storage.as_ref(), initial_snapshot.id)
                     .map_err(map_error)?;
             let staged_partition =
-                crate::state_machine::staged::ensure_staged_partition(storage.as_ref(), initial_snapshot.id)
+                crate::layered::staged::ensure_staged_partition(storage.as_ref(), initial_snapshot.id)
                     .map_err(map_error)?;
 
             let branch = Branch::new("main", ContentId::from_content(b"stratum-root"));
@@ -374,13 +374,13 @@ impl ApiService for ApiServiceImpl {
         let content = req.content.as_deref().ok_or_else(|| {
             ApiError::invalid_params("edit content is required (provide via -c/--content or pipe via stdin)")
         })?;
-        let snapshot_id = crate::state_machine::manual::apply_manual_edit(
+        let snapshot_id = crate::layered::manual::apply_manual_edit(
             self.storage.as_ref(),
             &req.file,
             content,
         ).map_err(map_error)?;
 
-        let staged_snapshot_id = crate::state_machine::manual::merge_manual_to_staged(
+        let staged_snapshot_id = crate::layered::manual::merge_manual_to_staged(
             self.storage.as_ref(),
         ).map_err(map_error).ok();
 
@@ -396,7 +396,7 @@ impl ApiService for ApiServiceImpl {
             ApiError::invalid_params("edit content is required (provide via -c/--content or pipe via stdin)")
         })?;
 
-        let staged_pid = crate::state_machine::staged::staged_partition_id();
+        let staged_pid = crate::layered::staged::staged_partition_id();
         let initial_snapshot = match self.storage.get_partition(&staged_pid) {
             Ok(p) => p.current_snapshot,
             Err(_) => {
@@ -420,13 +420,13 @@ impl ApiService for ApiServiceImpl {
             }
         };
 
-        let _ = crate::state_machine::agent::ensure_agent_partition(
+        let _ = crate::layered::agent::ensure_agent_partition(
             self.storage.as_ref(),
             &agent_instance,
             initial_snapshot,
         ).map_err(map_error)?;
 
-        let snapshot_id = crate::state_machine::agent::apply_agent_edit(
+        let snapshot_id = crate::layered::agent::apply_agent_edit(
             self.storage.as_ref(),
             &agent_instance,
             &req.file,
@@ -442,18 +442,18 @@ impl ApiService for ApiServiceImpl {
     fn agent_submit(&self, req: AgentSubmitRequest) -> ApiResult<SubmitResponse> {
         let agent_instance = AgentInstanceId(req.agent_id.clone());
 
-        let staged_pid = crate::state_machine::staged::staged_partition_id();
+        let staged_pid = crate::layered::staged::staged_partition_id();
         let base_snapshot = self.storage.get_partition(&staged_pid)
             .map_err(|_| ApiError::invalid_params("no staged partition found. Make edits first."))?
             .current_snapshot;
 
-        let _ = crate::state_machine::approval::ensure_approval_agent_partition(
+        let _ = crate::layered::approval::ensure_approval_agent_partition(
             self.storage.as_ref(),
             &agent_instance,
             base_snapshot,
         ).map_err(map_error)?;
 
-        let snapshot_id = crate::state_machine::agent::move_agent_to_approval(
+        let snapshot_id = crate::layered::agent::move_agent_to_approval(
             self.storage.as_ref(),
             &agent_instance,
         ).map_err(map_error)?;
@@ -466,7 +466,7 @@ impl ApiService for ApiServiceImpl {
     fn approve(&self, req: ApproveRequest) -> ApiResult<ApproveResponse> {
         let agent_instance = AgentInstanceId(req.agent_id.clone());
 
-        let integrated_id = crate::state_machine::approval::move_approval_to_integrated(
+        let integrated_id = crate::layered::integrated::move_approval_to_integrated(
             self.storage.as_ref(),
             &agent_instance,
             &req.agent_id,
@@ -482,13 +482,13 @@ impl ApiService for ApiServiceImpl {
             .collect();
 
         if !integration_names.is_empty() {
-            crate::state_machine::approval::move_integrated_to_unified(
+            crate::layered::integrated::move_integrated_to_unified(
                 self.storage.as_ref(),
                 &integration_names,
             ).map_err(map_error)?;
         }
 
-        let staged_id = crate::state_machine::staged::merge_unified_to_staged(
+        let staged_id = crate::layered::staged::merge_unified_to_staged(
             self.storage.as_ref(),
         ).map_err(map_error)?;
 
@@ -500,7 +500,7 @@ impl ApiService for ApiServiceImpl {
 
     fn commit(&self, req: CommitRequest) -> ApiResult<CommitResponse> {
         let author = req.author.as_deref().unwrap_or("user");
-        let cp_id = crate::state_machine::staged::commit_staged_to_checkpoint(
+        let cp_id = crate::layered::staged::commit_staged_to_checkpoint(
             self.storage.as_ref(),
             &req.message,
             author,
@@ -573,7 +573,7 @@ impl ApiService for ApiServiceImpl {
         let mut repo = load_checkpoint_repo(self.storage.as_ref()).map_err(map_error)?;
         let current_name = repo.current_branch_name().to_string();
 
-        let staged_pid = crate::state_machine::staged::staged_partition_id();
+        let staged_pid = crate::layered::staged::staged_partition_id();
         let snapshot_ids = match self.storage.get_partition(&staged_pid) {
             Ok(p) => vec![p.current_snapshot],
             Err(_) => return Err(ApiError::invalid_params("staged partition not found")),

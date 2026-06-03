@@ -1,11 +1,12 @@
-//! Hierarchical State Machine Module (Phase 3)
+//! Layered State Machine Module (Phase 3)
 //!
-//! Management manual_edit → agent_edit → approval → staged Four levels of pure state machine complete
-//! Forward flow and reverse fallback to ensure hierarchical segregation and the principle of immutability.
+//! Manages the four-layer pipeline: manual_edit → agent_edit → approval → staged.
+//! Provides forward flow and reverse rollback with ironclad layer-gating rules.
 
 pub mod manual;
 pub mod agent;
 pub mod approval;
+pub mod integrated;
 pub mod staged;
 pub mod transition;
 
@@ -111,7 +112,7 @@ impl StateMachine {
          let base_snapshot = head_cp.baseline_snapshots[0];
 
          // Reset staged partition to the branch's base snapshot
-         let staged_pid = crate::state_machine::staged::staged_partition_id();
+         let staged_pid = crate::layered::staged::staged_partition_id();
          match self.storage.get_partition(&staged_pid) {
              Ok(_) => {
                  self.storage

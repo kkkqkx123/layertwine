@@ -4,7 +4,7 @@ use std::sync::Arc;
 use stratum::api::cli::commands::{Cli, Commands, AgentCommands, BranchCommands};
 use stratum::api::cli::run_with_cli;
 use stratum::core::types::SnapshotId;
-use stratum::state_machine::StateMachine;
+use stratum::layered::StateMachine;
 use stratum::storage::repository::PartitionStore;
 use stratum::storage::sqlite_storage::SqliteStorage;
 
@@ -185,7 +185,7 @@ pub fn reconstruct_snapshot_text(storage: &SqliteStorage, snapshot_id: &stratum:
 
 /// Get the staged partition current snapshot.
 pub fn staged_snapshot_id(storage: &SqliteStorage) -> Option<SnapshotId> {
-    let staged_pid = stratum::state_machine::staged::staged_partition_id();
+    let staged_pid = stratum::layered::staged::staged_partition_id();
     match storage.get_partition(&staged_pid) {
         Ok(p) => Some(p.current_snapshot),
         Err(_) => None,

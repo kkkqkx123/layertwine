@@ -55,9 +55,9 @@ pub fn init_repo(
 ) -> (SnapshotId, Partition, Partition) {
     let snapshot_id = create_initial_snapshot(storage, path, content);
     let manual =
-        stratum::state_machine::manual::ensure_manual_partition(storage, snapshot_id).unwrap();
+        stratum::layered::manual::ensure_manual_partition(storage, snapshot_id).unwrap();
     let staged =
-        stratum::state_machine::staged::ensure_staged_partition(storage, snapshot_id).unwrap();
+        stratum::layered::staged::ensure_staged_partition(storage, snapshot_id).unwrap();
     (snapshot_id, manual, staged)
 }
 

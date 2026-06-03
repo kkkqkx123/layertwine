@@ -97,14 +97,14 @@ pub fn execute_forward(
     match transition {
         ForwardTransition::ManualToStaged => {
             check_forward_valid(&LayerType::ManualEdit, &LayerType::Staged)?;
-            crate::state_machine::manual::merge_manual_to_staged(storage)
+            crate::layered::manual::merge_manual_to_staged(storage)
         }
         ForwardTransition::AgentToApproval => {
             check_forward_valid(&LayerType::AgentEdit, &LayerType::Approval)?;
             let agent_id = params.first().ok_or_else(|| {
                 StratumError::StateMachine("AgentToApproval requires agent_id parameter".into())
             })?;
-            crate::state_machine::agent::move_agent_to_approval(
+            crate::layered::agent::move_agent_to_approval(
                 storage,
                 &crate::core::types::AgentInstanceId(agent_id.to_string()),
             )
@@ -116,7 +116,7 @@ pub fn execute_forward(
             let integrated_name = params.get(1).ok_or_else(|| {
                 StratumError::StateMachine("ApprovalToIntegrated requires integrated_name parameter".into())
             })?;
-            crate::state_machine::approval::move_approval_to_integrated(
+            crate::layered::integrated::move_approval_to_integrated(
                 storage,
                 &crate::core::types::AgentInstanceId(agent_id.to_string()),
                 integrated_name,
@@ -131,7 +131,7 @@ pub fn execute_forward(
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .collect();
-            crate::state_machine::approval::move_integrated_to_unified(storage, &names)
+            crate::layered::integrated::move_integrated_to_unified(storage, &names)
         }
         ForwardTransition::ApprovalToStaged => {
             check_forward_valid(&LayerType::Approval, &LayerType::Staged)?;
@@ -141,7 +141,7 @@ pub fn execute_forward(
             // Parsing UUIDs
             let pid = uuid::Uuid::parse_str(approval_partition_id_str)
                 .map_err(|_| StratumError::StateMachine("invalid partition_id UUID".into()))?;
-            crate::state_machine::staged::merge_approval_to_staged(storage, &pid)
+            crate::layered::staged::merge_approval_to_staged(storage, &pid)
         }
     }
 }
@@ -182,7 +182,7 @@ pub fn rollback_staged_to_layer(
     storage: &SqliteStorage,
     target_layer: LayerType,
 ) -> Result<SnapshotId> {
-    let staged_pid = crate::state_machine::staged::staged_partition_id();
+    let staged_pid = crate::layered::staged::staged_partition_id();
     let staged_partition = storage
         .get_partition(&staged_pid)
         .map_err(|_| StratumError::NotFound("staged partition not found".into()))?;
@@ -392,7 +392,7 @@ mod tests {
     fn test_rollback_partition() {
         let storage = setup_storage();
         let initial_id = create_initial_snapshot(&storage, "v1\n");
-        let pid = crate::state_machine::staged::staged_partition_id();
+        let pid = crate::layered::staged::staged_partition_id();
         let partition = Partition {
             id: pid,
             name: "test".into(),
@@ -421,7 +421,7 @@ mod tests {
     fn test_rollback_partition_error() {
         let storage = setup_storage();
         let initial_id = create_initial_snapshot(&storage, "v1\n");
-        let pid = crate::state_machine::staged::staged_partition_id();
+        let pid = crate::layered::staged::staged_partition_id();
         let partition = Partition {
             id: pid,
             name: "test".into(),
@@ -459,9 +459,9 @@ mod tests {
         let storage = setup_storage();
         let initial_id = create_initial_snapshot(&storage, "base\n");
 
-        crate::state_machine::manual::ensure_manual_partition(&storage, initial_id).unwrap();
-        crate::state_machine::staged::ensure_staged_partition(&storage, initial_id).unwrap();
-        crate::state_machine::manual::apply_manual_edit(&storage, "test.txt", "base\nmodified\n").unwrap();
+        crate::layered::manual::ensure_manual_partition(&storage, initial_id).unwrap();
+        crate::layered::staged::ensure_staged_partition(&storage, initial_id).unwrap();
+        crate::layered::manual::apply_manual_edit(&storage, "test.txt", "base\nmodified\n").unwrap();
 
         let result = execute_forward(
             &storage,
@@ -470,7 +470,7 @@ mod tests {
         );
         assert!(result.is_ok());
 
-        let staged = storage.get_partition(&crate::state_machine::staged::staged_partition_id()).unwrap();
+        let staged = storage.get_partition(&crate::layered::staged::staged_partition_id()).unwrap();
         assert_ne!(staged.current_snapshot, initial_id);
     }
 
@@ -515,11 +515,11 @@ mod tests {
         let agent_id = AgentInstanceId("test-agent".into());
 
         // Setup agent partition
-        crate::state_machine::agent::ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
-        crate::state_machine::agent::apply_agent_edit(&storage, &agent_id, "test.txt", "base\nmodified\n").unwrap();
+        crate::layered::agent::ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
+        crate::layered::agent::apply_agent_edit(&storage, &agent_id, "test.txt", "base\nmodified\n").unwrap();
 
         // Setup approval partition
-        let approval_pid = crate::state_machine::approval::approval_agent_partition_id(&agent_id);
+        let approval_pid = crate::layered::approval::approval_agent_partition_id(&agent_id);
         let approval_part = Partition {
             id: approval_pid,
             name: format!("approval/{}", agent_id),
@@ -544,7 +544,7 @@ mod tests {
     fn test_rollback_staged_to_layer_not_found() {
         let storage = setup_storage();
         let initial_id = create_initial_snapshot(&storage, "base\n");
-        crate::state_machine::staged::ensure_staged_partition(&storage, initial_id).unwrap();
+        crate::layered::staged::ensure_staged_partition(&storage, initial_id).unwrap();
 
         let result = rollback_staged_to_layer(&storage, LayerType::ManualEdit);
         assert!(result.is_err(), "should error when no suitable parent found");
@@ -554,11 +554,11 @@ mod tests {
     fn test_execute_forward_approval_to_staged() {
         let storage = setup_storage();
         let initial_id = create_initial_snapshot(&storage, "base\n");
-        crate::state_machine::staged::ensure_staged_partition(&storage, initial_id).unwrap();
+        crate::layered::staged::ensure_staged_partition(&storage, initial_id).unwrap();
 
         // Create approval partition with content change
         let agent_id = AgentInstanceId("test-agent".into());
-        let approval_pid = crate::state_machine::approval::approval_agent_partition_id(&agent_id);
+        let approval_pid = crate::layered::approval::approval_agent_partition_id(&agent_id);
         let approval_part = Partition {
             id: approval_pid,
             name: format!("approval/{}", agent_id),

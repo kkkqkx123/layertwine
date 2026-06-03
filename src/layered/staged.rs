@@ -66,9 +66,9 @@ pub fn merge_approval_to_staged(
         .map_err(|e| StratumError::Storage(e.into()))?;
 
     let approval_text =
-        crate::state_machine::transition::reconstruct_text(storage, &approval_snapshot)?;
+        crate::layered::transition::reconstruct_text(storage, &approval_snapshot)?;
     let staged_text =
-        crate::state_machine::transition::reconstruct_text(storage, &staged_snapshot)?;
+        crate::layered::transition::reconstruct_text(storage, &staged_snapshot)?;
 
     let merge_diff = diff_to_line_diff(&staged_text, &approval_text);
     if merge_diff.is_empty() {
@@ -108,7 +108,7 @@ pub fn merge_unified_to_staged(
     storage: &SqliteStorage,
 ) -> Result<SnapshotId> {
     let staged_pid = staged_partition_id();
-    let unified_pid = crate::state_machine::approval::unified_partition_id();
+    let unified_pid = crate::layered::integrated::unified_partition_id();
 
     let unified_partition = storage
         .get_partition(&unified_pid)
@@ -125,9 +125,9 @@ pub fn merge_unified_to_staged(
         .map_err(|e| StratumError::Storage(e.into()))?;
 
     let unified_text =
-        crate::state_machine::transition::reconstruct_text(storage, &unified_snapshot)?;
+        crate::layered::transition::reconstruct_text(storage, &unified_snapshot)?;
     let staged_text =
-        crate::state_machine::transition::reconstruct_text(storage, &staged_snapshot)?;
+        crate::layered::transition::reconstruct_text(storage, &staged_snapshot)?;
 
     let merge_diff = diff_to_line_diff(&staged_text, &unified_text);
     if merge_diff.is_empty() {
@@ -270,7 +270,7 @@ mod tests {
         let file_path = "test.txt";
         let agent_id = AgentInstanceId("test-agent".into());
         let initial_id = create_initial_snapshot(storage, "base\n");
-        let pid = crate::state_machine::approval::approval_agent_partition_id(&agent_id);
+        let pid = crate::layered::approval::approval_agent_partition_id(&agent_id);
         let partition = Partition {
             id: pid,
             name: format!("approval/{}", agent_id),

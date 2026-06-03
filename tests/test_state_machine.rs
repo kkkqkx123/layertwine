@@ -1,8 +1,8 @@
 mod common;
 
 use stratum::core::types::PartitionType;
-use stratum::state_machine::manual::{self, manual_partition_id};
-use stratum::state_machine::staged::{self, staged_partition_id};
+use stratum::layered::manual::{self, manual_partition_id};
+use stratum::layered::staged::{self, staged_partition_id};
 use stratum::storage::repository::{BranchStore, CheckpointStore, PartitionStore};
 
 // SM-01: Initialize complete repository with both partitions
@@ -139,7 +139,7 @@ fn test_reset_staged() {
 // SM-11: Verify iron law — forward transitions only allowed between neighboring layers
 #[test]
 fn test_iron_law_forward_valid() {
-    use stratum::state_machine::transition::check_forward_valid;
+    use stratum::layered::transition::check_forward_valid;
     use stratum::core::types::LayerType;
 
     assert!(check_forward_valid(&LayerType::ManualEdit, &LayerType::Staged).is_ok());
@@ -154,7 +154,7 @@ fn test_iron_law_forward_valid() {
 // SM-12: Verify iron law — rollback only switches pointers (no reverse writes)
 #[test]
 fn test_iron_law_rollback_valid() {
-    use stratum::state_machine::transition::check_rollback_valid;
+    use stratum::layered::transition::check_rollback_valid;
     use stratum::core::types::LayerType;
 
     assert!(check_rollback_valid(&LayerType::Staged, &LayerType::ManualEdit).is_ok());
@@ -169,7 +169,7 @@ fn test_iron_law_rollback_valid() {
 // SM-13: Execute forward transition via execute_forward
 #[test]
 fn test_execute_forward_manual_to_staged() {
-    use stratum::state_machine::transition::{execute_forward, ForwardTransition};
+    use stratum::layered::transition::{execute_forward, ForwardTransition};
 
     let storage = common::create_storage();
     common::init_repo(&storage, "forward.txt", "base\n");

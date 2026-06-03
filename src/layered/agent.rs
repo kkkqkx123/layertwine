@@ -137,7 +137,7 @@ pub fn move_agent_to_approval(
     agent_id: &AgentInstanceId,
 ) -> Result<SnapshotId> {
     let agent_pid = agent_partition_id(agent_id);
-    let approval_pid = crate::state_machine::approval::approval_agent_partition_id(agent_id);
+    let approval_pid = crate::layered::approval::approval_agent_partition_id(agent_id);
 
     let agent_partition = storage
         .get_partition(&agent_pid)
@@ -158,9 +158,9 @@ pub fn move_agent_to_approval(
 
     // Reconstructed text
     let agent_text =
-        crate::state_machine::transition::reconstruct_text(storage, &agent_snapshot)?;
+        crate::layered::transition::reconstruct_text(storage, &agent_snapshot)?;
     let approval_text =
-        crate::state_machine::transition::reconstruct_text(storage, &approval_snapshot)?;
+        crate::layered::transition::reconstruct_text(storage, &approval_snapshot)?;
 
     // Calculate the merge diff
     let merge_diff = diff_to_line_diff(&approval_text, &agent_text);
@@ -346,7 +346,7 @@ mod tests {
         ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
 
         // Create approval agent partition
-        let approval_pid = crate::state_machine::approval::approval_agent_partition_id(&agent_id);
+        let approval_pid = crate::layered::approval::approval_agent_partition_id(&agent_id);
         let approval_part = Partition {
             id: approval_pid,
             name: format!("approval/{}", agent_id),

@@ -117,7 +117,7 @@ pub fn merge_manual_to_staged(
     storage: &SqliteStorage,
 ) -> Result<SnapshotId> {
     let manual_pid = manual_partition_id();
-    let staged_pid = crate::state_machine::staged::staged_partition_id();
+    let staged_pid = crate::layered::staged::staged_partition_id();
 
     // Get manual and staged partitions
     let manual_partition = storage
@@ -135,8 +135,8 @@ pub fn merge_manual_to_staged(
         .map_err(|e| StratumError::Storage(e.into()))?;
 
     // Reconstructing text content
-    let manual_text = crate::state_machine::transition::reconstruct_text(storage, &manual_snapshot)?;
-    let staged_text = crate::state_machine::transition::reconstruct_text(storage, &staged_snapshot)?;
+    let manual_text = crate::layered::transition::reconstruct_text(storage, &manual_snapshot)?;
+    let staged_text = crate::layered::transition::reconstruct_text(storage, &staged_snapshot)?;
 
     // Incorporate manual changes using staged as a baseline.
     // Calculate the diff of manual_text relative to staged_text
@@ -223,14 +223,14 @@ mod tests {
 
         // Create manual and staged partitions that point to the same initial snapshot
         ensure_manual_partition(&storage, initial_id).unwrap();
-        crate::state_machine::staged::ensure_staged_partition(&storage, initial_id).unwrap();
+        crate::layered::staged::ensure_staged_partition(&storage, initial_id).unwrap();
 
         // Apply edits to the manual layer
         apply_manual_edit(&storage, "test.txt", "base\nmodified\n").unwrap();
 
         // Merge to staged
         let merged_id = merge_manual_to_staged(&storage).unwrap();
-        let staged = storage.get_partition(&crate::state_machine::staged::staged_partition_id()).unwrap();
+        let staged = storage.get_partition(&crate::layered::staged::staged_partition_id()).unwrap();
         assert_eq!(staged.current_snapshot, merged_id);
 
         // Verify the dual parent of the merge snapshot
@@ -271,11 +271,11 @@ mod tests {
         let initial_id = create_initial_snapshot(&storage, "base\n");
 
         ensure_manual_partition(&storage, initial_id).unwrap();
-        crate::state_machine::staged::ensure_staged_partition(&storage, initial_id).unwrap();
+        crate::layered::staged::ensure_staged_partition(&storage, initial_id).unwrap();
 
         // No edits applied → merge should return current staged snapshot
         let merged_id = merge_manual_to_staged(&storage).unwrap();
-        let staged = storage.get_partition(&crate::state_machine::staged::staged_partition_id()).unwrap();
+        let staged = storage.get_partition(&crate::layered::staged::staged_partition_id()).unwrap();
         assert_eq!(staged.current_snapshot, merged_id);
     }
 

@@ -3,8 +3,8 @@ mod common;
 use stratum::core::partition::Partition;
 use stratum::core::snapshot::Snapshot;
 use stratum::core::types::{AgentInstanceId, PartitionType, SnapshotId};
-use stratum::state_machine::approval;
-use stratum::state_machine::transition::reconstruct_text;
+use stratum::layered::approval;
+use stratum::layered::transition::reconstruct_text;
 use stratum::storage::repository::{DeltaStore, PartitionStore, SnapshotStore};
 use stratum::storage::sqlite_storage::SqliteStorage;
 
@@ -199,8 +199,8 @@ fn test_approval_to_staged_pipeline() {
     assert_ne!(unified_id, init_id);
 
     // unified → staged
-    let staged_pid = stratum::state_machine::staged::staged_partition_id();
-    stratum::state_machine::staged::ensure_staged_partition(&storage, unified_id).unwrap();
+    let staged_pid = stratum::layered::staged::staged_partition_id();
+    stratum::layered::staged::ensure_staged_partition(&storage, unified_id).unwrap();
     approval::migrate_between_partitions(&storage, &approval::unified_partition_id(), &staged_pid).unwrap();
     let staged = storage.get_partition(&staged_pid).unwrap();
     assert_eq!(staged.current_snapshot, unified_id);
