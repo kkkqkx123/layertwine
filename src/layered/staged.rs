@@ -10,8 +10,7 @@ use crate::core::snapshot::Snapshot;
 use crate::core::types::{CheckpointId, PartitionId, PartitionType, SnapshotId, SourceType};
 use crate::engine::diff::diff_to_line_diff;
 use crate::error::{Result, StratumError};
-use crate::storage::repository::{BranchStore, CheckpointStore, DagStore, DeltaStore, PartitionStore, SnapshotStore};
-use crate::storage::sqlite_storage::SqliteStorage;
+use crate::storage::repository::{BranchStore, CheckpointStore, DagStore, DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
 
 /// Fixed ID of the staged partition
 pub fn staged_partition_id() -> PartitionId {
@@ -19,8 +18,8 @@ pub fn staged_partition_id() -> PartitionId {
 }
 
 /// Getting or creating staged partitions
-pub fn ensure_staged_partition(
-    storage: &SqliteStorage,
+pub fn ensure_staged_partition<S: PartitionStore>(
+    storage: &S,
     initial_snapshot_id: SnapshotId,
 ) -> Result<Partition> {
     let pid = staged_partition_id();
@@ -45,10 +44,13 @@ pub fn ensure_staged_partition(
 /// Merge the contents of the approval Agent partition into the staged
 ///
 /// Takes the current snapshot of the specified Agent partition from the approval level and merges it into staged.
-pub fn merge_approval_to_staged(
-    storage: &SqliteStorage,
+pub fn merge_approval_to_staged<S>(
+    storage: &S,
     approval_partition_id: &PartitionId,
-) -> Result<SnapshotId> {
+) -> Result<SnapshotId>
+where
+    S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
+{
     let staged_pid = staged_partition_id();
 
     let approval_partition = storage
@@ -104,9 +106,12 @@ pub fn merge_approval_to_staged(
 ///
 /// Takes the current snapshot of the Unified partition and merges it into staged.
 /// This is the final step of the approval pipeline: approval_agent → integrated → unified → staged.
-pub fn merge_unified_to_staged(
-    storage: &SqliteStorage,
-) -> Result<SnapshotId> {
+pub fn merge_unified_to_staged<S>(
+    storage: &S,
+) -> Result<SnapshotId>
+where
+    S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
+{
     let staged_pid = staged_partition_id();
     let unified_pid = crate::layered::integrated::unified_partition_id();
 
@@ -168,11 +173,14 @@ pub fn merge_unified_to_staged(
 /// 5. Store updated DAG via DagStore
 /// 6. Update branch head via BranchStore
 /// 7. Return the new CheckpointId
-pub fn commit_staged_to_checkpoint(
-    storage: &SqliteStorage,
+pub fn commit_staged_to_checkpoint<S>(
+    storage: &S,
     message: &str,
     author: &str,
-) -> Result<CheckpointId> {
+) -> Result<CheckpointId>
+where
+    S: SnapshotStore + PartitionStore + CheckpointStore + BranchStore + DagStore,
+{
     // 1. Get staged partition
     let staged_pid = staged_partition_id();
     let staged_partition = storage
@@ -225,8 +233,8 @@ pub fn commit_staged_to_checkpoint(
 }
 
 /// Empty staged partition (reset to initial state)
-pub fn reset_staged(
-    storage: &SqliteStorage,
+pub fn reset_staged<S: PartitionStore>(
+    storage: &S,
     base_snapshot_id: SnapshotId,
 ) -> Result<()> {
     let pid = staged_partition_id();
@@ -246,10 +254,9 @@ mod tests {
     use crate::storage::repository::FileNodeStore;
     use crate::storage::repository::{SnapshotStore, DeltaStore};
     use crate::storage::sqlite_storage::SqliteStorage;
-    use std::sync::Arc;
 
-    fn setup_storage() -> Arc<SqliteStorage> {
-        Arc::new(SqliteStorage::new_in_memory().unwrap())
+    fn setup_storage() -> SqliteStorage {
+        SqliteStorage::new_in_memory().unwrap()
     }
 
     fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {

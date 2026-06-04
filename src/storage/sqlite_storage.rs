@@ -3,12 +3,14 @@ use crate::checkpoint::checkpoint::Checkpoint;
 use crate::checkpoint::dag::CheckpointDag;
 use crate::core::delta::{Delta, LineDiff};
 use crate::core::file_node::FileNode;
+use crate::core::layer::Layer;
 use crate::core::partition::Partition;
 use crate::core::snapshot::Snapshot;
-use crate::core::types::{CheckpointId, ContentId, DeltaId, PartitionId, PartitionType, SnapshotId};
+use crate::core::types::{CheckpointId, ContentId, DeltaId, LayerType, PartitionId, PartitionType, SnapshotId};
 use crate::storage::migrations;
 use crate::storage::repository::{
-    BranchStore, CheckpointStore, DagStore, DeltaStore, FileNodeStore, PartitionStore, SnapshotStore,
+    AtomicOps, BranchStore, CheckpointStore, DagStore, DeltaStore, FileNodeStore, LayerStore, PartitionStore,
+    SnapshotStore,
 };
 use crate::StorageResult;
 use rusqlite::{params, Connection};
@@ -53,6 +55,13 @@ impl SqliteStorage {
     pub fn new_with_connection_arc(conn: &Arc<Mutex<Connection>>) -> Self {
         SqliteStorage {
             conn: conn.clone(),
+        }
+    }
+
+    /// Create a shared instance (clones the Arc, shares the same connection)
+    pub fn share(&self) -> Self {
+        SqliteStorage {
+            conn: self.conn.clone(),
         }
     }
 
@@ -195,14 +204,14 @@ impl SnapshotStore for SqliteStorage {
         Ok(result)
     }
 
-    fn find_snapshots_by_partition(&self, partition_type: &str) -> StorageResult<Vec<Snapshot>> {
+    fn find_snapshots_by_partition(&self, partition_type: &PartitionType) -> StorageResult<Vec<Snapshot>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, file_path, file_hash, deltas, parents, partition_type, created_at
              FROM snapshots WHERE partition_type = ?1 ORDER BY created_at DESC"
         )?;
 
-        let snapshots = stmt.query_map(params![partition_type], |row| {
+        let snapshots = stmt.query_map(params![partition_type.name()], |row| {
             let id_bytes: Vec<u8> = row.get(0)?;
             let mut id_arr = [0u8; 32];
             id_arr.copy_from_slice(&id_bytes);
@@ -361,25 +370,25 @@ impl FileNodeStore for SqliteStorage {
         Ok(())
     }
 
-    fn get_file_content(&self, file_node: &FileNode) -> StorageResult<Vec<u8>> {
+    fn get_file_content(&self, file_path: &str, base_hash: &[u8; 32]) -> StorageResult<Vec<u8>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT content FROM file_nodes WHERE file_path = ?1 AND base_hash = ?2"
         )?;
         let content: Vec<u8> = stmt.query_row(
-            params![file_node.path_str(), &file_node.base_hash.to_vec()],
+            params![file_path, &base_hash.to_vec()],
             |row| row.get(0),
         )?;
         Ok(content)
     }
 
-    fn file_node_exists(&self, file_node: &FileNode) -> StorageResult<bool> {
+    fn file_node_exists(&self, file_path: &str, base_hash: &[u8; 32]) -> StorageResult<bool> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT COUNT(*) FROM file_nodes WHERE file_path = ?1 AND base_hash = ?2"
         )?;
         let count: i64 = stmt.query_row(
-            params![file_node.path_str(), &file_node.base_hash.to_vec()],
+            params![file_path, &base_hash.to_vec()],
             |row| row.get(0),
         )?;
         Ok(count > 0)
@@ -845,144 +854,108 @@ impl DagStore for SqliteStorage {
             Err(e) => Err(crate::StorageError::Database(e)),
         }
     }
-}
 
-// Combined storage -
-
-/// Combined storage structure that also implements all storage traits
-pub struct StratumStorage {
-    pub inner: SqliteStorage,
-}
-
-impl StratumStorage {
-    pub fn new_in_memory() -> StorageResult<Self> {
-        Ok(StratumStorage {
-            inner: SqliteStorage::new_in_memory()?,
-        })
+    fn store_metadata(&self, key: &str, value: &str) -> StorageResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "INSERT OR REPLACE INTO dag_store (key, value, updated_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![key, value.as_bytes(), now],
+        )?;
+        Ok(())
     }
 
-    pub fn new(path: &Path) -> StorageResult<Self> {
-        Ok(StratumStorage {
-            inner: SqliteStorage::new(path)?,
-        })
-    }
-
-    pub fn new_full(path: &Path) -> StorageResult<Self> {
-        Ok(StratumStorage {
-            inner: SqliteStorage::new_full(path)?,
-        })
-    }
-}
-
-impl SnapshotStore for StratumStorage {
-    fn store_snapshot(&self, snapshot: &Snapshot, content: &[u8]) -> StorageResult<()> {
-        self.inner.store_snapshot(snapshot, content)
-    }
-    fn get_snapshot(&self, id: &SnapshotId) -> StorageResult<Snapshot> {
-        self.inner.get_snapshot(id)
-    }
-    fn find_snapshots_by_file(&self, file_path: &str) -> StorageResult<Vec<Snapshot>> {
-        self.inner.find_snapshots_by_file(file_path)
-    }
-    fn find_snapshots_by_partition(&self, partition_type: &str) -> StorageResult<Vec<Snapshot>> {
-        self.inner.find_snapshots_by_partition(partition_type)
-    }
-    fn snapshot_exists(&self, id: &SnapshotId) -> StorageResult<bool> {
-        self.inner.snapshot_exists(id)
+    fn load_metadata(&self, key: &str) -> StorageResult<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT value FROM dag_store WHERE key = ?1")?;
+        let result = stmt.query_row(rusqlite::params![key], |row| {
+            let value: Vec<u8> = row.get(0)?;
+            String::from_utf8(value)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+        });
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(crate::StorageError::Database(e)),
+        }
     }
 }
 
-impl DeltaStore for StratumStorage {
-    fn store_delta(&self, delta: &Delta) -> StorageResult<()> {
-        self.inner.store_delta(delta)
+// LayerStore implementation -
+
+impl LayerStore for SqliteStorage {
+    fn store_layer(&self, layer: &Layer) -> StorageResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let partition_ids_json = serde_json::to_vec(&layer.partitions)
+            .map_err(|e| crate::StorageError::Serialization(e.to_string()))?;
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "INSERT OR REPLACE INTO layers (layer_type, partition_ids, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                layer.layer_type.name(),
+                partition_ids_json,
+                now,
+                now,
+            ],
+        )?;
+        Ok(())
     }
-    fn get_delta(&self, id: &DeltaId) -> StorageResult<Delta> {
-        self.inner.get_delta(id)
+
+    fn get_layer(&self, layer_type: &LayerType) -> StorageResult<Layer> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT layer_type, partition_ids FROM layers WHERE layer_type = ?1"
+        )?;
+
+        let result = stmt.query_row(params![layer_type.name()], |row| {
+            let _lt: String = row.get(0)?;
+            let partition_ids_json: Vec<u8> = row.get(1)?;
+            let partitions: Vec<PartitionId> = serde_json::from_slice(&partition_ids_json)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            Ok(Layer {
+                layer_type: layer_type.clone(),
+                partitions,
+            })
+        })?;
+        Ok(result)
     }
-    fn get_deltas(&self, ids: &[DeltaId]) -> StorageResult<Vec<Delta>> {
-        self.inner.get_deltas(ids)
+
+    fn list_layer_types(&self) -> StorageResult<Vec<LayerType>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT layer_type FROM layers ORDER BY layer_type"
+        )?;
+        let types: Vec<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let result: Vec<LayerType> = types
+            .iter()
+            .filter_map(|s| match s.as_str() {
+                "manual_edit" => Some(LayerType::ManualEdit),
+                "agent_edit" => Some(LayerType::AgentEdit),
+                "approval" => Some(LayerType::Approval),
+                "staged" => Some(LayerType::Staged),
+                _ => None,
+            })
+            .collect();
+        Ok(result)
     }
-    fn delta_exists(&self, id: &DeltaId) -> StorageResult<bool> {
-        self.inner.delta_exists(id)
+
+    fn delete_layer(&self, layer_type: &LayerType) -> StorageResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM layers WHERE layer_type = ?1",
+            params![layer_type.name()],
+        )?;
+        Ok(())
     }
 }
 
-impl FileNodeStore for StratumStorage {
-    fn store_file_node(&self, file_node: &FileNode, content: &[u8]) -> StorageResult<()> {
-        self.inner.store_file_node(file_node, content)
-    }
-    fn get_file_content(&self, file_node: &FileNode) -> StorageResult<Vec<u8>> {
-        self.inner.get_file_content(file_node)
-    }
-    fn file_node_exists(&self, file_node: &FileNode) -> StorageResult<bool> {
-        self.inner.file_node_exists(file_node)
-    }
-}
-
-impl PartitionStore for StratumStorage {
-    fn create_partition(&self, partition: &Partition) -> StorageResult<()> {
-        self.inner.create_partition(partition)
-    }
-    fn update_pointer(&self, partition_id: &PartitionId, snapshot_id: &SnapshotId) -> StorageResult<()> {
-        self.inner.update_pointer(partition_id, snapshot_id)
-    }
-    fn get_partition(&self, id: &PartitionId) -> StorageResult<Partition> {
-        self.inner.get_partition(id)
-    }
-    fn get_partition_by_name(&self, name: &str) -> StorageResult<Partition> {
-        self.inner.get_partition_by_name(name)
-    }
-    fn list_partitions(&self) -> StorageResult<Vec<Partition>> {
-        self.inner.list_partitions()
-    }
-}
-
-impl CheckpointStore for StratumStorage {
-    fn store_checkpoint(&self, checkpoint: &Checkpoint) -> StorageResult<()> {
-        self.inner.store_checkpoint(checkpoint)
-    }
-    fn get_checkpoint(&self, id: &CheckpointId) -> StorageResult<Checkpoint> {
-        self.inner.get_checkpoint(id)
-    }
-    fn checkpoint_exists(&self, id: &CheckpointId) -> StorageResult<bool> {
-        self.inner.checkpoint_exists(id)
-    }
-    fn list_checkpoints(&self) -> StorageResult<Vec<Checkpoint>> {
-        self.inner.list_checkpoints()
-    }
-    fn delete_checkpoint(&self, id: &CheckpointId) -> StorageResult<()> {
-        self.inner.delete_checkpoint(id)
-    }
-}
-
-impl BranchStore for StratumStorage {
-    fn store_branch(&self, branch: &Branch) -> StorageResult<()> {
-        self.inner.store_branch(branch)
-    }
-    fn get_branch(&self, name: &str) -> StorageResult<Branch> {
-        self.inner.get_branch(name)
-    }
-    fn update_branch_head(&self, name: &str, head: &CheckpointId) -> StorageResult<()> {
-        self.inner.update_branch_head(name, head)
-    }
-    fn list_branches(&self) -> StorageResult<Vec<Branch>> {
-        self.inner.list_branches()
-    }
-    fn delete_branch(&self, name: &str) -> StorageResult<()> {
-        self.inner.delete_branch(name)
-    }
-}
-
-impl DagStore for StratumStorage {
-    fn store_dag(&self, dag: &CheckpointDag) -> StorageResult<()> {
-        self.inner.store_dag(dag)
-    }
-    fn load_dag(&self) -> StorageResult<CheckpointDag> {
-        self.inner.load_dag()
-    }
-}
-
-impl<T: SnapshotStore + DeltaStore + PartitionStore + FileNodeStore> crate::storage::repository::Repository for T {}
+impl<T: SnapshotStore + DeltaStore + PartitionStore + FileNodeStore + CheckpointStore + BranchStore + DagStore + LayerStore + AtomicOps>
+    crate::storage::repository::Repository for T
+{}
 
 #[cfg(test)]
 mod tests {
@@ -1056,9 +1029,9 @@ mod tests {
         let file = create_test_file_node("hello.txt", b"hello world");
 
         storage.store_file_node(&file, b"hello world").unwrap();
-        assert!(storage.file_node_exists(&file).unwrap());
+        assert!(storage.file_node_exists(file.path_str(), &file.base_hash).unwrap());
 
-        let content = storage.get_file_content(&file).unwrap();
+        let content = storage.get_file_content(file.path_str(), &file.base_hash).unwrap();
         assert_eq!(content, b"hello world");
     }
 
@@ -1241,17 +1214,21 @@ mod tests {
         let delta = create_test_delta(&file);
         storage.store_delta(&delta).unwrap();
 
-        let s1 = Snapshot::new_initial(file.clone(), delta.id);
-        let s1_type = s1.partition_type.clone();
+        // Create a base snapshot
+        let base = Snapshot::new_initial(file.clone(), delta.id);
+        storage.store_snapshot(&base, b"").unwrap();
+
+        // Create snapshots with explicit partition types (from_parent sets the partition_type)
+        let s1 = Snapshot::from_parent(&base, delta.id, PartitionType::Manual.name());
         storage.store_snapshot(&s1, b"").unwrap();
 
-        let s2 = Snapshot::from_parent(&s1, delta.id, "agent_test".to_string());
+        let s2 = Snapshot::from_parent(&base, delta.id, PartitionType::Agent("agent_test".into()).name());
         storage.store_snapshot(&s2, b"").unwrap();
 
-        let manual_snapshots = storage.find_snapshots_by_partition(&s1_type).unwrap();
+        let manual_snapshots = storage.find_snapshots_by_partition(&PartitionType::Manual).unwrap();
         assert_eq!(manual_snapshots.len(), 1, "should find 1 manual snapshot");
 
-        let agent_snapshots = storage.find_snapshots_by_partition("agent_test").unwrap();
+        let agent_snapshots = storage.find_snapshots_by_partition(&PartitionType::Agent("agent_test".into())).unwrap();
         assert_eq!(agent_snapshots.len(), 1, "should find 1 agent_test snapshot");
     }
 
@@ -1427,15 +1404,15 @@ mod tests {
         assert!(dag.is_empty(), "should return empty DAG when no DAG stored");
     }
 
-    // --- StratumStorage tests ---
+    // --- Repetitive ops tests ---
 
     #[test]
-    fn test_stratum_storage_snapshot_ops() {
-        let storage = StratumStorage::new_in_memory().unwrap();
+    fn test_sqlite_storage_repeated_snapshot_ops() {
+        let storage = create_test_storage();
         let file = create_test_file_node("stratum.txt", b"stratum content");
         storage.store_file_node(&file, b"stratum content").unwrap();
 
-        assert!(storage.file_node_exists(&file).unwrap());
+        assert!(storage.file_node_exists(file.path_str(), &file.base_hash).unwrap());
 
         let delta = create_test_delta(&file);
         storage.store_delta(&delta).unwrap();
@@ -1448,8 +1425,8 @@ mod tests {
     }
 
     #[test]
-    fn test_stratum_storage_partition_ops() {
-        let storage = StratumStorage::new_in_memory().unwrap();
+    fn test_sqlite_storage_repeated_partition_ops() {
+        let storage = create_test_storage();
         let file = create_test_file_node("sp.txt", b"sp");
         storage.store_file_node(&file, b"sp").unwrap();
         let delta = create_test_delta(&file);

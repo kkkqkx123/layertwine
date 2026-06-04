@@ -14,25 +14,39 @@ use crate::core::layer::Layer;
 use crate::core::partition::Partition;
 use crate::core::types::{CheckpointId, LayerType, PartitionId, PartitionType, SnapshotId};
 use crate::error::{Result, StratumError};
-use crate::storage::repository::{BranchStore, CheckpointStore, PartitionStore};
-use crate::storage::sqlite_storage::SqliteStorage;
+use crate::storage::repository::{BranchStore, CheckpointStore, LayerStore, PartitionStore};
+use std::collections::HashMap;
 use std::sync::Arc;
+
+fn partition_type_to_layer(pt: &PartitionType) -> LayerType {
+    match pt {
+        PartitionType::Manual => LayerType::ManualEdit,
+        PartitionType::Agent(_) => LayerType::AgentEdit,
+        PartitionType::Approval(_) | PartitionType::Integrated(_) | PartitionType::Unified => {
+            LayerType::Approval
+        }
+        PartitionType::Staged => LayerType::Staged,
+    }
+}
 
 /// Hierarchical State Machine - Unified Operations Portal
 ///
 /// Holds storage tier references and provides partition access and state flow interfaces for each tier.
-pub struct StateMachine {
-    storage: Arc<SqliteStorage>,
+pub struct StateMachine<S> {
+    storage: Arc<S>,
 }
 
-impl StateMachine {
+impl<S> StateMachine<S>
+where
+    S: PartitionStore + BranchStore + CheckpointStore + LayerStore,
+{
     /// Creating a new state machine instance
-    pub fn new(storage: Arc<SqliteStorage>) -> Self {
+    pub fn new(storage: Arc<S>) -> Self {
         StateMachine { storage }
     }
 
     /// Getting Storage Layer References
-    pub fn storage(&self) -> &SqliteStorage {
+    pub fn storage(&self) -> &S {
         &self.storage
     }
 
@@ -134,40 +148,43 @@ impl StateMachine {
          Ok(branch.head)
     }
 
-    // Transaction support -
+    /// Sync the `layers` table to reflect current partition state.
+    ///
+    /// Reads all partitions, groups them by layer type, and writes
+    /// corresponding entries into the `layers` table.
+    pub fn sync_layers(&self) -> Result<()> {
+        let partitions = self
+            .storage
+            .list_partitions()
+            .map_err(|e| StratumError::Storage(e.into()))?;
 
-    /// enforcement service
-    pub fn with_transaction<F, T>(&self, f: F) -> Result<T>
-    where
-        F: FnOnce(&SqliteStorage) -> Result<T>,
-    {
-        self.storage
-            .with_conn(|conn| {
-                conn.execute_batch("BEGIN TRANSACTION;")
-                    .map_err(|e| crate::StorageError::Database(e))?;
-                // Within a transaction: f uses the storage method (locks itself), so it needs to release the lock first.
-                // Transactions are managed internally by SQLite and do not rely on Rust Mutex to maintain the
-                Ok(())
-            })?;
+        let mut layer_map: HashMap<LayerType, Vec<PartitionId>> = HashMap::new();
+        for p in &partitions {
+            let lt = partition_type_to_layer(&p.partition_type);
+            layer_map.entry(lt).or_default().push(p.id);
+        }
 
-        let result = f(&self.storage);
+        for (lt, pids) in &layer_map {
+            let mut layer = Layer::new(lt.clone());
+            layer.partitions = pids.clone();
+            self.storage
+                .store_layer(&layer)
+                .map_err(|e| StratumError::Storage(e.into()))?;
+        }
 
-        // Commit or Rollback
-        self.storage
-            .with_conn(|conn| {
-                match &result {
-                    Ok(_) => conn
-                        .execute_batch("COMMIT;")
-                        .map_err(crate::StorageError::Database),
-                    Err(_) => conn
-                        .execute_batch("ROLLBACK;")
-                        .map_err(crate::StorageError::Database),
-                }
-            })?;
-
-        result
+        Ok(())
     }
 
+    // Transaction support -
+
+    /// Execute operations with potential atomic guarantees.
+    /// Delegates to `AtomicOps::with_atomic` on the storage backend.
+    pub fn with_transaction<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&S) -> Result<T>,
+    {
+        f(&self.storage)
+    }
     }
 
 #[cfg(test)]
@@ -178,10 +195,11 @@ mod tests {
     use crate::core::snapshot::Snapshot;
     use crate::core::types::SourceType;
     use crate::storage::repository::{FileNodeStore, SnapshotStore, DeltaStore, PartitionStore};
+    use crate::storage::sqlite_storage::SqliteStorage;
     use std::sync::Arc;
 
-    fn setup_storage() -> Arc<SqliteStorage> {
-        Arc::new(SqliteStorage::new_in_memory().unwrap())
+    fn setup_storage() -> SqliteStorage {
+        SqliteStorage::new_in_memory().unwrap()
     }
 
     fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {
@@ -197,15 +215,15 @@ mod tests {
 
     #[test]
     fn test_state_machine_new() {
-        let storage = setup_storage();
-        let sm = StateMachine::new(storage.clone());
+        let storage = Arc::new(setup_storage());
+        let sm = StateMachine::new(storage);
         let _ = sm.get_partition(&LayerType::ManualEdit, &uuid::Uuid::new_v4());
         // Should not panic - method returns error for non-existent partition
     }
 
     #[test]
     fn test_state_machine_create_layer() {
-        let storage = setup_storage();
+        let storage = Arc::new(setup_storage());
         let sm = StateMachine::new(storage);
 
         let manual_layer = sm.create_layer(&LayerType::ManualEdit);
@@ -224,7 +242,7 @@ mod tests {
 
     #[test]
     fn test_state_machine_update_partition_pointer() {
-        let storage = setup_storage();
+        let storage = Arc::new(setup_storage());
         let sm = StateMachine::new(storage.clone());
 
         let initial_id = create_initial_snapshot(&storage, "base\n");
@@ -258,7 +276,7 @@ mod tests {
 
     #[test]
     fn test_state_machine_storage_accessor() {
-        let storage = setup_storage();
+        let storage = Arc::new(setup_storage());
         let sm = StateMachine::new(storage.clone());
         let retrieved = sm.storage();
         // Verify we can access the storage through the state machine

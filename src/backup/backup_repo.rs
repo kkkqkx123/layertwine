@@ -333,7 +333,7 @@ impl BackupRepo {
         }
 
         // Step 1: Reconstruct the backed-up file content
-        let base_content = core_repo.get_file_content(&backup.file)?;
+        let base_content = core_repo.get_file_content(backup.file.path_str(), &backup.file.base_hash)?;
         let base_str = String::from_utf8(base_content)
             .map_err(|e| StratumError::General(format!("non-utf8 file content: {}", e)))?;
         // Normalise trailing newlines - apply_deltas uses .lines() which strips them
@@ -343,7 +343,7 @@ impl BackupRepo {
         // Step 2: Get current staged content
         let staged_partition = core_repo.get_partition_by_name("staged")?;
         let staged_snapshot = core_repo.get_snapshot(&staged_partition.current_snapshot)?;
-        let staged_base = core_repo.get_file_content(&staged_snapshot.file)?;
+        let staged_base = core_repo.get_file_content(staged_snapshot.file.path_str(), &staged_snapshot.file.base_hash)?;
         let staged_base_str = String::from_utf8(staged_base)
             .map_err(|e| StratumError::General(format!("non-utf8 file content: {}", e)))?;
         let staged_deltas = core_repo.get_deltas(&staged_snapshot.deltas)?;
@@ -568,7 +568,7 @@ mod tests {
         assert!(!merged_snapshot.parents.contains(&initial_id));
 
         // Verify content combines both edits
-        let merged_base = core.get_file_content(&merged_snapshot.file).unwrap();
+        let merged_base = core.get_file_content(merged_snapshot.file.path_str(), &merged_snapshot.file.base_hash).unwrap();
         let merged_deltas = core.get_deltas(&merged_snapshot.deltas).unwrap();
         let merged_content =
             apply_deltas(&String::from_utf8(merged_base).unwrap(), &merged_deltas).unwrap();
@@ -607,7 +607,7 @@ mod tests {
         assert_eq!(staged.current_snapshot, merged_id);
 
         let merged_snapshot = core.get_snapshot(&merged_id).unwrap();
-        let merged_base = core.get_file_content(&merged_snapshot.file).unwrap();
+        let merged_base = core.get_file_content(merged_snapshot.file.path_str(), &merged_snapshot.file.base_hash).unwrap();
         let merged_deltas = core.get_deltas(&merged_snapshot.deltas).unwrap();
         let merged_content =
             apply_deltas(&String::from_utf8(merged_base).unwrap(), &merged_deltas).unwrap();

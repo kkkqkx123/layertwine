@@ -16,8 +16,8 @@ use crate::git_sync::gc::collect_garbage;
 use crate::git_sync::git_bridge::GitBridge;
 use crate::layered::StateMachine;
 use crate::storage::repository::{
-    BranchStore, CheckpointStore, DagStore, DeltaStore, FileNodeStore, PartitionStore,
-    SnapshotStore,
+    BranchStore, CheckpointPersist, CheckpointStore, DeltaStore, FileNodeStore,
+    PartitionStore, SnapshotStore,
 };
 use crate::storage::sqlite_storage::SqliteStorage;
 
@@ -76,30 +76,8 @@ fn open_storage(db_path: &str) -> StratumResult<Arc<SqliteStorage>> {
 }
 
 fn load_checkpoint_repo(storage: &SqliteStorage) -> StratumResult<CheckpointRepo> {
-    let checkpoints = storage
-        .list_checkpoints()
-        .map_err(|e| StratumError::Storage(e))?;
-    let branches = storage
-        .list_branches()
-        .map_err(|e| StratumError::Storage(e))?;
-    let dag = storage
-        .load_dag()
-        .map_err(|e| StratumError::Storage(e))?;
-
-    let mut repo = CheckpointRepo::new_single(SnapshotId::from_content(b"dummy"));
-    repo.branches.clear();
-    repo.branches.extend(branches);
-    repo.checkpoint_dag = dag;
-    repo.checkpoints.clear();
-    for cp in checkpoints {
-        repo.checkpoints.insert(cp.id, cp);
-    }
-    if repo.branches.is_empty() {
-        repo.branches
-            .push(Branch::new("main", ContentId::from_content(b"root")));
-    }
-    repo.current_branch = 0;
-    Ok(repo)
+    let persist: Box<dyn CheckpointPersist> = Box::new(storage.share());
+    CheckpointRepo::load(persist)
 }
 
 fn map_error(e: StratumError) -> ApiError {
@@ -146,7 +124,7 @@ fn checkpoint_to_info(cp: &Checkpoint) -> CheckpointInfo {
 /// that all transport layers (CLI, HTTP, gRPC) can use.
 pub struct ApiServiceImpl {
     storage: Arc<SqliteStorage>,
-    state_machine: StateMachine,
+    state_machine: StateMachine<SqliteStorage>,
     db_path: String,
 }
 
@@ -295,18 +273,15 @@ impl ApiService for ApiServiceImpl {
         if let Some(git_repo_path) = &req.git_repo {
             let git_path = Path::new(git_repo_path);
             let ref_name = req.git_ref.as_deref().unwrap_or("HEAD");
-            let initial_snapshot = ContentId::from_content(b"stratum-git-init-placeholder");
-            let mut checkpoint_repo = CheckpointRepo::new_single(initial_snapshot);
+            let persist: Box<dyn CheckpointPersist> = Box::new(storage.share());
+            let mut checkpoint_repo = CheckpointRepo::load(persist)
+                .map_err(map_error)?;
 
             GitBridge::init_from_git(git_path, &*storage, &mut checkpoint_repo, ref_name)
                 .map_err(map_error)?;
-            for cp in checkpoint_repo.checkpoints.values() {
-                storage.store_checkpoint(cp).map_err(|e| map_error(StratumError::Storage(e)))?;
-            }
-            for branch in &checkpoint_repo.branches {
-                storage.store_branch(branch).map_err(|e| map_error(StratumError::Storage(e)))?;
-            }
-            storage.store_dag(&checkpoint_repo.checkpoint_dag).map_err(|e| map_error(StratumError::Storage(e)))?;
+
+            // Auto-persist any metadata changes made inside init_from_git (e.g. git_anchor)
+            checkpoint_repo.sync_all().map_err(map_error)?;
 
             Ok(InitResponse {
                 db_path: db_path.clone(),
@@ -333,11 +308,9 @@ impl ApiService for ApiServiceImpl {
                 crate::layered::staged::ensure_staged_partition(storage.as_ref(), initial_snapshot.id)
                     .map_err(map_error)?;
 
-            let branch = Branch::new("main", ContentId::from_content(b"stratum-root"));
-            storage.store_branch(&branch).map_err(|e| map_error(StratumError::Storage(e)))?;
-
-            let dag = crate::checkpoint::dag::CheckpointDag::new();
-            storage.store_dag(&dag).map_err(|e| map_error(StratumError::Storage(e)))?;
+            let persist: Box<dyn CheckpointPersist> = Box::new(storage.share());
+            let mut _checkpoint_repo = CheckpointRepo::load(persist)
+                .map_err(map_error)?;
 
             Ok(InitResponse {
                 db_path: db_path.clone(),
@@ -583,14 +556,7 @@ impl ApiService for ApiServiceImpl {
         let cp_id = repo.merge_branches(&req.branch, snapshot_ids, &msg, "user")
             .map_err(map_error)?;
 
-        for cp in repo.checkpoints.values() {
-            let _ = self.storage.store_checkpoint(cp);
-        }
-        for branch in &repo.branches {
-            let _ = self.storage.store_branch(branch);
-        }
-        let _ = self.storage.store_dag(&repo.checkpoint_dag);
-
+        // merge_branches auto-persists with embedded storage
         Ok(MergeResponse {
             checkpoint_id: cp_id.to_hex(),
             source_branch: req.branch,
@@ -648,7 +614,8 @@ impl ApiService for ApiServiceImpl {
     fn gc(&self, _req: GcRequest) -> ApiResult<GcResponse> {
         let mut repo = load_checkpoint_repo(self.storage.as_ref()).map_err(map_error)?;
         let stats = collect_garbage(&mut repo).map_err(map_error)?;
-        let _ = self.storage.store_dag(&repo.checkpoint_dag);
+        // remove_checkpoint auto-persists; sync any remaining state
+        repo.sync_all().map_err(map_error)?;
         Ok(GcResponse {
             removed_checkpoints: stats.removed_checkpoints as usize,
             removed_snapshots: stats.removed_snapshots as usize,
@@ -672,11 +639,8 @@ impl ApiService for ApiServiceImpl {
             &message,
         ).map_err(map_error)?;
 
-        // Persist the updated git_anchor and DAG
-        for cp in repo.checkpoints.values() {
-            let _ = self.storage.store_checkpoint(cp);
-        }
-        let _ = self.storage.store_dag(&repo.checkpoint_dag);
+        // Persist git_anchor changes made inside push_to_remote
+        repo.sync_all().map_err(map_error)?;
 
         Ok(PushResponse {
             remote,
@@ -692,7 +656,7 @@ impl ApiService for ApiServiceImpl {
             .map_err(map_error)?;
 
         let mut repo = load_checkpoint_repo(self.storage.as_ref())
-            .unwrap_or_else(|_| CheckpointRepo::new_single(ContentId::from_content(b"stratum-pull")));
+            .map_err(map_error)?;
 
         GitBridge::init_from_git(
             Path::new(&req.git_repo),
@@ -701,13 +665,8 @@ impl ApiService for ApiServiceImpl {
             &git_ref,
         ).map_err(map_error)?;
 
-        for cp in repo.checkpoints.values() {
-            let _ = self.storage.store_checkpoint(cp);
-        }
-        for branch in &repo.branches {
-            let _ = self.storage.store_branch(branch);
-        }
-        let _ = self.storage.store_dag(&repo.checkpoint_dag);
+        // Auto-persisted via embedded storage; sync any metadata changes
+        repo.sync_all().map_err(map_error)?;
 
         Ok(PullResponse {
             remote,

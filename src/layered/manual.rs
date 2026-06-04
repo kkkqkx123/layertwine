@@ -13,7 +13,6 @@ use crate::engine::diff::diff_to_line_diff;
 use crate::engine::merge::apply_deltas;
 use crate::error::{Result, StratumError};
 use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
-use crate::storage::sqlite_storage::SqliteStorage;
 use std::path::PathBuf;
 /// Get the partition ID of the manual_edit level
 pub fn manual_partition_id() -> PartitionId {
@@ -21,7 +20,7 @@ pub fn manual_partition_id() -> PartitionId {
 }
 
 /// Get or create manual_edit partition
-pub fn ensure_manual_partition(storage: &SqliteStorage, initial_snapshot_id: SnapshotId) -> Result<Partition> {
+pub fn ensure_manual_partition<S: PartitionStore>(storage: &S, initial_snapshot_id: SnapshotId) -> Result<Partition> {
     let pid = manual_partition_id();
     match storage.get_partition(&pid) {
         Ok(p) => Ok(p),
@@ -47,11 +46,14 @@ pub fn ensure_manual_partition(storage: &SqliteStorage, initial_snapshot_id: Sna
 /// 2. Calculate old ↔ new Delta
 /// 3. Create a new Snapshot to append to the manual_edit partition
 /// 4. Return the new Snapshot ID
-pub fn apply_manual_edit(
-    storage: &SqliteStorage,
+pub fn apply_manual_edit<S>(
+    storage: &S,
     file_path: &str,
     new_content: &str,
-) -> Result<SnapshotId> {
+) -> Result<SnapshotId>
+where
+    S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
+{
     // Get the current snapshot of the manual_edit partition
     let pid = manual_partition_id();
     let partition = storage
@@ -69,7 +71,7 @@ pub fn apply_manual_edit(
             .map_err(|e| StratumError::Storage(e.into()))?;
         let content_str = String::from_utf8_lossy(
             &storage
-                .get_file_content(&current_snapshot.file)
+                .get_file_content(current_snapshot.file.path_str(), &current_snapshot.file.base_hash)
                 .map_err(|e| StratumError::Storage(e.into()))?,
         )
         .to_string();
@@ -113,9 +115,12 @@ pub fn apply_manual_edit(
 /// Merge the current snapshot of the manual_edit tier into staged
 ///
 /// Take the current Snapshot from manual_edit and staged and merge it to create a new Snapshot to push into the staged history.
-pub fn merge_manual_to_staged(
-    storage: &SqliteStorage,
-) -> Result<SnapshotId> {
+pub fn merge_manual_to_staged<S>(
+    storage: &S,
+) -> Result<SnapshotId>
+where
+    S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
+{
     let manual_pid = manual_partition_id();
     let staged_pid = crate::layered::staged::staged_partition_id();
 
@@ -181,10 +186,9 @@ mod tests {
     use crate::core::snapshot::Snapshot;
     use crate::storage::repository::{SnapshotStore, FileNodeStore, DeltaStore};
     use crate::storage::sqlite_storage::SqliteStorage;
-    use std::sync::Arc;
 
-    fn setup_storage() -> Arc<SqliteStorage> {
-        Arc::new(SqliteStorage::new_in_memory().unwrap())
+    fn setup_storage() -> SqliteStorage {
+        SqliteStorage::new_in_memory().unwrap()
     }
 
     fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {

@@ -9,7 +9,6 @@ use crate::core::types::{BackupId, LayerType, PartitionId, SnapshotId};
 use crate::engine::merge::apply_deltas;
 use crate::error::{Result, StratumError};
 use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
-use crate::storage::sqlite_storage::SqliteStorage;
 
 // ===== Allowable Direction of Flow =====
 
@@ -89,11 +88,14 @@ pub fn check_rollback_valid(from: &LayerType, to: &LayerType) -> Result<()> {
 /// Implementation of positive flow
 ///
 /// Automatically schedules operation functions to each layer based on the ForwardTransition type.
-pub fn execute_forward(
-    storage: &SqliteStorage,
+pub fn execute_forward<S>(
+    storage: &S,
     transition: ForwardTransition,
     params: &[&str], // Optional parameters: agent_id, integrated_name, etc.
-) -> Result<SnapshotId> {
+) -> Result<SnapshotId>
+where
+    S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
+{
     match transition {
         ForwardTransition::ManualToStaged => {
             check_forward_valid(&LayerType::ManualEdit, &LayerType::Staged)?;
@@ -152,8 +154,8 @@ pub fn execute_forward(
 ///
 /// Corresponds to rollback_partition in architecture document §3.3.
 /// Only switches pointers and does not modify any immutable data (Iron Law 2).
-pub fn rollback_partition(
-    storage: &SqliteStorage,
+pub fn rollback_partition<S: PartitionStore>(
+    storage: &S,
     partition_id: &PartitionId,
 ) -> Result<SnapshotId> {
     let partition = storage
@@ -178,10 +180,13 @@ pub fn rollback_partition(
 ///
 /// Finds the target layer source from the parents of the staged current snapshot.
 /// Corresponds to rollback_staged_to_source in architecture document §3.3.
-pub fn rollback_staged_to_layer(
-    storage: &SqliteStorage,
+pub fn rollback_staged_to_layer<S>(
+    storage: &S,
     target_layer: LayerType,
-) -> Result<SnapshotId> {
+) -> Result<SnapshotId>
+where
+    S: SnapshotStore + PartitionStore,
+{
     let staged_pid = crate::layered::staged::staged_partition_id();
     let staged_partition = storage
         .get_partition(&staged_pid)
@@ -220,11 +225,14 @@ pub fn rollback_staged_to_layer(
 /// Merge backup snapshots into staged
 ///
 /// Uses BackupRepo to restore a backup into the staged partition.
-pub fn merge_backup_to_staged(
-    storage: &SqliteStorage,
+pub fn merge_backup_to_staged<S>(
+    storage: &S,
     backup_repo: &BackupRepo,
     backup_id: &BackupId,
-) -> Result<SnapshotId> {
+) -> Result<SnapshotId>
+where
+    S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
+{
     backup_repo.merge_to_staged(backup_id, storage)
 }
 
@@ -233,12 +241,15 @@ pub fn merge_backup_to_staged(
 /// Reconstructs the complete text content from Snapshot's delta chains
 ///
 /// Read the original content from file_node and apply all deltas in turn.
-pub fn reconstruct_text(
-    storage: &SqliteStorage,
+pub fn reconstruct_text<S>(
+    storage: &S,
     snapshot: &Snapshot,
-) -> Result<String> {
+) -> Result<String>
+where
+    S: FileNodeStore + DeltaStore,
+{
     let file_content = storage
-        .get_file_content(&snapshot.file)
+        .get_file_content(snapshot.file.path_str(), &snapshot.file.base_hash)
         .map_err(|e| StratumError::Storage(e.into()))?;
     let content_str = String::from_utf8_lossy(&file_content).to_string();
 
@@ -251,8 +262,8 @@ pub fn reconstruct_text(
 }
 
 /// Checks if the snapshot contains a parent of the specified partition_type.
-pub fn has_parent_of_type(
-    storage: &SqliteStorage,
+pub fn has_parent_of_type<S: SnapshotStore>(
+    storage: &S,
     snapshot: &Snapshot,
     partition_type_prefix: &str,
 ) -> Result<bool> {
@@ -279,10 +290,9 @@ mod tests {
     use crate::storage::repository::{FileNodeStore, SnapshotStore, DeltaStore, PartitionStore};
     use crate::storage::sqlite_storage::SqliteStorage;
     use std::path::PathBuf;
-    use std::sync::Arc;
 
-    fn setup_storage() -> Arc<SqliteStorage> {
-        Arc::new(SqliteStorage::new_in_memory().unwrap())
+    fn setup_storage() -> SqliteStorage {
+        SqliteStorage::new_in_memory().unwrap()
     }
 
     fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {

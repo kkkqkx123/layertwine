@@ -9,7 +9,6 @@ use crate::core::types::{
 };
 use crate::error::{Result, StratumError};
 use crate::storage::repository::PartitionStore;
-use crate::storage::sqlite_storage::SqliteStorage;
 
 /// ID of the Agent partition in the approval layer
 pub fn approval_agent_partition_id(agent_id: &AgentInstanceId) -> PartitionId {
@@ -24,8 +23,8 @@ pub fn approval_agent_partition_id(agent_id: &AgentInstanceId) -> PartitionId {
 }
 
 /// Get or create an Agent partition at the approval level
-pub fn ensure_approval_agent_partition(
-    storage: &SqliteStorage,
+pub fn ensure_approval_agent_partition<S: PartitionStore>(
+    storage: &S,
     agent_id: &AgentInstanceId,
     initial_snapshot_id: SnapshotId,
 ) -> Result<Partition> {
@@ -57,10 +56,9 @@ mod tests {
     use crate::core::snapshot::Snapshot;
     use crate::storage::repository::{SnapshotStore, FileNodeStore, DeltaStore};
     use crate::storage::sqlite_storage::SqliteStorage;
-    use std::sync::Arc;
 
-    fn setup_storage() -> Arc<SqliteStorage> {
-        Arc::new(SqliteStorage::new_in_memory().unwrap())
+    fn setup_storage() -> SqliteStorage {
+        SqliteStorage::new_in_memory().unwrap()
     }
 
     fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {

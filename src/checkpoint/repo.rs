@@ -3,11 +3,13 @@ use crate::checkpoint::checkpoint::{Checkpoint, CheckpointMetadata};
 use crate::checkpoint::dag::CheckpointDag;
 use crate::core::types::{CheckpointId, SnapshotId};
 use crate::error::{Result, StratumError};
+use crate::storage::repository::CheckpointPersist;
 use std::collections::HashMap;
 
 /// Checkpoint Repository - Versioning Core
 ///
 /// Git-independent versioning, managing checkpoint commits, branches, and DAG history.
+/// When `storage` is set, all mutations auto-persist to the backend.
 pub struct CheckpointRepo {
     /// All branches
     pub branches: Vec<Branch>,
@@ -17,6 +19,8 @@ pub struct CheckpointRepo {
     pub checkpoint_dag: CheckpointDag,
     /// All checkpoints (ID → Checkpoint)
     pub(crate) checkpoints: HashMap<CheckpointId, Checkpoint>,
+    /// Optional persistence backend — when set, mutations auto-persist
+    pub(crate) storage: Option<Box<dyn CheckpointPersist>>,
 }
 
 impl CheckpointRepo {
@@ -39,12 +43,97 @@ impl CheckpointRepo {
             current_branch: 0,
             checkpoint_dag: dag,
             checkpoints,
+            storage: None,
         }
     }
 
     /// Convenient single-snapshot compatible construction
     pub fn new_single(initial_snapshot: SnapshotId) -> Self {
         CheckpointRepo::new(vec![initial_snapshot])
+    }
+
+    /// Load checkpoint repository from persistent storage.
+    ///
+    /// If the database is empty, a root checkpoint + "main" branch are created automatically.
+    /// All subsequent mutations will auto-persist through the provided storage backend.
+    pub fn load(storage: Box<dyn CheckpointPersist>) -> Result<Self> {
+        let mut checkpoint_dag = storage.load_dag()?;
+        let mut checkpoints: HashMap<CheckpointId, Checkpoint> = storage
+            .list_checkpoints()?
+            .into_iter()
+            .map(|cp| (cp.id, cp))
+            .collect();
+        let mut branches = storage.list_branches()?;
+
+        // Initialize with root when storage is empty
+        if checkpoints.is_empty() {
+            let metadata = CheckpointMetadata::new("system", "root checkpoint");
+            let root = Checkpoint::new(vec![], vec![], metadata);
+            let root_id = root.id;
+
+            storage.store_checkpoint(&root)?;
+            checkpoints.insert(root_id, root);
+
+            checkpoint_dag = CheckpointDag::new();
+            checkpoint_dag.add_node(root_id);
+            storage.store_dag(&checkpoint_dag)?;
+
+            let main_branch = Branch::new("main", root_id);
+            storage.store_branch(&main_branch)?;
+            branches.push(main_branch);
+
+            storage.store_metadata("current_branch", "main")?;
+        }
+
+        let current_branch_name = storage
+            .load_metadata("current_branch")?
+            .unwrap_or_else(|| "main".to_string());
+        let current_branch = branches
+            .iter()
+            .position(|b| b.name == current_branch_name)
+            .unwrap_or(0);
+
+        Ok(CheckpointRepo {
+            branches,
+            current_branch,
+            checkpoint_dag,
+            checkpoints,
+            storage: Some(storage),
+        })
+    }
+
+    /// Attach a persistence backend to an existing in-memory repo.
+    /// Subsequent mutations will auto-persist.
+    pub fn attach_storage(&mut self, storage: Box<dyn CheckpointPersist>) {
+        self.storage = Some(storage);
+    }
+
+    /// Persist a specific checkpoint to storage (used after in-memory metadata changes).
+    pub fn sync_checkpoint(&self, cp_id: &CheckpointId) -> Result<()> {
+        if let Some(storage) = &self.storage {
+            if let Some(cp) = self.checkpoints.get(cp_id) {
+                storage.store_checkpoint(cp)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Persist the full current state (all checkpoints, DAG, branches, current_branch metadata).
+    pub fn sync_all(&self) -> Result<()> {
+        if let Some(storage) = &self.storage {
+            for cp in self.checkpoints.values() {
+                storage.store_checkpoint(cp)?;
+            }
+            storage.store_dag(&self.checkpoint_dag)?;
+            for branch in &self.branches {
+                storage.store_branch(branch)?;
+            }
+            storage.store_metadata(
+                "current_branch",
+                &self.branches[self.current_branch].name,
+            )?;
+        }
+        Ok(())
     }
 
     // Checkpoint operations -
@@ -68,6 +157,7 @@ impl CheckpointRepo {
     /// 1. Create a new Checkpoint (supports multi-file snapshots)
     /// 2. Add to DAG
     /// 3. Update branch head
+    /// 4. Auto-persist to storage if backend is attached
     pub fn commit(
         &mut self,
         snapshot_ids: Vec<SnapshotId>,
@@ -88,6 +178,16 @@ impl CheckpointRepo {
         self.checkpoint_dag.add_node(cp_id);
         self.checkpoint_dag.add_edge(current_head, cp_id);
         self.current_branch_mut().set_head(cp_id);
+
+        // Auto-persist
+        if let Some(storage) = &self.storage {
+            if let Some(cp) = self.checkpoints.get(&cp_id) {
+                storage.store_checkpoint(cp)?;
+            }
+            storage.store_dag(&self.checkpoint_dag)?;
+            let branch = &self.branches[self.current_branch];
+            storage.update_branch_head(&branch.name, &cp_id)?;
+        }
 
         Ok(cp_id)
     }
@@ -119,7 +219,8 @@ impl CheckpointRepo {
         &self.branches[self.current_branch].name
     }
 
-    /// Create a new branch based on the current head
+    /// Create a new branch based on the current head.
+    /// Auto-persists the new branch to storage.
     pub fn create_branch(&mut self, name: &str) -> Result<()> {
         if self.branches.iter().any(|b| b.name == name) {
             return Err(StratumError::Checkpoint(format!(
@@ -129,11 +230,15 @@ impl CheckpointRepo {
         }
         let head = self.current_branch_head();
         let branch = Branch::new(name, head);
+        if let Some(storage) = &self.storage {
+            storage.store_branch(&branch)?;
+        }
         self.branches.push(branch);
         Ok(())
     }
 
-    /// Create a new branch on the specified checkpoint
+    /// Create a new branch on the specified checkpoint.
+    /// Auto-persists the new branch to storage.
     pub fn create_branch_from(&mut self, name: &str, from_checkpoint: CheckpointId) -> Result<()> {
         if !self.checkpoints.contains_key(&from_checkpoint) {
             return Err(StratumError::NotFound(format!(
@@ -148,11 +253,15 @@ impl CheckpointRepo {
             )));
         }
         let branch = Branch::new(name, from_checkpoint);
+        if let Some(storage) = &self.storage {
+            storage.store_branch(&branch)?;
+        }
         self.branches.push(branch);
         Ok(())
     }
 
     /// Switching Branches
+    /// Auto-persists the current branch name to storage.
     pub fn switch_branch(&mut self, name: &str) -> Result<usize> {
         let idx = self
             .branches
@@ -161,6 +270,9 @@ impl CheckpointRepo {
             .ok_or_else(|| StratumError::NotFound(format!("branch '{}' not found", name)))?;
 
         self.current_branch = idx;
+        if let Some(storage) = &self.storage {
+            storage.store_metadata("current_branch", name)?;
+        }
         Ok(idx)
     }
 
@@ -186,6 +298,7 @@ impl CheckpointRepo {
     /// Merge branch: Merge source_branch into the current branch.
     ///
     /// Generate multiple parent Checkpoints to add to the DAG.
+    /// Auto-persists the new checkpoint, DAG, and updated branch head.
     pub fn merge_branches(
         &mut self,
         source_branch: &str,
@@ -210,6 +323,16 @@ impl CheckpointRepo {
         self.checkpoint_dag.add_edge(current_head, cp_id);
         self.checkpoint_dag.add_edge(source_head, cp_id);
         self.current_branch_mut().set_head(cp_id);
+
+        // Auto-persist
+        if let Some(storage) = &self.storage {
+            if let Some(cp) = self.checkpoints.get(&cp_id) {
+                storage.store_checkpoint(cp)?;
+            }
+            storage.store_dag(&self.checkpoint_dag)?;
+            let branch = &self.branches[self.current_branch];
+            storage.update_branch_head(&branch.name, &cp_id)?;
+        }
 
         Ok(cp_id)
     }
@@ -269,13 +392,19 @@ impl CheckpointRepo {
     }
 
     /// Delete checkpoints
+    /// Auto-persists the deletion and updated DAG to storage.
     pub fn remove_checkpoint(&mut self, id: &CheckpointId) -> Result<()> {
         if self.checkpoints.remove(id).is_none() {
-            return Err(crate::error::StratumError::NotFound(
-                format!("checkpoint {} not found", id),
-            ));
+            return Err(StratumError::NotFound(format!(
+                "checkpoint {} not found",
+                id
+            )));
         }
         self.checkpoint_dag.remove_node(id);
+        if let Some(storage) = &self.storage {
+            storage.delete_checkpoint(id)?;
+            storage.store_dag(&self.checkpoint_dag)?;
+        }
         Ok(())
     }
 }

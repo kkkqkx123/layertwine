@@ -3,9 +3,10 @@ use crate::checkpoint::branch::Branch;
 use crate::checkpoint::dag::CheckpointDag;
 use crate::core::delta::Delta;
 use crate::core::file_node::FileNode;
+use crate::core::layer::Layer;
 use crate::core::partition::Partition;
 use crate::core::snapshot::Snapshot;
-use crate::core::types::{CheckpointId, DeltaId, PartitionId, SnapshotId};
+use crate::core::types::{CheckpointId, DeltaId, LayerType, PartitionId, PartitionType, SnapshotId};
 use crate::StorageResult;
 
 /// Snapshot storage trait
@@ -17,7 +18,7 @@ pub trait SnapshotStore {
     /// Query Snapshots by Path
     fn find_snapshots_by_file(&self, file_path: &str) -> StorageResult<Vec<Snapshot>>;
     /// Query Snapshots by Partition Type
-    fn find_snapshots_by_partition(&self, partition_type: &str) -> StorageResult<Vec<Snapshot>>;
+    fn find_snapshots_by_partition(&self, partition_type: &PartitionType) -> StorageResult<Vec<Snapshot>>;
     /// Determining if a snapshot exists
     fn snapshot_exists(&self, id: &SnapshotId) -> StorageResult<bool>;
 }
@@ -52,14 +53,42 @@ pub trait PartitionStore {
 pub trait FileNodeStore {
     /// Storage file node
     fn store_file_node(&self, file_node: &FileNode, content: &[u8]) -> StorageResult<()>;
-    /// Get the content corresponding to the file node
-    fn get_file_content(&self, file_node: &FileNode) -> StorageResult<Vec<u8>>;
+    /// Get file content by path and base hash
+    fn get_file_content(&self, file_path: &str, base_hash: &[u8; 32]) -> StorageResult<Vec<u8>>;
     /// Determine if a file node exists
-    fn file_node_exists(&self, file_node: &FileNode) -> StorageResult<bool>;
+    fn file_node_exists(&self, file_path: &str, base_hash: &[u8; 32]) -> StorageResult<bool>;
+}
+
+/// Layer storage trait
+pub trait LayerStore {
+    /// Store or update a layer
+    fn store_layer(&self, layer: &Layer) -> StorageResult<()>;
+    /// Get a layer by its type
+    fn get_layer(&self, layer_type: &LayerType) -> StorageResult<Layer>;
+    /// List all layer types
+    fn list_layer_types(&self) -> StorageResult<Vec<LayerType>>;
+    /// Delete a layer
+    fn delete_layer(&self, layer_type: &LayerType) -> StorageResult<()>;
+}
+
+/// Atomic operations trait for transactional guarantees
+pub trait AtomicOps {
+    /// Execute the given closure with atomic (transactional) guarantees.
+    ///
+    /// Default implementation: no-op wrapping (caller manages atomicity).
+    /// SQLite backend overrides this with SAVEPOINT-based transactions.
+    fn with_atomic<F, T>(&self, f: F) -> StorageResult<T>
+    where
+        F: FnOnce(&Self) -> StorageResult<T>,
+    {
+        f(self)
+    }
 }
 
 /// Combined storage trait (full storage interface)
-pub trait Repository: SnapshotStore + DeltaStore + PartitionStore + FileNodeStore {}
+pub trait Repository:
+    SnapshotStore + DeltaStore + PartitionStore + FileNodeStore + CheckpointStore + BranchStore + DagStore + LayerStore + AtomicOps
+{}
 
 /// Checkpoint storage trait
 pub trait CheckpointStore {
@@ -95,4 +124,12 @@ pub trait DagStore {
     fn store_dag(&self, dag: &CheckpointDag) -> StorageResult<()>;
     /// Load DAG
     fn load_dag(&self) -> StorageResult<CheckpointDag>;
+    /// Store arbitrary metadata key-value pair
+    fn store_metadata(&self, key: &str, value: &str) -> StorageResult<()>;
+    /// Load metadata value by key
+    fn load_metadata(&self, key: &str) -> StorageResult<Option<String>>;
 }
+
+/// Combined checkpoint persistence trait (for auto-persist in CheckpointRepo)
+pub trait CheckpointPersist: CheckpointStore + BranchStore + DagStore {}
+impl<T: CheckpointStore + BranchStore + DagStore> CheckpointPersist for T {}

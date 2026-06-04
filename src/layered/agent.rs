@@ -14,7 +14,6 @@ use crate::engine::diff::diff_to_line_diff;
 use crate::engine::merge::apply_deltas;
 use crate::error::{Result, StratumError};
 use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
-use crate::storage::sqlite_storage::SqliteStorage;
 use std::path::PathBuf;
 /// Generate stable IDs for agent partitions
 pub fn agent_partition_id(agent_id: &AgentInstanceId) -> PartitionId {
@@ -29,8 +28,8 @@ pub fn agent_partition_id(agent_id: &AgentInstanceId) -> PartitionId {
 }
 
 /// Getting or creating agent_edit partitions
-pub fn ensure_agent_partition(
-    storage: &SqliteStorage,
+pub fn ensure_agent_partition<S: PartitionStore>(
+    storage: &S,
     agent_id: &AgentInstanceId,
     initial_snapshot_id: SnapshotId,
 ) -> Result<Partition> {
@@ -57,12 +56,15 @@ pub fn ensure_agent_partition(
 ///
 /// Append the Agent changes as Delta to the corresponding partition at the agent_edit level.
 /// Each Agent instance has a separate partition and does not interfere with each other.
-pub fn apply_agent_edit(
-    storage: &SqliteStorage,
+pub fn apply_agent_edit<S>(
+    storage: &S,
     agent_id: &AgentInstanceId,
     file_path: &str,
     new_content: &str,
-) -> Result<SnapshotId> {
+) -> Result<SnapshotId>
+where
+    S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
+{
     let pid = agent_partition_id(agent_id);
     let partition = storage
         .get_partition(&pid)
@@ -81,7 +83,7 @@ pub fn apply_agent_edit(
             .map_err(|e| StratumError::Storage(e.into()))?;
         let content_str = String::from_utf8_lossy(
             &storage
-                .get_file_content(&current_snapshot.file)
+                .get_file_content(current_snapshot.file.path_str(), &current_snapshot.file.base_hash)
                 .map_err(|e| StratumError::Storage(e.into()))?,
         )
         .to_string();
@@ -132,10 +134,13 @@ pub fn apply_agent_edit(
 /// Corresponds to `move_agent_to_approval` in the architecture documentation.
 /// - Take the current snapshot of the agent_raw partition and the approval agent partition
 /// - Merge to generate a new snapshot to push into the approval agent partition
-pub fn move_agent_to_approval(
-    storage: &SqliteStorage,
+pub fn move_agent_to_approval<S>(
+    storage: &S,
     agent_id: &AgentInstanceId,
-) -> Result<SnapshotId> {
+) -> Result<SnapshotId>
+where
+    S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
+{
     let agent_pid = agent_partition_id(agent_id);
     let approval_pid = crate::layered::approval::approval_agent_partition_id(agent_id);
 
@@ -195,10 +200,13 @@ pub fn move_agent_to_approval(
 }
 
 /// Abandon Agent modifications (switch pointer to parent Snapshot only)
-pub fn discard_agent_edit(
-    storage: &SqliteStorage,
+pub fn discard_agent_edit<S>(
+    storage: &S,
     agent_id: &AgentInstanceId,
-) -> Result<()> {
+) -> Result<()>
+where
+    S: SnapshotStore + PartitionStore,
+{
     let pid = agent_partition_id(agent_id);
     let partition = storage
         .get_partition(&pid)
@@ -230,10 +238,9 @@ mod tests {
     use crate::core::snapshot::Snapshot;
     use crate::storage::repository::{PartitionStore, SnapshotStore, FileNodeStore, DeltaStore};
     use crate::storage::sqlite_storage::SqliteStorage;
-    use std::sync::Arc;
 
-    fn setup_storage() -> Arc<SqliteStorage> {
-        Arc::new(SqliteStorage::new_in_memory().unwrap())
+    fn setup_storage() -> SqliteStorage {
+        SqliteStorage::new_in_memory().unwrap()
     }
 
     fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {

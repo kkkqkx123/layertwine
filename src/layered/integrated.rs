@@ -9,8 +9,7 @@ use crate::core::snapshot::Snapshot;
 use crate::core::types::{AgentInstanceId, PartitionId, PartitionType, SnapshotId, SourceType};
 use crate::engine::diff::diff_to_line_diff;
 use crate::error::{Result, StratumError};
-use crate::storage::repository::{DeltaStore, PartitionStore, SnapshotStore};
-use crate::storage::sqlite_storage::SqliteStorage;
+use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
 
 // Partition ID generation -
 
@@ -34,8 +33,8 @@ pub fn unified_partition_id() -> PartitionId {
 // Partition creation -
 
 /// Get or create an Integrated partition
-pub fn ensure_integrated_partition(
-    storage: &SqliteStorage,
+pub fn ensure_integrated_partition<S: PartitionStore>(
+    storage: &S,
     name: &str,
     initial_snapshot_id: SnapshotId,
 ) -> Result<Partition> {
@@ -59,8 +58,8 @@ pub fn ensure_integrated_partition(
 }
 
 /// Get or create the Unified partition
-pub fn ensure_unified_partition(
-    storage: &SqliteStorage,
+pub fn ensure_unified_partition<S: PartitionStore>(
+    storage: &S,
     initial_snapshot_id: SnapshotId,
 ) -> Result<Partition> {
     let pid = unified_partition_id();
@@ -85,11 +84,14 @@ pub fn ensure_unified_partition(
 // Forward migration operations -
 
 /// Migrate Agent approval content into an Integrated partition
-pub fn move_approval_to_integrated(
-    storage: &SqliteStorage,
+pub fn move_approval_to_integrated<S>(
+    storage: &S,
     agent_id: &AgentInstanceId,
     integrated_name: &str,
-) -> Result<SnapshotId> {
+) -> Result<SnapshotId>
+where
+    S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
+{
     let approval_pid = crate::layered::approval::approval_agent_partition_id(agent_id);
     let integrated_pid = integrated_partition_id(integrated_name);
 
@@ -150,10 +152,13 @@ pub fn move_approval_to_integrated(
 }
 
 /// Merge all named Integrated partitions into the Unified partition
-pub fn move_integrated_to_unified(
-    storage: &SqliteStorage,
+pub fn move_integrated_to_unified<S>(
+    storage: &S,
     integrated_names: &[String],
-) -> Result<SnapshotId> {
+) -> Result<SnapshotId>
+where
+    S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
+{
     let unified_pid = unified_partition_id();
 
     let initial_snapshot = if integrated_names.is_empty() {
@@ -245,8 +250,8 @@ pub fn move_integrated_to_unified(
 }
 
 /// Copy current_snapshot pointer from one partition to another (pointer-only, no data writes)
-pub fn migrate_between_partitions(
-    storage: &SqliteStorage,
+pub fn migrate_between_partitions<S: PartitionStore>(
+    storage: &S,
     from_partition_id: &PartitionId,
     to_partition_id: &PartitionId,
 ) -> Result<()> {
@@ -271,10 +276,9 @@ mod tests {
     use crate::storage::repository::{FileNodeStore, SnapshotStore};
     use crate::storage::sqlite_storage::SqliteStorage;
     use crate::layered::transition::reconstruct_text;
-    use std::sync::Arc;
 
-    fn setup_storage() -> Arc<SqliteStorage> {
-        Arc::new(SqliteStorage::new_in_memory().unwrap())
+    fn setup_storage() -> SqliteStorage {
+        SqliteStorage::new_in_memory().unwrap()
     }
 
     fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {

@@ -152,7 +152,7 @@ impl GitBridge {
                 .map_err(|e| StratumError::Storage(e))?;
 
             let content = storage
-                .get_file_content(&snapshot.file)
+                .get_file_content(snapshot.file.path_str(), &snapshot.file.base_hash)
                 .map_err(|e| StratumError::Storage(e))?;
 
             let file_path_in_repo = workdir.join(&snapshot.file.file_path);
