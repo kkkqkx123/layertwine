@@ -1,29 +1,29 @@
-use serde::{Deserialize, Serialize};
-use crate::core::types::{ContentId, DeltaId, SnapshotId};
 use crate::core::file_node::FileNode;
+use crate::core::types::{ContentId, DeltaId, SnapshotId};
+use serde::{Deserialize, Serialize};
 
-/// Snapshot - Immutable state snapshot
+#[derive(Serialize)]
+struct SnapshotForId<'a> {
+    file: &'a FileNode,
+    deltas: &'a Vec<DeltaId>,
+    parents: &'a Vec<SnapshotId>,
+    partition_type: &'a str,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
-    /// Unique ID (content addressing)
     pub id: SnapshotId,
-    /// Linked document benchmarks
     pub file: FileNode,
-    /// Incremental list (in order of application)
     pub deltas: Vec<DeltaId>,
-    /// List of parent snapshot IDs (single parent = normal, multiple parents = merged)
     pub parents: Vec<SnapshotId>,
-    /// Attributed partition type
     pub partition_type: String,
-    /// Creating timestamps (Unix milliseconds)
     pub created_at: i64,
 }
 
 impl Snapshot {
-    /// Creating the initial snapshot (first version)
     pub fn new_initial(file: FileNode, delta_id: DeltaId) -> Self {
         let snapshot = Snapshot {
-            id: ContentId([0u8; 32]), // occupy a position
+            id: ContentId([0u8; 32]),
             file,
             deltas: vec![delta_id],
             parents: vec![],
@@ -35,17 +35,12 @@ impl Snapshot {
         s
     }
 
-    /// Creating a new snapshot based on a parent snapshot
-    pub fn from_parent(
-        parent: &Snapshot,
-        delta_id: DeltaId,
-        partition_type: String,
-    ) -> Self {
+    pub fn from_parent(parent: &Snapshot, delta_id: DeltaId, partition_type: String) -> Self {
         let mut deltas = parent.deltas.clone();
         deltas.push(delta_id);
 
         let snapshot = Snapshot {
-            id: ContentId([0u8; 32]), // occupy a position
+            id: ContentId([0u8; 32]),
             file: parent.file.clone(),
             deltas,
             parents: vec![parent.id],
@@ -57,21 +52,16 @@ impl Snapshot {
         s
     }
 
-    /// Apply an increment on the current snapshot to generate a new snapshot
-    ///
-    /// Equivalent to Snapshot::from_parent - appends a new Delta at the end of an incremental chain of existing snapshots.
-    /// Returns a sub-snapshot containing the new Delta.
     pub fn apply_delta(&self, delta_id: DeltaId) -> Self {
         Snapshot::from_parent(self, delta_id, self.partition_type.clone())
     }
 
-    /// Merge snapshots (multiple parents)
     pub fn merge(parents: Vec<&Snapshot>, delta_id: DeltaId, partition_type: String) -> Self {
         let file = parents[0].file.clone();
         let deltas = vec![delta_id];
 
         let snapshot = Snapshot {
-            id: ContentId([0u8; 32]), // occupy a position
+            id: ContentId([0u8; 32]),
             file,
             deltas,
             parents: parents.iter().map(|p| p.id).collect(),
@@ -83,9 +73,14 @@ impl Snapshot {
         s
     }
 
-    /// Calculate ID based on content
     pub fn compute_id(&self) -> SnapshotId {
-        let json = serde_json::to_vec(self).unwrap_or_default();
+        let snapshot_for_id = SnapshotForId {
+            file: &self.file,
+            deltas: &self.deltas,
+            parents: &self.parents,
+            partition_type: &self.partition_type,
+        };
+        let json = serde_json::to_vec(&snapshot_for_id).unwrap_or_default();
         SnapshotId::from_content(&json)
     }
 }
@@ -132,7 +127,7 @@ impl SnapshotBuilder {
     pub fn build(self) -> Result<Snapshot, &'static str> {
         let file = self.file.ok_or("file is required")?;
         let snapshot = Snapshot {
-            id: ContentId([0u8; 32]), // occupy a position
+            id: ContentId([0u8; 32]),
             file,
             deltas: self.deltas,
             parents: self.parents,

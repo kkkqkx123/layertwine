@@ -3,20 +3,19 @@
 //! Provides an axum-based REST/JSON server that wraps the ApiService trait.
 //! Enabled with `feature = "http"`.
 
-use std::sync::Arc;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use axum::{
-    Router,
-    routing::{get, post},
-    Json,
-    extract::{Path, State, Query, DefaultBodyLimit},
-    response::IntoResponse,
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
 };
 
-use crate::api::types::*;
 use crate::api::service::ApiService;
+use crate::api::types::*;
 
 /// Shared application state
 struct AppState {
@@ -35,7 +34,10 @@ struct AppState {
 /// http::serve(Arc::new(service), "127.0.0.1:8080".parse().unwrap()).await.unwrap();
 /// # }
 /// ```
-pub async fn serve(service: Arc<dyn ApiService>, addr: SocketAddr) -> Result<(), crate::error::StratumError> {
+pub async fn serve(
+    service: Arc<dyn ApiService>,
+    addr: SocketAddr,
+) -> Result<(), crate::error::StratumError> {
     let state = Arc::new(AppState { service });
 
     let app = Router::new()
@@ -66,9 +68,11 @@ pub async fn serve(service: Arc<dyn ApiService>, addr: SocketAddr) -> Result<(),
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(addr).await
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
         .map_err(|e| crate::error::StratumError::General(format!("failed to bind: {}", e)))?;
-    axum::serve(listener, app).await
+    axum::serve(listener, app)
+        .await
         .map_err(|e| crate::error::StratumError::General(format!("server error: {}", e)))
 }
 
@@ -95,11 +99,14 @@ fn err_response<T: serde::Serialize>(e: ApiError) -> (StatusCode, Json<ApiEnvelo
         "INVALID_PARAMS" => StatusCode::BAD_REQUEST,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
-    (code, Json(ApiEnvelope {
-        success: false,
-        data: None,
-        error: Some(e),
-    }))
+    (
+        code,
+        Json(ApiEnvelope {
+            success: false,
+            data: None,
+            error: Some(e),
+        }),
+    )
 }
 
 // ── Handler functions ──
@@ -114,9 +121,7 @@ async fn handle_init(
     }
 }
 
-async fn handle_status(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn handle_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.service.status() {
         Ok(r) => ok_response(r).into_response(),
         Err(e) => err_response::<StatusResponse>(e).into_response(),
@@ -203,9 +208,7 @@ async fn handle_log(
     }
 }
 
-async fn handle_branch_list(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn handle_branch_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.service.branch_list() {
         Ok(r) => ok_response(r).into_response(),
         Err(e) => err_response::<BranchListResponse>(e).into_response(),
@@ -263,9 +266,7 @@ async fn handle_restore(
     }
 }
 
-async fn handle_gc(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn handle_gc(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let req = GcRequest {};
     match state.service.gc(req) {
         Ok(r) => ok_response(r).into_response(),

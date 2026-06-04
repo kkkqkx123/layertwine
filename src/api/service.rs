@@ -6,9 +6,9 @@ use crate::checkpoint::branch::Branch;
 use crate::checkpoint::checkpoint::Checkpoint;
 use crate::checkpoint::repo::CheckpointRepo;
 use crate::core::delta::Delta;
-use crate::core::types::LineDiff;
 use crate::core::file_node::FileNode;
 use crate::core::snapshot::Snapshot;
+use crate::core::types::LineDiff;
 use crate::core::types::{
     AgentInstanceId, ContentId, DiffOp, PartitionType, SnapshotId, SourceType,
 };
@@ -17,10 +17,10 @@ use crate::git_sync::gc::collect_garbage;
 use crate::git_sync::git_bridge::GitBridge;
 use crate::layered::StateMachine;
 use crate::storage::repository::{
-    BranchStore, CheckpointPersist, CheckpointStore, DeltaStore, FileNodeStore,
-    PartitionStore, SnapshotStore,
+    BranchStore, CheckpointPersist, CheckpointStore, DeltaStore, FileNodeStore, PartitionStore,
+    SnapshotStore,
 };
-use crate::storage::sqlite_storage::SqliteStorage;
+use crate::storage::SqliteStorage;
 
 use super::types::*;
 
@@ -71,8 +71,7 @@ fn open_storage(db_path: &str) -> StratumResult<Arc<SqliteStorage>> {
         std::fs::create_dir_all(parent)
             .map_err(|e| StratumError::General(format!("failed to create db directory: {}", e)))?;
     }
-    let storage = SqliteStorage::new_full(path)
-        .map_err(StratumError::Storage)?;
+    let storage = SqliteStorage::new_full(path).map_err(StratumError::Storage)?;
     Ok(Arc::new(storage))
 }
 
@@ -90,7 +89,10 @@ fn map_error(e: StratumError) -> ApiError {
         StratumError::GitSync(s) => ApiError::git_sync(s),
         StratumError::Gc(s) => ApiError::gc(s),
         StratumError::NotFound(s) => ApiError::not_found(s),
-        StratumError::Cli { context, suggestion } => ApiError {
+        StratumError::Cli {
+            context,
+            suggestion,
+        } => ApiError {
             code: "CLI_ERROR".into(),
             message: context,
             suggestion,
@@ -143,7 +145,9 @@ impl ApiServiceImpl {
 
     /// Reconstruct text from a snapshot by its ID
     fn reconstruct_text_from_id(&self, snapshot_id: &SnapshotId) -> ApiResult<String> {
-        let snapshot = self.storage.get_snapshot(snapshot_id)
+        let snapshot = self
+            .storage
+            .get_snapshot(snapshot_id)
             .map_err(|e| map_error(StratumError::Storage(e)))?;
         crate::layered::transition::reconstruct_text(self.storage.as_ref(), &snapshot)
             .map_err(map_error)
@@ -154,7 +158,8 @@ impl ApiServiceImpl {
         match self.storage.list_checkpoints() {
             Ok(cps) if !cps.is_empty() => {
                 let cp = &cps[0];
-                cp.baseline_snapshots.first()
+                cp.baseline_snapshots
+                    .first()
                     .and_then(|sid| self.reconstruct_text_from_id(sid).ok())
                     .unwrap_or_default()
             }
@@ -171,7 +176,9 @@ impl ApiServiceImpl {
                 match op {
                     DiffOp::Insert { lines, .. } => inserts += lines.len(),
                     DiffOp::Delete { count, .. } => deletes += *count as usize,
-                    DiffOp::Replace { old_count, lines, .. } => {
+                    DiffOp::Replace {
+                        old_count, lines, ..
+                    } => {
                         deletes += *old_count as usize;
                         inserts += lines.len();
                     }
@@ -185,9 +192,13 @@ impl ApiServiceImpl {
     /// Show staged changes vs last committed checkpoint
     fn show_staged(&self) -> ApiResult<ShowResponse> {
         let staged_pid = crate::layered::staged::staged_partition_id();
-        let staged_partition = self.storage.get_partition(&staged_pid)
+        let staged_partition = self
+            .storage
+            .get_partition(&staged_pid)
             .map_err(|e| map_error(StratumError::Storage(e)))?;
-        let staged_snapshot = self.storage.get_snapshot(&staged_partition.current_snapshot)
+        let staged_snapshot = self
+            .storage
+            .get_snapshot(&staged_partition.current_snapshot)
             .map_err(|e| map_error(StratumError::Storage(e)))?;
 
         let new_text = self.reconstruct_text_from_id(&staged_partition.current_snapshot)?;
@@ -200,37 +211,47 @@ impl ApiServiceImpl {
 
         Ok(ShowResponse {
             target: "staged".into(),
-            diffs: vec![FileDiff { file_path, unified_diff, inserts, deletes }],
+            diffs: vec![FileDiff {
+                file_path,
+                unified_diff,
+                inserts,
+                deletes,
+            }],
         })
     }
 
     /// Show diff for a checkpoint vs its parent
     fn show_checkpoint(&self, id_str: &str) -> ApiResult<ShowResponse> {
-        let cp_id = ContentId::from_hex(id_str)
-            .ok_or_else(|| ApiError::invalid_params(format!("invalid checkpoint ID '{}'", id_str)))?;
-        let checkpoint = self.storage.get_checkpoint(&cp_id)
+        let cp_id = ContentId::from_hex(id_str).ok_or_else(|| {
+            ApiError::invalid_params(format!("invalid checkpoint ID '{}'", id_str))
+        })?;
+        let checkpoint = self
+            .storage
+            .get_checkpoint(&cp_id)
             .map_err(|e| map_error(StratumError::Storage(e)))?;
 
         // "After" text from the checkpoint's baseline snapshot
-        let new_snapshot_id = checkpoint.baseline_snapshots.first()
+        let new_snapshot_id = checkpoint
+            .baseline_snapshots
+            .first()
             .ok_or_else(|| ApiError::internal("checkpoint has no baseline snapshots"))?;
-        let new_snapshot = self.storage.get_snapshot(new_snapshot_id)
+        let new_snapshot = self
+            .storage
+            .get_snapshot(new_snapshot_id)
             .map_err(|e| map_error(StratumError::Storage(e)))?;
         let new_text = self.reconstruct_text_from_id(new_snapshot_id)?;
         let file_path = new_snapshot.file.path_str().to_string();
 
         // "Before" text from the parent checkpoint's baseline snapshot
         let old_text = match checkpoint.parents.first() {
-            Some(parent_id) => {
-                match self.storage.get_checkpoint(parent_id) {
-                    Ok(parent_cp) => {
-                        parent_cp.baseline_snapshots.first()
-                            .and_then(|sid| self.reconstruct_text_from_id(sid).ok())
-                            .unwrap_or_default()
-                    }
-                    Err(_) => String::new(),
-                }
-            }
+            Some(parent_id) => match self.storage.get_checkpoint(parent_id) {
+                Ok(parent_cp) => parent_cp
+                    .baseline_snapshots
+                    .first()
+                    .and_then(|sid| self.reconstruct_text_from_id(sid).ok())
+                    .unwrap_or_default(),
+                Err(_) => String::new(),
+            },
             None => String::new(),
         };
 
@@ -240,16 +261,25 @@ impl ApiServiceImpl {
 
         Ok(ShowResponse {
             target: format!("checkpoint:{}", id_str),
-            diffs: vec![FileDiff { file_path, unified_diff, inserts, deletes }],
+            diffs: vec![FileDiff {
+                file_path,
+                unified_diff,
+                inserts,
+                deletes,
+            }],
         })
     }
 
     /// Show diff for a partition vs last checkpoint
     fn show_partition(&self, name: &str) -> ApiResult<ShowResponse> {
-        let partition = self.storage.get_partition_by_name(name)
+        let partition = self
+            .storage
+            .get_partition_by_name(name)
             .map_err(|_| ApiError::not_found(format!("partition '{}'", name)))?;
 
-        let snapshot = self.storage.get_snapshot(&partition.current_snapshot)
+        let snapshot = self
+            .storage
+            .get_snapshot(&partition.current_snapshot)
             .map_err(|e| map_error(StratumError::Storage(e)))?;
         let new_text = self.reconstruct_text_from_id(&partition.current_snapshot)?;
         let file_path = snapshot.file.path_str().to_string();
@@ -261,7 +291,12 @@ impl ApiServiceImpl {
 
         Ok(ShowResponse {
             target: format!("partition:{}", name),
-            diffs: vec![FileDiff { file_path, unified_diff, inserts, deletes }],
+            diffs: vec![FileDiff {
+                file_path,
+                unified_diff,
+                inserts,
+                deletes,
+            }],
         })
     }
 }
@@ -275,8 +310,7 @@ impl ApiService for ApiServiceImpl {
             let git_path = Path::new(git_repo_path);
             let ref_name = req.git_ref.as_deref().unwrap_or("HEAD");
             let persist: Box<dyn CheckpointPersist> = Box::new(storage.share());
-            let mut checkpoint_repo = CheckpointRepo::load(persist)
-                .map_err(map_error)?;
+            let mut checkpoint_repo = CheckpointRepo::load(persist).map_err(map_error)?;
 
             GitBridge::init_from_git(git_path, &*storage, &mut checkpoint_repo, ref_name)
                 .map_err(map_error)?;
@@ -292,26 +326,35 @@ impl ApiService for ApiServiceImpl {
             })
         } else {
             let file_node = FileNode::new(PathBuf::from(".stratum/init"), b"");
-            storage.store_file_node(&file_node, b"").map_err(|e| map_error(StratumError::Storage(e)))?;
+            storage
+                .store_file_node(&file_node, b"")
+                .map_err(|e| map_error(StratumError::Storage(e)))?;
             let empty_diff = Delta::new(
                 file_node.clone(),
                 crate::core::types::LineDiff::new(vec![]),
                 SourceType::Manual,
             );
-            storage.store_delta(&empty_diff).map_err(|e| map_error(StratumError::Storage(e)))?;
+            storage
+                .store_delta(&empty_diff)
+                .map_err(|e| map_error(StratumError::Storage(e)))?;
             let initial_snapshot = Snapshot::new_initial(file_node, empty_diff.id);
-            storage.store_snapshot(&initial_snapshot, b"").map_err(|e| map_error(StratumError::Storage(e)))?;
+            storage
+                .store_snapshot(&initial_snapshot, b"")
+                .map_err(|e| map_error(StratumError::Storage(e)))?;
 
-            let manual_partition =
-                crate::layered::manual::ensure_manual_partition(storage.as_ref(), initial_snapshot.id)
-                    .map_err(map_error)?;
-            let staged_partition =
-                crate::layered::staged::ensure_staged_partition(storage.as_ref(), initial_snapshot.id)
-                    .map_err(map_error)?;
+            let manual_partition = crate::layered::manual::ensure_manual_partition(
+                storage.as_ref(),
+                initial_snapshot.id,
+            )
+            .map_err(map_error)?;
+            let staged_partition = crate::layered::staged::ensure_staged_partition(
+                storage.as_ref(),
+                initial_snapshot.id,
+            )
+            .map_err(map_error)?;
 
             let persist: Box<dyn CheckpointPersist> = Box::new(storage.share());
-            let mut _checkpoint_repo = CheckpointRepo::load(persist)
-                .map_err(map_error)?;
+            let mut _checkpoint_repo = CheckpointRepo::load(persist).map_err(map_error)?;
 
             Ok(InitResponse {
                 db_path: db_path.clone(),
@@ -323,40 +366,46 @@ impl ApiService for ApiServiceImpl {
     }
 
     fn status(&self) -> ApiResult<StatusResponse> {
-        let partitions = self.storage.list_partitions()
+        let partitions = self
+            .storage
+            .list_partitions()
             .map_err(|e| map_error(StratumError::Storage(e)))?;
-        let infos = partitions.iter().map(|p| {
-            let layer = match &p.partition_type {
-                PartitionType::Manual => "manual_edit",
-                PartitionType::Agent(_) => "agent_edit",
-                PartitionType::Approval(_) => "approval",
-                PartitionType::Integrated(_) => "approval",
-                PartitionType::Unified => "approval",
-                PartitionType::Staged => "staged",
-            };
-            PartitionInfo {
-                layer: layer.into(),
-                name: p.name.clone(),
-                current_snapshot: p.current_snapshot.to_hex(),
-                history_len: p.history.len(),
-            }
-        }).collect();
+        let infos = partitions
+            .iter()
+            .map(|p| {
+                let layer = match &p.partition_type {
+                    PartitionType::Manual => "manual_edit",
+                    PartitionType::Agent(_) => "agent_edit",
+                    PartitionType::Approval(_) => "approval",
+                    PartitionType::Integrated(_) => "approval",
+                    PartitionType::Unified => "approval",
+                    PartitionType::Staged => "staged",
+                };
+                PartitionInfo {
+                    layer: layer.into(),
+                    name: p.name.clone(),
+                    current_snapshot: p.current_snapshot.to_hex(),
+                    history_len: p.history.len(),
+                }
+            })
+            .collect();
         Ok(StatusResponse { partitions: infos })
     }
 
     fn edit(&self, req: EditRequest) -> ApiResult<EditResponse> {
         let content = req.content.as_deref().ok_or_else(|| {
-            ApiError::invalid_params("edit content is required (provide via -c/--content or pipe via stdin)")
+            ApiError::invalid_params(
+                "edit content is required (provide via -c/--content or pipe via stdin)",
+            )
         })?;
-        let snapshot_id = crate::layered::manual::apply_manual_edit(
-            self.storage.as_ref(),
-            &req.file,
-            content,
-        ).map_err(map_error)?;
+        let snapshot_id =
+            crate::layered::manual::apply_manual_edit(self.storage.as_ref(), &req.file, content)
+                .map_err(map_error)?;
 
-        let staged_snapshot_id = crate::layered::manual::merge_manual_to_staged(
-            self.storage.as_ref(),
-        ).map_err(map_error).ok();
+        let staged_snapshot_id =
+            crate::layered::manual::merge_manual_to_staged(self.storage.as_ref())
+                .map_err(map_error)
+                .ok();
 
         Ok(EditResponse {
             snapshot_id: snapshot_id_to_hex(&snapshot_id),
@@ -367,7 +416,9 @@ impl ApiService for ApiServiceImpl {
     fn agent_edit(&self, req: AgentEditRequest) -> ApiResult<EditResponse> {
         let agent_instance = AgentInstanceId(req.agent_id.clone());
         let content = req.content.as_deref().ok_or_else(|| {
-            ApiError::invalid_params("edit content is required (provide via -c/--content or pipe via stdin)")
+            ApiError::invalid_params(
+                "edit content is required (provide via -c/--content or pipe via stdin)",
+            )
         })?;
 
         let staged_pid = crate::layered::staged::staged_partition_id();
@@ -375,20 +426,23 @@ impl ApiService for ApiServiceImpl {
             Ok(p) => p.current_snapshot,
             Err(_) => {
                 let file_node = FileNode::new(PathBuf::from(&req.file), content.as_bytes());
-                self.storage.store_file_node(&file_node, content.as_bytes())
+                self.storage
+                    .store_file_node(&file_node, content.as_bytes())
                     .map_err(|e| map_error(StratumError::Storage(e)))?;
                 let delta = Delta::new(
                     file_node,
                     crate::core::types::LineDiff::new(vec![]),
                     SourceType::Agent(agent_instance.clone()),
                 );
-                self.storage.store_delta(&delta)
+                self.storage
+                    .store_delta(&delta)
                     .map_err(|e| map_error(StratumError::Storage(e)))?;
                 let snapshot = Snapshot::new_initial(
                     FileNode::new(PathBuf::from(&req.file), content.as_bytes()),
                     delta.id,
                 );
-                self.storage.store_snapshot(&snapshot, content.as_bytes())
+                self.storage
+                    .store_snapshot(&snapshot, content.as_bytes())
                     .map_err(|e| map_error(StratumError::Storage(e)))?;
                 snapshot.id
             }
@@ -398,14 +452,16 @@ impl ApiService for ApiServiceImpl {
             self.storage.as_ref(),
             &agent_instance,
             initial_snapshot,
-        ).map_err(map_error)?;
+        )
+        .map_err(map_error)?;
 
         let snapshot_id = crate::layered::agent::apply_agent_edit(
             self.storage.as_ref(),
             &agent_instance,
             &req.file,
             content,
-        ).map_err(map_error)?;
+        )
+        .map_err(map_error)?;
 
         Ok(EditResponse {
             snapshot_id: snapshot_id_to_hex(&snapshot_id),
@@ -417,7 +473,9 @@ impl ApiService for ApiServiceImpl {
         let agent_instance = AgentInstanceId(req.agent_id.clone());
 
         let staged_pid = crate::layered::staged::staged_partition_id();
-        let base_snapshot = self.storage.get_partition(&staged_pid)
+        let base_snapshot = self
+            .storage
+            .get_partition(&staged_pid)
             .map_err(|_| ApiError::invalid_params("no staged partition found. Make edits first."))?
             .current_snapshot;
 
@@ -425,12 +483,12 @@ impl ApiService for ApiServiceImpl {
             self.storage.as_ref(),
             &agent_instance,
             base_snapshot,
-        ).map_err(map_error)?;
+        )
+        .map_err(map_error)?;
 
-        let snapshot_id = crate::layered::agent::move_agent_to_approval(
-            self.storage.as_ref(),
-            &agent_instance,
-        ).map_err(map_error)?;
+        let snapshot_id =
+            crate::layered::agent::move_agent_to_approval(self.storage.as_ref(), &agent_instance)
+                .map_err(map_error)?;
 
         Ok(SubmitResponse {
             snapshot_id: snapshot_id_to_hex(&snapshot_id),
@@ -444,9 +502,12 @@ impl ApiService for ApiServiceImpl {
             self.storage.as_ref(),
             &agent_instance,
             &req.agent_id,
-        ).map_err(map_error)?;
+        )
+        .map_err(map_error)?;
 
-        let integration_names: Vec<String> = self.storage.list_partitions()
+        let integration_names: Vec<String> = self
+            .storage
+            .list_partitions()
             .map_err(|e| map_error(StratumError::Storage(e)))?
             .into_iter()
             .filter_map(|p| match &p.partition_type {
@@ -459,12 +520,12 @@ impl ApiService for ApiServiceImpl {
             crate::layered::integrated::move_integrated_to_unified(
                 self.storage.as_ref(),
                 &integration_names,
-            ).map_err(map_error)?;
+            )
+            .map_err(map_error)?;
         }
 
-        let staged_id = crate::layered::staged::merge_unified_to_staged(
-            self.storage.as_ref(),
-        ).map_err(map_error)?;
+        let staged_id = crate::layered::staged::merge_unified_to_staged(self.storage.as_ref())
+            .map_err(map_error)?;
 
         Ok(ApproveResponse {
             integrated_snapshot_id: snapshot_id_to_hex(&integrated_id),
@@ -478,7 +539,8 @@ impl ApiService for ApiServiceImpl {
             self.storage.as_ref(),
             &req.message,
             author,
-        ).map_err(map_error)?;
+        )
+        .map_err(map_error)?;
 
         Ok(CommitResponse {
             checkpoint_id: cp_id.to_hex(),
@@ -488,7 +550,9 @@ impl ApiService for ApiServiceImpl {
 
     fn log(&self, req: LogRequest) -> ApiResult<LogResponse> {
         let count = req.count.unwrap_or(20);
-        let mut checkpoints = self.storage.list_checkpoints()
+        let mut checkpoints = self
+            .storage
+            .list_checkpoints()
             .map_err(|e| map_error(StratumError::Storage(e)))?;
         checkpoints.truncate(count);
         let total = checkpoints.len();
@@ -499,17 +563,27 @@ impl ApiService for ApiServiceImpl {
     }
 
     fn branch_create(&self, req: BranchCreateRequest) -> ApiResult<BranchCreateResponse> {
-        let branches = self.storage.list_branches()
+        let branches = self
+            .storage
+            .list_branches()
             .map_err(|e| map_error(StratumError::Storage(e)))?;
         if branches.iter().any(|b| b.name == req.name) {
-            return Err(ApiError::invalid_params(format!("branch '{}' already exists", req.name)));
+            return Err(ApiError::invalid_params(format!(
+                "branch '{}' already exists",
+                req.name
+            )));
         }
         let head = match self.storage.list_checkpoints() {
             Ok(cps) if !cps.is_empty() => cps[0].id,
-            _ => return Err(ApiError::invalid_params("no checkpoints yet. Make a commit first.")),
+            _ => {
+                return Err(ApiError::invalid_params(
+                    "no checkpoints yet. Make a commit first.",
+                ))
+            }
         };
         let branch = Branch::new(&req.name, head);
-        self.storage.store_branch(&branch)
+        self.storage
+            .store_branch(&branch)
             .map_err(|e| map_error(StratumError::Storage(e)))?;
         Ok(BranchCreateResponse {
             name: req.name,
@@ -518,9 +592,13 @@ impl ApiService for ApiServiceImpl {
     }
 
     fn branch_switch(&self, req: BranchSwitchRequest) -> ApiResult<BranchSwitchResponse> {
-        let _ = self.storage.get_branch(&req.name)
+        let _ = self
+            .storage
+            .get_branch(&req.name)
             .map_err(|_| ApiError::not_found(format!("branch '{}'", req.name)))?;
-        let cp_id = self.state_machine.switch_branch(&req.name)
+        let cp_id = self
+            .state_machine
+            .switch_branch(&req.name)
             .map_err(map_error)?;
         Ok(BranchSwitchResponse {
             name: req.name,
@@ -529,14 +607,19 @@ impl ApiService for ApiServiceImpl {
     }
 
     fn branch_list(&self) -> ApiResult<BranchListResponse> {
-        let branches = self.storage.list_branches()
+        let branches = self
+            .storage
+            .list_branches()
             .map_err(|e| map_error(StratumError::Storage(e)))?;
-        let infos = branches.iter().map(|b| BranchInfo {
-            name: b.name.clone(),
-            head: b.head.to_hex(),
-            updated_at: b.updated_at.to_string(),
-            is_current: false,
-        }).collect();
+        let infos = branches
+            .iter()
+            .map(|b| BranchInfo {
+                name: b.name.clone(),
+                head: b.head.to_hex(),
+                updated_at: b.updated_at.to_string(),
+                is_current: false,
+            })
+            .collect();
         Ok(BranchListResponse {
             branches: infos,
             current: None,
@@ -554,7 +637,8 @@ impl ApiService for ApiServiceImpl {
         };
 
         let msg = req.message.clone().unwrap_or_else(|| "merge".into());
-        let cp_id = repo.merge_branches(&req.branch, snapshot_ids, &msg, "user")
+        let cp_id = repo
+            .merge_branches(&req.branch, snapshot_ids, &msg, "user")
             .map_err(map_error)?;
 
         // merge_branches auto-persists with embedded storage
@@ -566,19 +650,18 @@ impl ApiService for ApiServiceImpl {
     }
 
     fn backup(&self, req: BackupRequest) -> ApiResult<BackupResponse> {
-        let snapshot_id = ContentId::from_hex(&req.snapshot_id)
-            .ok_or_else(|| ApiError::invalid_params(format!("invalid snapshot ID '{}'", req.snapshot_id)))?;
+        let snapshot_id = ContentId::from_hex(&req.snapshot_id).ok_or_else(|| {
+            ApiError::invalid_params(format!("invalid snapshot ID '{}'", req.snapshot_id))
+        })?;
 
         let backup_path = Path::new(&self.db_path).parent().unwrap_or(Path::new("."));
         let backup_db_path = backup_path.join("stratum-backup.db");
-        let backup_repo = BackupRepo::new(&backup_db_path)
-            .map_err(|e| map_error(StratumError::Storage(e)))?;
+        let backup_repo =
+            BackupRepo::new(&backup_db_path).map_err(|e| map_error(StratumError::Storage(e)))?;
 
-        let backup_id = backup_repo.backup_snapshot(
-            self.storage.as_ref(),
-            snapshot_id,
-            req.label.clone(),
-        ).map_err(map_error)?;
+        let backup_id = backup_repo
+            .backup_snapshot(self.storage.as_ref(), snapshot_id, req.label.clone())
+            .map_err(map_error)?;
 
         Ok(BackupResponse {
             backup_id: backup_id.to_hex(),
@@ -588,20 +671,21 @@ impl ApiService for ApiServiceImpl {
     }
 
     fn restore(&self, req: RestoreRequest) -> ApiResult<RestoreResponse> {
-        let backup_id = ContentId::from_hex(&req.backup_id)
-            .ok_or_else(|| ApiError::invalid_params(format!("invalid backup ID '{}'", req.backup_id)))?;
+        let backup_id = ContentId::from_hex(&req.backup_id).ok_or_else(|| {
+            ApiError::invalid_params(format!("invalid backup ID '{}'", req.backup_id))
+        })?;
 
         let backup_path = Path::new(&self.db_path).parent().unwrap_or(Path::new("."));
         let backup_db_path = backup_path.join("stratum-backup.db");
-        let backup_repo = BackupRepo::new(&backup_db_path)
-            .map_err(|e| map_error(StratumError::Storage(e)))?;
+        let backup_repo =
+            BackupRepo::new(&backup_db_path).map_err(|e| map_error(StratumError::Storage(e)))?;
 
-        let backup = backup_repo.get_backup(&backup_id)
-            .map_err(map_error)?;
+        let backup = backup_repo.get_backup(&backup_id).map_err(map_error)?;
 
         let delta_count = backup.deltas.len();
         for delta in &backup.deltas {
-            self.storage.store_delta(delta)
+            self.storage
+                .store_delta(delta)
                 .map_err(|e| map_error(StratumError::Storage(e)))?;
         }
 
@@ -638,7 +722,8 @@ impl ApiService for ApiServiceImpl {
             &branch_name,
             &remote,
             &message,
-        ).map_err(map_error)?;
+        )
+        .map_err(map_error)?;
 
         // Persist git_anchor changes made inside push_to_remote
         repo.sync_all().map_err(map_error)?;
@@ -653,39 +738,37 @@ impl ApiService for ApiServiceImpl {
         let remote = req.remote.unwrap_or_else(|| "origin".into());
         let git_ref = req.git_ref.unwrap_or_else(|| "HEAD".into());
 
-        GitBridge::fetch_from_remote(Path::new(&req.git_repo), &remote)
-            .map_err(map_error)?;
+        GitBridge::fetch_from_remote(Path::new(&req.git_repo), &remote).map_err(map_error)?;
 
-        let mut repo = load_checkpoint_repo(self.storage.as_ref())
-            .map_err(map_error)?;
+        let mut repo = load_checkpoint_repo(self.storage.as_ref()).map_err(map_error)?;
 
         GitBridge::init_from_git(
             Path::new(&req.git_repo),
             self.storage.as_ref(),
             &mut repo,
             &git_ref,
-        ).map_err(map_error)?;
+        )
+        .map_err(map_error)?;
 
         // Auto-persisted via embedded storage; sync any metadata changes
         repo.sync_all().map_err(map_error)?;
 
-        Ok(PullResponse {
-            remote,
-            git_ref,
-        })
+        Ok(PullResponse { remote, git_ref })
     }
 
     fn show(&self, req: ShowRequest) -> ApiResult<ShowResponse> {
         match req.show_what.as_str() {
             "staged" => self.show_staged(),
             "checkpoint" => {
-                let id = req.target_id.as_deref()
-                    .ok_or_else(|| ApiError::invalid_params("checkpoint ID required for 'checkpoint' target"))?;
+                let id = req.target_id.as_deref().ok_or_else(|| {
+                    ApiError::invalid_params("checkpoint ID required for 'checkpoint' target")
+                })?;
                 self.show_checkpoint(id)
             }
             "partition" => {
-                let name = req.target_id.as_deref()
-                    .ok_or_else(|| ApiError::invalid_params("partition name required for 'partition' target"))?;
+                let name = req.target_id.as_deref().ok_or_else(|| {
+                    ApiError::invalid_params("partition name required for 'partition' target")
+                })?;
                 self.show_partition(name)
             }
             other => Err(ApiError::invalid_params(format!(

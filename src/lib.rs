@@ -1,13 +1,13 @@
-pub mod core;
-pub mod storage;
-pub mod error;
-pub mod engine;
-pub mod layered;
+pub mod api;
 pub mod backup;
 pub mod checkpoint;
+pub mod core;
+pub mod engine;
+pub mod error;
 pub mod git_sync;
-pub mod api;
+pub mod layered;
+pub mod storage;
 
 // Re-export common types
-pub use error::{StorageError, StorageResult, StratumError};
 pub use crate::error as err;
+pub use error::{StorageError, StorageResult, StratumError};

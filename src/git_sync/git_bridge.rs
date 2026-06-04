@@ -2,9 +2,9 @@ use std::path::Path;
 
 use crate::checkpoint::repo::CheckpointRepo;
 use crate::core::delta::Delta;
-use crate::core::types::LineDiff;
 use crate::core::file_node::FileNode;
 use crate::core::snapshot::Snapshot;
+use crate::core::types::LineDiff;
 use crate::core::types::{CheckpointId, SourceType};
 use crate::error::{Result, StratumError};
 use crate::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
@@ -57,9 +57,9 @@ impl GitBridge {
         let git_repo = git2::Repository::open(git_repo_path)
             .map_err(|e| StratumError::GitSync(format!("failed to open git repo: {}", e)))?;
 
-        let resolved = git_repo
-            .revparse_single(git_ref)
-            .map_err(|e| StratumError::GitSync(format!("failed to resolve ref '{}': {}", git_ref, e)))?;
+        let resolved = git_repo.revparse_single(git_ref).map_err(|e| {
+            StratumError::GitSync(format!("failed to resolve ref '{}': {}", git_ref, e))
+        })?;
 
         let commit = resolved
             .peel_to_commit()
@@ -84,10 +84,7 @@ impl GitBridge {
         let author = commit.author();
         let author_name = author.name().unwrap_or("git-sync");
         let default_msg = format!("Sync from Git ref: {}", git_ref);
-        let commit_msg = commit
-            .message()
-            .unwrap_or(&default_msg)
-            .trim();
+        let commit_msg = commit.message().unwrap_or(&default_msg).trim();
 
         // Commit the baseline snapshots, then set git_anchor.
         // git_anchor is excluded from content-addressed hashing, so
@@ -158,16 +155,17 @@ impl GitBridge {
 
             let file_path_in_repo = workdir.join(&snapshot.file.file_path);
             if let Some(parent) = file_path_in_repo.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| StratumError::GitSync(format!("failed to create directories: {}", e)))?;
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    StratumError::GitSync(format!("failed to create directories: {}", e))
+                })?;
             }
             std::fs::write(&file_path_in_repo, &content)
                 .map_err(|e| StratumError::GitSync(format!("failed to write file: {}", e)))?;
 
             let repo_relative_path = snapshot.file.file_path.to_str().unwrap_or("");
-            index
-                .add_path(Path::new(repo_relative_path))
-                .map_err(|e| StratumError::GitSync(format!("failed to add file to index: {}", e)))?;
+            index.add_path(Path::new(repo_relative_path)).map_err(|e| {
+                StratumError::GitSync(format!("failed to add file to index: {}", e))
+            })?;
         }
 
         index
@@ -182,11 +180,8 @@ impl GitBridge {
             .find_tree(tree_id)
             .map_err(|e| StratumError::GitSync(format!("failed to find tree: {}", e)))?;
 
-        let author_sig = git2::Signature::now(
-            checkpoint.metadata.author.as_str(),
-            "stratum@local",
-        )
-        .map_err(|e| StratumError::GitSync(format!("failed to create signature: {}", e)))?;
+        let author_sig = git2::Signature::now(checkpoint.metadata.author.as_str(), "stratum@local")
+            .map_err(|e| StratumError::GitSync(format!("failed to create signature: {}", e)))?;
 
         let parent_commit = git_repo
             .head()
@@ -312,15 +307,21 @@ impl GitBridge {
         S: SnapshotStore + DeltaStore + FileNodeStore,
     {
         // First commit to the local Git repo (also updates git_anchor)
-        let git_hash = Self::push_to_git(storage, git_repo_path, checkpoint_repo, branch_name, message)?;
+        let git_hash = Self::push_to_git(
+            storage,
+            git_repo_path,
+            checkpoint_repo,
+            branch_name,
+            message,
+        )?;
 
         let git_repo = git2::Repository::open(git_repo_path)
             .map_err(|e| StratumError::GitSync(format!("failed to open git repo: {}", e)))?;
 
         // Find the remote
-        let mut remote = git_repo
-            .find_remote(remote_name)
-            .map_err(|e| StratumError::GitSync(format!("failed to find remote '{}': {}", remote_name, e)))?;
+        let mut remote = git_repo.find_remote(remote_name).map_err(|e| {
+            StratumError::GitSync(format!("failed to find remote '{}': {}", remote_name, e))
+        })?;
 
         // Build the refspec: refs/heads/<branch>
         let branch_ref = format!("refs/heads/{}", branch_name);
@@ -329,8 +330,13 @@ impl GitBridge {
         // Push
         let mut push_options = git2::PushOptions::new();
         remote
-            .push(&[format!("{}:{}", branch_ref, remote_ref).as_str()], Some(&mut push_options))
-            .map_err(|e| StratumError::GitSync(format!("failed to push to remote '{}': {}", remote_name, e)))?;
+            .push(
+                &[format!("{}:{}", branch_ref, remote_ref).as_str()],
+                Some(&mut push_options),
+            )
+            .map_err(|e| {
+                StratumError::GitSync(format!("failed to push to remote '{}': {}", remote_name, e))
+            })?;
 
         Ok(git_hash)
     }
@@ -338,16 +344,13 @@ impl GitBridge {
     /// Fetch from a Git remote and update the checkpoint repo accordingly.
     ///
     /// Fetches the remote refs, then initializes from the fetched remote tracking branch.
-    pub fn fetch_from_remote(
-        git_repo_path: &Path,
-        remote_name: &str,
-    ) -> Result<()> {
+    pub fn fetch_from_remote(git_repo_path: &Path, remote_name: &str) -> Result<()> {
         let git_repo = git2::Repository::open(git_repo_path)
             .map_err(|e| StratumError::GitSync(format!("failed to open git repo: {}", e)))?;
 
-        let mut remote = git_repo
-            .find_remote(remote_name)
-            .map_err(|e| StratumError::GitSync(format!("failed to find remote '{}': {}", remote_name, e)))?;
+        let mut remote = git_repo.find_remote(remote_name).map_err(|e| {
+            StratumError::GitSync(format!("failed to find remote '{}': {}", remote_name, e))
+        })?;
 
         let mut fetch_options = git2::FetchOptions::new();
         remote
@@ -356,7 +359,12 @@ impl GitBridge {
                 Some(&mut fetch_options),
                 None,
             )
-            .map_err(|e| StratumError::GitSync(format!("failed to fetch from remote '{}': {}", remote_name, e)))?;
+            .map_err(|e| {
+                StratumError::GitSync(format!(
+                    "failed to fetch from remote '{}': {}",
+                    remote_name, e
+                ))
+            })?;
 
         Ok(())
     }
@@ -410,9 +418,7 @@ where
                     let diff = LineDiff::new(vec![]);
                     let delta = Delta::new(file_node.clone(), diff, SourceType::Backup);
 
-                    storage
-                        .store_delta(&delta)
-                        .map_err(StratumError::Storage)?;
+                    storage.store_delta(&delta).map_err(StratumError::Storage)?;
 
                     let snapshot = Snapshot::new_initial(file_node, delta.id);
 
@@ -432,7 +438,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::sqlite_storage::SqliteStorage;
+    use crate::storage::SqliteStorage;
     use std::path::PathBuf;
 
     fn init_git_repo(path: &Path) -> git2::Repository {
@@ -475,12 +481,7 @@ mod tests {
         };
         let mut checkpoint_repo = CheckpointRepo::new_single(initial_snapshot);
 
-        let result = GitBridge::init_from_git(
-            &git_path,
-            &storage,
-            &mut checkpoint_repo,
-            "HEAD",
-        );
+        let result = GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "HEAD");
 
         assert!(result.is_ok(), "init_from_git failed: {:?}", result.err());
     }
@@ -602,7 +603,8 @@ mod tests {
         storage.store_snapshot(&dummy_snap, b"init").unwrap();
         let mut checkpoint_repo = CheckpointRepo::new_single(dummy_snap.id);
 
-        let result = GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "nonexistent-ref");
+        let result =
+            GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "nonexistent-ref");
         assert!(result.is_err(), "should fail on invalid git ref");
     }
 
@@ -625,7 +627,11 @@ mod tests {
         GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "HEAD").unwrap();
 
         let info = GitBridge::compare_status(&git_path, &checkpoint_repo, "main").unwrap();
-        assert_eq!(info.status, SyncStatus::InSync, "after init, status should be InSync");
+        assert_eq!(
+            info.status,
+            SyncStatus::InSync,
+            "after init, status should be InSync"
+        );
     }
 
     #[test]
@@ -647,7 +653,9 @@ mod tests {
         let info = GitBridge::compare_status(&git_path, &checkpoint_repo, "nonexistent").unwrap();
         assert_eq!(
             info.status,
-            SyncStatus::Ahead { unpushed_checkpoints: 1 },
+            SyncStatus::Ahead {
+                unpushed_checkpoints: 1
+            },
             "non-existent branch should report Ahead"
         );
         assert!(info.local_baseline_id.is_none());
@@ -671,12 +679,20 @@ mod tests {
         storage.store_snapshot(&snapshot, empty_content).unwrap();
 
         let mut checkpoint_repo = CheckpointRepo::new_single(snapshot.id);
-        checkpoint_repo.commit_single(snapshot.id, "test", "user").unwrap();
+        checkpoint_repo
+            .commit_single(snapshot.id, "test", "user")
+            .unwrap();
         let head = checkpoint_repo.current_branch_head();
         let cp = checkpoint_repo.get_checkpoint_mut(&head).unwrap();
         cp.baseline_snapshots.clear();
 
-        let result = GitBridge::push_to_git(&storage, &git_path, &mut checkpoint_repo, "main", "empty push");
+        let result = GitBridge::push_to_git(
+            &storage,
+            &git_path,
+            &mut checkpoint_repo,
+            "main",
+            "empty push",
+        );
         assert!(result.is_err(), "push with empty checkpoint should fail");
     }
 
@@ -699,7 +715,168 @@ mod tests {
 
         let mut checkpoint_repo = CheckpointRepo::new_single(snapshot.id);
 
-        let result = GitBridge::push_to_git(&storage, &git_path, &mut checkpoint_repo, "nonexistent-branch", "push");
+        let result = GitBridge::push_to_git(
+            &storage,
+            &git_path,
+            &mut checkpoint_repo,
+            "nonexistent-branch",
+            "push",
+        );
         assert!(result.is_err(), "push to non-existent branch should fail");
+    }
+
+    #[test]
+    fn test_push_to_git_updates_git_anchor() {
+        let dir = tempfile::tempdir().unwrap();
+        let git_path = dir.path().join("git_repo");
+        std::fs::create_dir_all(&git_path).unwrap();
+        let _git_repo = init_git_repo(&git_path);
+
+        let storage = SqliteStorage::new_in_memory().unwrap();
+        let content = b"anchor test";
+        let file_node = FileNode::new(PathBuf::from("anchor.txt"), content);
+        storage.store_file_node(&file_node, content).unwrap();
+        let diff = LineDiff::new(vec![]);
+        let delta = Delta::new(file_node.clone(), diff, SourceType::Manual);
+        storage.store_delta(&delta).unwrap();
+        let snapshot = Snapshot::new_initial(file_node, delta.id);
+        storage.store_snapshot(&snapshot, content).unwrap();
+
+        let mut checkpoint_repo = CheckpointRepo::new_single(snapshot.id);
+        let head = checkpoint_repo.current_branch_head();
+
+        let git_hash = GitBridge::push_to_git(
+            &storage,
+            &git_path,
+            &mut checkpoint_repo,
+            "main",
+            "anchor update test",
+        )
+        .unwrap();
+
+        let cp = checkpoint_repo.get_checkpoint(&head).unwrap();
+        assert_eq!(
+            cp.metadata.git_anchor,
+            Some(git_hash),
+            "git_anchor should be updated after push"
+        );
+    }
+
+    #[test]
+    fn test_compare_status_ahead() {
+        let dir = tempfile::tempdir().unwrap();
+        let git_path = dir.path().join("git_repo");
+        std::fs::create_dir_all(&git_path).unwrap();
+        init_git_repo(&git_path);
+
+        let storage = SqliteStorage::new_in_memory().unwrap();
+        let content = b"ahead test";
+        let file_node = FileNode::new(PathBuf::from("ahead.txt"), content);
+        storage.store_file_node(&file_node, content).unwrap();
+        let diff = LineDiff::new(vec![]);
+        let delta = Delta::new(file_node.clone(), diff, SourceType::Manual);
+        storage.store_delta(&delta).unwrap();
+        let snapshot = Snapshot::new_initial(file_node, delta.id);
+        storage.store_snapshot(&snapshot, content).unwrap();
+
+        let mut checkpoint_repo = CheckpointRepo::new_single(snapshot.id);
+
+        // Create a new commit without pushing to git
+        checkpoint_repo
+            .commit_single(snapshot.id, "local change", "user")
+            .unwrap();
+
+        let info = GitBridge::compare_status(&git_path, &checkpoint_repo, "main").unwrap();
+        match info.status {
+            SyncStatus::Ahead {
+                unpushed_checkpoints,
+            } => {
+                assert!(unpushed_checkpoints > 0, "should be ahead");
+            }
+            _ => panic!("expected Ahead status"),
+        }
+    }
+
+    #[test]
+    fn test_compare_status_invalid_git_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let git_path = dir.path().join("nonexistent_repo");
+
+        let storage = SqliteStorage::new_in_memory().unwrap();
+        let content = b"test";
+        let file_node = FileNode::new(PathBuf::from("test.txt"), content);
+        storage.store_file_node(&file_node, content).unwrap();
+        let diff = LineDiff::new(vec![]);
+        let delta = Delta::new(file_node.clone(), diff, SourceType::Manual);
+        storage.store_delta(&delta).unwrap();
+        let snapshot = Snapshot::new_initial(file_node, delta.id);
+        storage.store_snapshot(&snapshot, content).unwrap();
+
+        let checkpoint_repo = CheckpointRepo::new_single(snapshot.id);
+
+        let result = GitBridge::compare_status(&git_path, &checkpoint_repo, "main");
+        assert!(result.is_err(), "should fail on non-existent git repo");
+    }
+
+    #[test]
+    fn test_init_from_git_invalid_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let git_path = dir.path().join("nonexistent_repo");
+
+        let storage = SqliteStorage::new_in_memory().unwrap();
+        let dummy_file_node = FileNode::new(PathBuf::from("dummy"), b"init");
+        let dummy_diff = LineDiff::new(vec![]);
+        let dummy_delta = Delta::new(dummy_file_node.clone(), dummy_diff, SourceType::Manual);
+        storage.store_delta(&dummy_delta).unwrap();
+        let dummy_snap = Snapshot::new_initial(dummy_file_node, dummy_delta.id);
+        storage.store_snapshot(&dummy_snap, b"init").unwrap();
+        let mut checkpoint_repo = CheckpointRepo::new_single(dummy_snap.id);
+
+        let result = GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "HEAD");
+        assert!(result.is_err(), "should fail on non-existent git repo");
+    }
+
+    #[test]
+    fn test_push_to_git_invalid_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let git_path = dir.path().join("nonexistent_repo");
+
+        let storage = SqliteStorage::new_in_memory().unwrap();
+        let content = b"test";
+        let file_node = FileNode::new(PathBuf::from("test.txt"), content);
+        storage.store_file_node(&file_node, content).unwrap();
+        let diff = LineDiff::new(vec![]);
+        let delta = Delta::new(file_node.clone(), diff, SourceType::Manual);
+        storage.store_delta(&delta).unwrap();
+        let snapshot = Snapshot::new_initial(file_node, delta.id);
+        storage.store_snapshot(&snapshot, content).unwrap();
+
+        let mut checkpoint_repo = CheckpointRepo::new_single(snapshot.id);
+
+        let result =
+            GitBridge::push_to_git(&storage, &git_path, &mut checkpoint_repo, "main", "push");
+        assert!(result.is_err(), "should fail on non-existent git repo");
+    }
+
+    #[test]
+    fn test_init_from_git_bare_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let git_path = dir.path().join("bare_repo");
+
+        // Initialize a bare repository
+        let _git_repo = git2::Repository::init_bare(&git_path).unwrap();
+
+        let storage = SqliteStorage::new_in_memory().unwrap();
+        let dummy_file_node = FileNode::new(PathBuf::from("dummy"), b"init");
+        let dummy_diff = LineDiff::new(vec![]);
+        let dummy_delta = Delta::new(dummy_file_node.clone(), dummy_diff, SourceType::Manual);
+        storage.store_delta(&dummy_delta).unwrap();
+        let dummy_snap = Snapshot::new_initial(dummy_file_node, dummy_delta.id);
+        storage.store_snapshot(&dummy_snap, b"init").unwrap();
+        let mut checkpoint_repo = CheckpointRepo::new_single(dummy_snap.id);
+
+        let result = GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "HEAD");
+        // This might succeed or fail depending on implementation, but should not panic
+        let _ = result;
     }
 }

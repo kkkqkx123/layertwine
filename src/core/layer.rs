@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::core::types::{LayerType, PartitionId};
+use serde::{Deserialize, Serialize};
 
 /// Layer - Layers (variable containers)
 #[derive(Debug, Clone, Serialize, Deserialize)]

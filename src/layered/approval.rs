@@ -4,9 +4,7 @@
 //! Agent changes flow: agent_edit → approval_agent → integrated (see integrated.rs).
 
 use crate::core::partition::Partition;
-use crate::core::types::{
-    AgentInstanceId, PartitionId, PartitionType, SnapshotId,
-};
+use crate::core::types::{AgentInstanceId, PartitionId, PartitionType, SnapshotId};
 use crate::error::{Result, StratumError};
 use crate::storage::repository::PartitionStore;
 
@@ -50,12 +48,12 @@ pub fn ensure_approval_agent_partition<S: PartitionStore>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::file_node::FileNode;
     use crate::core::delta::Delta;
-    use crate::core::types::SourceType;
+    use crate::core::file_node::FileNode;
     use crate::core::snapshot::Snapshot;
-    use crate::storage::repository::{SnapshotStore, FileNodeStore, DeltaStore};
-    use crate::storage::sqlite_storage::SqliteStorage;
+    use crate::core::types::SourceType;
+    use crate::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
+    use crate::storage::SqliteStorage;
 
     fn setup_storage() -> SqliteStorage {
         SqliteStorage::new_in_memory().unwrap()
@@ -63,7 +61,9 @@ mod tests {
 
     fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {
         let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
-        storage.store_file_node(&file_node, content.as_bytes()).unwrap();
+        storage
+            .store_file_node(&file_node, content.as_bytes())
+            .unwrap();
         let empty_diff = crate::core::types::LineDiff::new(vec![]);
         let delta = Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
         storage.store_delta(&delta).unwrap();
@@ -90,6 +90,9 @@ mod tests {
 
         let aa = approval_agent_partition_id(&agent_a);
         let ab = approval_agent_partition_id(&agent_b);
-        assert_ne!(aa, ab, "different agents should have different approval partition ids");
+        assert_ne!(
+            aa, ab,
+            "different agents should have different approval partition ids"
+        );
     }
 }

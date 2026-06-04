@@ -3,9 +3,9 @@
 //! Manages the parent-child relationship of checkpoints, providing functions such as ancestor lookup, reachability determination, and common ancestor lookup.
 //! Reference architecture/05-Checkpoint warehouse and branch management.md §5.4
 
+use crate::core::types::CheckpointId;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
-use crate::core::types::CheckpointId;
 
 /// directed acyclic graph
 ///
@@ -35,21 +35,58 @@ impl CheckpointDag {
     }
 
     /// Add parent-child relationship (parent → child)
-    pub fn add_edge(&mut self, parent: CheckpointId, child: CheckpointId) {
-        // Make sure both nodes exist
+    ///
+    /// Returns true if the edge was added, false if it would create a cycle.
+    pub fn add_edge(&mut self, parent: CheckpointId, child: CheckpointId) -> bool {
+        if self.would_create_cycle(&parent, &child) {
+            return false;
+        }
+
+        self.add_edge_unchecked(parent, child);
+        true
+    }
+
+    /// Add edge without cycle check (internal use)
+    fn add_edge_unchecked(&mut self, parent: CheckpointId, child: CheckpointId) {
         self.nodes.entry(parent).or_default();
         self.nodes.entry(child).or_default();
 
-        // Adding Sub-Relationships
         self.nodes.entry(parent).or_default().insert(child);
 
-        // Initialize parent's generation (if it doesn't exist)
         self.generation.entry(parent).or_insert(0);
 
-        // Update generation number of child
         let parent_gen = *self.generation.get(&parent).unwrap_or(&0);
         let child_gen = self.generation.entry(child).or_insert(0);
         *child_gen = (*child_gen).max(parent_gen + 1);
+    }
+
+    /// Check if adding an edge from parent to child would create a cycle
+    fn would_create_cycle(&self, parent: &CheckpointId, child: &CheckpointId) -> bool {
+        if parent == child {
+            return true;
+        }
+
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(*child);
+
+        while let Some(current) = queue.pop_front() {
+            if current == *parent {
+                return true;
+            }
+            if !visited.insert(current) {
+                continue;
+            }
+            if let Some(children) = self.nodes.get(&current) {
+                for grandchild in children {
+                    if !visited.contains(grandchild) {
+                        queue.push_back(*grandchild);
+                    }
+                }
+            }
+        }
+
+        false
     }
 
     /// Check if the node exists
@@ -121,7 +158,12 @@ impl CheckpointDag {
     /// Finding the common ancestor of two nodes
     ///
     /// Get all the ancestors of id1, then iterate backwards from id2 to find the first match.
-    pub fn merge_base<F>(&self, id1: &CheckpointId, id2: &CheckpointId, get_parents: F) -> Option<CheckpointId>
+    pub fn merge_base<F>(
+        &self,
+        id1: &CheckpointId,
+        id2: &CheckpointId,
+        get_parents: F,
+    ) -> Option<CheckpointId>
     where
         F: Fn(&CheckpointId) -> Vec<CheckpointId>,
     {
@@ -207,7 +249,9 @@ mod tests {
     }
 
     /// helper function: simulate getting parents from Checkpoint
-    fn make_get_parents(checkpoints: &HashMap<CheckpointId, Vec<CheckpointId>>) -> impl Fn(&CheckpointId) -> Vec<CheckpointId> + '_ {
+    fn make_get_parents(
+        checkpoints: &HashMap<CheckpointId, Vec<CheckpointId>>,
+    ) -> impl Fn(&CheckpointId) -> Vec<CheckpointId> + '_ {
         move |id| checkpoints.get(id).cloned().unwrap_or_default()
     }
 
@@ -293,5 +337,100 @@ mod tests {
         assert_eq!(dag.generation(&a), Some(0));
         assert_eq!(dag.generation(&b), Some(1));
         assert_eq!(dag.generation(&c), Some(2));
+    }
+
+    #[test]
+    fn test_add_edge_self_cycle_prevented() {
+        let mut dag = CheckpointDag::new();
+        let a = cid(b"a");
+        dag.add_node(a);
+
+        let result = dag.add_edge(a, a);
+        assert!(!result, "self-cycle should be prevented");
+        assert_eq!(dag.len(), 1);
+        assert_eq!(dag.get_children(&a).len(), 0);
+    }
+
+    #[test]
+    fn test_add_edge_cycle_prevented() {
+        let mut dag = CheckpointDag::new();
+        let a = cid(b"a");
+        let b = cid(b"b");
+        let c = cid(b"c");
+
+        dag.add_edge(a, b);
+        dag.add_edge(b, c);
+
+        let result = dag.add_edge(c, a);
+        assert!(!result, "cycle should be prevented");
+        assert_eq!(dag.get_children(&c).len(), 0);
+    }
+
+    #[test]
+    fn test_add_edge_cycle_in_complex_graph_prevented() {
+        let mut dag = CheckpointDag::new();
+        let a = cid(b"a");
+        let b = cid(b"b");
+        let c = cid(b"c");
+        let d = cid(b"d");
+
+        dag.add_edge(a, b);
+        dag.add_edge(a, c);
+        dag.add_edge(b, d);
+        dag.add_edge(c, d);
+
+        let result = dag.add_edge(d, a);
+        assert!(!result, "cycle in complex graph should be prevented");
+        assert_eq!(dag.get_children(&d).len(), 0);
+    }
+
+    #[test]
+    fn test_ancestors_with_multiple_parents() {
+        let mut dag = CheckpointDag::new();
+        let a = cid(b"root");
+        let b = cid(b"branch1");
+        let c = cid(b"branch2");
+        let d = cid(b"merge");
+
+        dag.add_edge(a, b);
+        dag.add_edge(a, c);
+        dag.add_edge(b, d);
+        dag.add_edge(c, d);
+
+        let mut parents: HashMap<CheckpointId, Vec<CheckpointId>> = HashMap::new();
+        parents.insert(b, vec![a]);
+        parents.insert(c, vec![a]);
+        parents.insert(d, vec![b, c]);
+        let get_p = make_get_parents(&parents);
+
+        let ancestors = dag.ancestors(&d, &get_p);
+        assert!(ancestors.contains(&a));
+        assert!(ancestors.contains(&b));
+        assert!(ancestors.contains(&c));
+    }
+
+    #[test]
+    fn test_merge_base_returns_first_common_ancestor() {
+        let mut dag = CheckpointDag::new();
+        let a = cid(b"root");
+        let b = cid(b"branch1");
+        let c = cid(b"branch2");
+        let d = cid(b"branch1-child");
+        let e = cid(b"branch2-child");
+
+        dag.add_edge(a, b);
+        dag.add_edge(a, c);
+        dag.add_edge(b, d);
+        dag.add_edge(c, e);
+
+        let mut parents: HashMap<CheckpointId, Vec<CheckpointId>> = HashMap::new();
+        parents.insert(b, vec![a]);
+        parents.insert(c, vec![a]);
+        parents.insert(d, vec![b]);
+        parents.insert(e, vec![c]);
+        let get_p = make_get_parents(&parents);
+
+        let base = dag.merge_base(&d, &e, &get_p);
+        assert_eq!(base, Some(a));
     }
 }

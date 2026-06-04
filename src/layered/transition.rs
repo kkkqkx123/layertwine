@@ -113,10 +113,14 @@ where
         }
         ForwardTransition::ApprovalToIntegrated => {
             let agent_id = params.first().ok_or_else(|| {
-                StratumError::StateMachine("ApprovalToIntegrated requires agent_id parameter".into())
+                StratumError::StateMachine(
+                    "ApprovalToIntegrated requires agent_id parameter".into(),
+                )
             })?;
             let integrated_name = params.get(1).ok_or_else(|| {
-                StratumError::StateMachine("ApprovalToIntegrated requires integrated_name parameter".into())
+                StratumError::StateMachine(
+                    "ApprovalToIntegrated requires integrated_name parameter".into(),
+                )
             })?;
             crate::layered::integrated::move_approval_to_integrated(
                 storage,
@@ -127,18 +131,19 @@ where
         ForwardTransition::IntegratedToUnified => {
             // integrated_names passed in via params, separated by commas
             let names_str = params.first().ok_or_else(|| {
-                StratumError::StateMachine("IntegratedToUnified requires integrated_names parameter".into())
+                StratumError::StateMachine(
+                    "IntegratedToUnified requires integrated_names parameter".into(),
+                )
             })?;
-            let names: Vec<String> = names_str
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .collect();
+            let names: Vec<String> = names_str.split(',').map(|s| s.trim().to_string()).collect();
             crate::layered::integrated::move_integrated_to_unified(storage, &names)
         }
         ForwardTransition::ApprovalToStaged => {
             check_forward_valid(&LayerType::Approval, &LayerType::Staged)?;
             let approval_partition_id_str = params.first().ok_or_else(|| {
-                StratumError::StateMachine("ApprovalToStaged requires approval_partition_id parameter".into())
+                StratumError::StateMachine(
+                    "ApprovalToStaged requires approval_partition_id parameter".into(),
+                )
             })?;
             // Parsing UUIDs
             let pid = uuid::Uuid::parse_str(approval_partition_id_str)
@@ -180,10 +185,7 @@ pub fn rollback_partition<S: PartitionStore>(
 ///
 /// Finds the target layer source from the parents of the staged current snapshot.
 /// Corresponds to rollback_staged_to_source in architecture document §3.3.
-pub fn rollback_staged_to_layer<S>(
-    storage: &S,
-    target_layer: LayerType,
-) -> Result<SnapshotId>
+pub fn rollback_staged_to_layer<S>(storage: &S, target_layer: LayerType) -> Result<SnapshotId>
 where
     S: SnapshotStore + PartitionStore,
 {
@@ -205,9 +207,13 @@ where
     };
 
     for parent_id in &staged_snapshot.parents {
-        let parent_snapshot = storage.get_snapshot(parent_id)
+        let parent_snapshot = storage
+            .get_snapshot(parent_id)
             .map_err(StratumError::Storage)?;
-        if parent_snapshot.partition_type.contains(target_partition_type) {
+        if parent_snapshot
+            .partition_type
+            .contains(target_partition_type)
+        {
             // Switch the staged pointer to this parent
             storage
                 .update_pointer(&staged_pid, parent_id)
@@ -241,10 +247,7 @@ where
 /// Reconstructs the complete text content from Snapshot's delta chains
 ///
 /// Read the original content from file_node and apply all deltas in turn.
-pub fn reconstruct_text<S>(
-    storage: &S,
-    snapshot: &Snapshot,
-) -> Result<String>
+pub fn reconstruct_text<S>(storage: &S, snapshot: &Snapshot) -> Result<String>
 where
     S: FileNodeStore + DeltaStore,
 {
@@ -257,8 +260,7 @@ where
         .get_deltas(&snapshot.deltas)
         .map_err(StratumError::Storage)?;
 
-    apply_deltas(&content_str, &deltas)
-        .map_err(|e| StratumError::Engine(e.to_string()))
+    apply_deltas(&content_str, &deltas).map_err(|e| StratumError::Engine(e.to_string()))
 }
 
 /// Checks if the snapshot contains a parent of the specified partition_type.
@@ -285,10 +287,10 @@ mod tests {
     use crate::core::file_node::FileNode;
     use crate::core::partition::Partition;
     use crate::core::snapshot::Snapshot;
-    use crate::core::types::{PartitionType, SourceType, AgentInstanceId};
+    use crate::core::types::{AgentInstanceId, PartitionType, SourceType};
     use crate::engine::diff::diff_to_line_diff;
-    use crate::storage::repository::{FileNodeStore, SnapshotStore, DeltaStore, PartitionStore};
-    use crate::storage::sqlite_storage::SqliteStorage;
+    use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
+    use crate::storage::SqliteStorage;
     use std::path::PathBuf;
 
     fn setup_storage() -> SqliteStorage {
@@ -297,7 +299,9 @@ mod tests {
 
     fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {
         let file_node = FileNode::new(PathBuf::from("test.txt"), content.as_bytes());
-        storage.store_file_node(&file_node, content.as_bytes()).unwrap();
+        storage
+            .store_file_node(&file_node, content.as_bytes())
+            .unwrap();
         let empty_diff = crate::core::types::LineDiff::new(vec![]);
         let delta = Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
         storage.store_delta(&delta).unwrap();
@@ -443,7 +447,10 @@ mod tests {
 
         // Try rollback when history has only one entry
         let result = rollback_partition(&storage, &pid);
-        assert!(result.is_err(), "should error when only one snapshot in history");
+        assert!(
+            result.is_err(),
+            "should error when only one snapshot in history"
+        );
     }
 
     #[test]
@@ -471,16 +478,15 @@ mod tests {
 
         crate::layered::manual::ensure_manual_partition(&storage, initial_id).unwrap();
         crate::layered::staged::ensure_staged_partition(&storage, initial_id).unwrap();
-        crate::layered::manual::apply_manual_edit(&storage, "test.txt", "base\nmodified\n").unwrap();
+        crate::layered::manual::apply_manual_edit(&storage, "test.txt", "base\nmodified\n")
+            .unwrap();
 
-        let result = execute_forward(
-            &storage,
-            ForwardTransition::ManualToStaged,
-            &[],
-        );
+        let result = execute_forward(&storage, ForwardTransition::ManualToStaged, &[]);
         assert!(result.is_ok());
 
-        let staged = storage.get_partition(&crate::layered::staged::staged_partition_id()).unwrap();
+        let staged = storage
+            .get_partition(&crate::layered::staged::staged_partition_id())
+            .unwrap();
         assert_ne!(staged.current_snapshot, initial_id);
     }
 
@@ -490,7 +496,9 @@ mod tests {
         let initial_id = create_initial_snapshot(&storage, "base\n");
 
         let file_node = FileNode::new(PathBuf::from("test.txt"), b"base\nmodified\n");
-        storage.store_file_node(&file_node, b"base\nmodified\n").unwrap();
+        storage
+            .store_file_node(&file_node, b"base\nmodified\n")
+            .unwrap();
         let diff = diff_to_line_diff("base\n", "base\nmodified\n");
         let delta = Delta::new(file_node, diff, SourceType::Manual);
         storage.store_delta(&delta).unwrap();
@@ -511,7 +519,10 @@ mod tests {
 
         // staged_snap has manual_snap as parent with "manual_edit" type
         let has_manual = has_parent_of_type(&storage, &staged_snap, "manual").unwrap();
-        assert!(has_manual, "staged snapshot should have parent with 'manual'");
+        assert!(
+            has_manual,
+            "staged snapshot should have parent with 'manual'"
+        );
 
         // Initial snapshot (no partition type) should not match
         let has = has_parent_of_type(&storage, &parent_snap, "manual").unwrap();
@@ -526,7 +537,13 @@ mod tests {
 
         // Setup agent partition
         crate::layered::agent::ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
-        crate::layered::agent::apply_agent_edit(&storage, &agent_id, "test.txt", "base\nmodified\n").unwrap();
+        crate::layered::agent::apply_agent_edit(
+            &storage,
+            &agent_id,
+            "test.txt",
+            "base\nmodified\n",
+        )
+        .unwrap();
 
         // Setup approval partition
         let approval_pid = crate::layered::approval::approval_agent_partition_id(&agent_id);
@@ -557,7 +574,10 @@ mod tests {
         crate::layered::staged::ensure_staged_partition(&storage, initial_id).unwrap();
 
         let result = rollback_staged_to_layer(&storage, LayerType::ManualEdit);
-        assert!(result.is_err(), "should error when no suitable parent found");
+        assert!(
+            result.is_err(),
+            "should error when no suitable parent found"
+        );
     }
 
     #[test]
@@ -580,7 +600,9 @@ mod tests {
 
         // Create a new snapshot for the approval partition
         let file_node = FileNode::new(PathBuf::from("test.txt"), b"base\nmodified\n");
-        storage.store_file_node(&file_node, b"base\nmodified\n").unwrap();
+        storage
+            .store_file_node(&file_node, b"base\nmodified\n")
+            .unwrap();
         let diff = diff_to_line_diff("base\n", "base\nmodified\n");
         let delta = Delta::new(file_node, diff, SourceType::Manual);
         storage.store_delta(&delta).unwrap();

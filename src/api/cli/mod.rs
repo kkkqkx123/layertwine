@@ -35,11 +35,13 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                     return exit_codes::GENERAL_ERROR;
                 }
             };
-            service.init(InitRequest {
-                db_path: Some(cli.db_path.clone()),
-                git_repo: cli.git_repo.clone(),
-                git_ref: git_ref.clone(),
-            }).map(|_| ())
+            service
+                .init(InitRequest {
+                    db_path: Some(cli.db_path.clone()),
+                    git_repo: cli.git_repo.clone(),
+                    git_ref: git_ref.clone(),
+                })
+                .map(|_| ())
         }
         Commands::Status => {
             let service = match open_service(&cli) {
@@ -167,7 +169,9 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 Ok(s) => s,
                 Err(code) => return code,
             };
-            let resp = service.log(LogRequest { count: Some(*count) });
+            let resp = service.log(LogRequest {
+                count: Some(*count),
+            });
             if let Ok(ref r) = resp {
                 print_log_from_response(r, format);
             }
@@ -261,11 +265,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 backup_id: backup_id.clone(),
             });
             if let Ok(ref r) = resp {
-                println!(
-                    "Restored backup {} -> file: {}",
-                    &r.backup_id[..12],
-                    r.file
-                );
+                println!("Restored backup {} -> file: {}", &r.backup_id[..12], r.file);
             }
             resp.map(|_| ())
         }
@@ -310,11 +310,17 @@ pub fn run_with_cli(cli: Cli) -> i32 {
             });
             if let Ok(ref r) = resp {
                 eprintln!("done");
-                println!("Pushed to remote '{}' (commit: {})", r.remote, r.git_commit_hash);
+                println!(
+                    "Pushed to remote '{}' (commit: {})",
+                    r.remote, r.git_commit_hash
+                );
             }
             resp.map(|_| ())
         }
-        Commands::Show { show_what, target_id } => {
+        Commands::Show {
+            show_what,
+            target_id,
+        } => {
             let service = match open_service(&cli) {
                 Ok(s) => s,
                 Err(code) => return code,

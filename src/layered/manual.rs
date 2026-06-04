@@ -6,9 +6,7 @@ use crate::core::delta::Delta;
 use crate::core::file_node::FileNode;
 use crate::core::partition::Partition;
 use crate::core::snapshot::Snapshot;
-use crate::core::types::{
-    PartitionId, PartitionType, SnapshotId, SourceType,
-};
+use crate::core::types::{PartitionId, PartitionType, SnapshotId, SourceType};
 use crate::engine::diff::diff_to_line_diff;
 use crate::engine::merge::apply_deltas;
 use crate::error::{Result, StratumError};
@@ -20,7 +18,10 @@ pub fn manual_partition_id() -> PartitionId {
 }
 
 /// Get or create manual_edit partition
-pub fn ensure_manual_partition<S: PartitionStore>(storage: &S, initial_snapshot_id: SnapshotId) -> Result<Partition> {
+pub fn ensure_manual_partition<S: PartitionStore>(
+    storage: &S,
+    initial_snapshot_id: SnapshotId,
+) -> Result<Partition> {
     let pid = manual_partition_id();
     match storage.get_partition(&pid) {
         Ok(p) => Ok(p),
@@ -46,19 +47,17 @@ pub fn ensure_manual_partition<S: PartitionStore>(storage: &S, initial_snapshot_
 /// 2. Calculate old ↔ new Delta
 /// 3. Create a new Snapshot to append to the manual_edit partition
 /// 4. Return the new Snapshot ID
-pub fn apply_manual_edit<S>(
-    storage: &S,
-    file_path: &str,
-    new_content: &str,
-) -> Result<SnapshotId>
+pub fn apply_manual_edit<S>(storage: &S, file_path: &str, new_content: &str) -> Result<SnapshotId>
 where
     S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
 {
     // Get the current snapshot of the manual_edit partition
     let pid = manual_partition_id();
-    let partition = storage
-        .get_partition(&pid)
-        .map_err(|_| StratumError::NotFound("manual_edit partition not found, call ensure_manual_partition first".into()))?;
+    let partition = storage.get_partition(&pid).map_err(|_| {
+        StratumError::NotFound(
+            "manual_edit partition not found, call ensure_manual_partition first".into(),
+        )
+    })?;
 
     let current_snapshot = storage
         .get_snapshot(&partition.current_snapshot)
@@ -71,12 +70,14 @@ where
             .map_err(StratumError::Storage)?;
         let content_str = String::from_utf8_lossy(
             &storage
-                .get_file_content(current_snapshot.file.path_str(), &current_snapshot.file.base_hash)
+                .get_file_content(
+                    current_snapshot.file.path_str(),
+                    &current_snapshot.file.base_hash,
+                )
                 .map_err(StratumError::Storage)?,
         )
         .to_string();
-        apply_deltas(&content_str, &deltas)
-            .map_err(|e| StratumError::Engine(e.to_string()))?
+        apply_deltas(&content_str, &deltas).map_err(|e| StratumError::Engine(e.to_string()))?
     };
 
     // Calculate diff
@@ -91,9 +92,7 @@ where
     storage
         .store_file_node(&file_node, old_content.as_bytes())
         .map_err(StratumError::Storage)?;
-    storage
-        .store_delta(&delta)
-        .map_err(StratumError::Storage)?;
+    storage.store_delta(&delta).map_err(StratumError::Storage)?;
     // Creating a New Snapshot
     let new_snapshot = Snapshot::from_parent(
         &current_snapshot,
@@ -115,9 +114,7 @@ where
 /// Merge the current snapshot of the manual_edit tier into staged
 ///
 /// Take the current Snapshot from manual_edit and staged and merge it to create a new Snapshot to push into the staged history.
-pub fn merge_manual_to_staged<S>(
-    storage: &S,
-) -> Result<SnapshotId>
+pub fn merge_manual_to_staged<S>(storage: &S) -> Result<SnapshotId>
 where
     S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
 {
@@ -150,11 +147,7 @@ where
         return Ok(staged_partition.current_snapshot); // no change
     }
 
-    let merge_delta = Delta::new(
-        staged_snapshot.file.clone(),
-        merge_diff,
-        SourceType::Manual,
-    );
+    let merge_delta = Delta::new(staged_snapshot.file.clone(), merge_diff, SourceType::Manual);
     storage
         .store_delta(&merge_delta)
         .map_err(StratumError::Storage)?;
@@ -180,12 +173,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::SourceType;
     use crate::core::delta::Delta;
     use crate::core::file_node::FileNode;
     use crate::core::snapshot::Snapshot;
-    use crate::storage::repository::{SnapshotStore, FileNodeStore, DeltaStore};
-    use crate::storage::sqlite_storage::SqliteStorage;
+    use crate::core::types::SourceType;
+    use crate::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
+    use crate::storage::SqliteStorage;
 
     fn setup_storage() -> SqliteStorage {
         SqliteStorage::new_in_memory().unwrap()
@@ -194,7 +187,9 @@ mod tests {
     fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {
         let file_path = "test.txt";
         let file_node = FileNode::new(std::path::PathBuf::from(file_path), content.as_bytes());
-        storage.store_file_node(&file_node, content.as_bytes()).unwrap();
+        storage
+            .store_file_node(&file_node, content.as_bytes())
+            .unwrap();
 
         let empty_diff = crate::core::types::LineDiff::new(vec![]);
         let delta = Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
@@ -234,7 +229,9 @@ mod tests {
 
         // Merge to staged
         let merged_id = merge_manual_to_staged(&storage).unwrap();
-        let staged = storage.get_partition(&crate::layered::staged::staged_partition_id()).unwrap();
+        let staged = storage
+            .get_partition(&crate::layered::staged::staged_partition_id())
+            .unwrap();
         assert_eq!(staged.current_snapshot, merged_id);
 
         // Verify the dual parent of the merge snapshot
@@ -258,7 +255,10 @@ mod tests {
         ensure_manual_partition(&storage, initial_id).unwrap();
 
         let result = apply_manual_edit(&storage, "test.txt", "same").unwrap();
-        assert_eq!(result, initial_id, "no changes should return current snapshot");
+        assert_eq!(
+            result, initial_id,
+            "no changes should return current snapshot"
+        );
     }
 
     #[test]
@@ -266,7 +266,10 @@ mod tests {
         let storage = setup_storage();
         // Don't call ensure_manual_partition
         let result = apply_manual_edit(&storage, "test.txt", "content\n");
-        assert!(result.is_err(), "should error when manual partition doesn't exist");
+        assert!(
+            result.is_err(),
+            "should error when manual partition doesn't exist"
+        );
     }
 
     #[test]
@@ -279,7 +282,9 @@ mod tests {
 
         // No edits applied → merge should return current staged snapshot
         let merged_id = merge_manual_to_staged(&storage).unwrap();
-        let staged = storage.get_partition(&crate::layered::staged::staged_partition_id()).unwrap();
+        let staged = storage
+            .get_partition(&crate::layered::staged::staged_partition_id())
+            .unwrap();
         assert_eq!(staged.current_snapshot, merged_id);
     }
 
@@ -291,16 +296,26 @@ mod tests {
 
         // First edit: modify line2
         let first_id = apply_manual_edit(&storage, "test.txt", "line1\nmodified\n").unwrap();
-        assert_ne!(first_id, initial_id, "first edit should create new snapshot");
+        assert_ne!(
+            first_id, initial_id,
+            "first edit should create new snapshot"
+        );
 
         // Second edit: add a third line
-        let second_id = apply_manual_edit(&storage, "test.txt", "line1\nmodified\nline3\n").unwrap();
-        assert_ne!(second_id, first_id, "second edit should create another new snapshot");
+        let second_id =
+            apply_manual_edit(&storage, "test.txt", "line1\nmodified\nline3\n").unwrap();
+        assert_ne!(
+            second_id, first_id,
+            "second edit should create another new snapshot"
+        );
 
         // Verify partition pointer advanced
         let partition = storage.get_partition(&manual_partition_id()).unwrap();
         assert_eq!(partition.current_snapshot, second_id);
-        assert!(partition.history.len() >= 3, "history should have at least 3 entries");
+        assert!(
+            partition.history.len() >= 3,
+            "history should have at least 3 entries"
+        );
     }
 
     #[test]
@@ -320,10 +335,16 @@ mod tests {
 
         // Edit first file
         let id1 = apply_manual_edit(&storage, "test.txt", "file1\nmodified\n").unwrap();
-        assert_ne!(id1, initial_id, "edit first file should produce new snapshot");
+        assert_ne!(
+            id1, initial_id,
+            "edit first file should produce new snapshot"
+        );
 
         // Edit second file
         let id2 = apply_manual_edit(&storage, "file2.txt", "file2\nmodified\n").unwrap();
-        assert_ne!(id2, id1, "edit second file should produce another new snapshot");
+        assert_ne!(
+            id2, id1,
+            "edit second file should produce another new snapshot"
+        );
     }
 }

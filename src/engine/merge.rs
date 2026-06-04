@@ -75,7 +75,9 @@ fn apply_line_diff(lines: &[String], diff: &LineDiff) -> Result<Vec<String>> {
                 DiffOp::Delete { count, .. } => {
                     hunk_pos += *count as usize;
                 }
-                DiffOp::Insert { lines: new_lines, .. } => {
+                DiffOp::Insert {
+                    lines: new_lines, ..
+                } => {
                     result.extend(new_lines.iter().cloned());
                 }
                 DiffOp::Replace {
@@ -263,7 +265,10 @@ fn extract_changes_from_line_diff(
     changes: &mut Vec<ChangeRange>,
 ) {
     for hunk in &diff.hunks {
-        let has_change = hunk.ops.iter().any(|op| !matches!(op, DiffOp::Equal { .. }));
+        let has_change = hunk
+            .ops
+            .iter()
+            .any(|op| !matches!(op, DiffOp::Equal { .. }));
         if !has_change {
             continue;
         }
@@ -320,7 +325,9 @@ fn extract_changes_from_line_diff(
                     current_base_len += c;
                     old_cursor += c;
                 }
-                DiffOp::Replace { old_count, lines, .. } => {
+                DiffOp::Replace {
+                    old_count, lines, ..
+                } => {
                     if current_base_start.is_none() {
                         current_base_start = Some(base_offset + old_cursor);
                     }
@@ -341,12 +348,7 @@ fn extract_changes_from_line_diff(
         );
     }
 }
-fn append_unchanged(
-    result: &mut Vec<String>,
-    base_lines: &[&str],
-    from: usize,
-    to: usize,
-) {
+fn append_unchanged(result: &mut Vec<String>, base_lines: &[&str], from: usize, to: usize) {
     if to > from {
         for line in &base_lines[from..to.min(base_lines.len())] {
             result.push(line.to_string());
@@ -364,8 +366,8 @@ fn append_change(result: &mut Vec<String>, change: &ChangeRange) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::LineDiff;
     use crate::core::file_node::FileNode;
+    use crate::core::types::LineDiff;
     use crate::core::types::{DiffOp, Hunk, SourceType};
     use std::path::PathBuf;
 
@@ -606,7 +608,11 @@ mod tests {
         let ours = "a\nX\nc\nd\nY\nf\n";
         let theirs = "a\nP\nc\nd\nQ\nf\n";
         let (_, conflicts) = merge_texts(base, ours, theirs);
-        assert_eq!(conflicts.len(), 2, "two separate conflicts should be detected");
+        assert_eq!(
+            conflicts.len(),
+            2,
+            "two separate conflicts should be detected"
+        );
     }
 
     #[test]
@@ -636,7 +642,10 @@ mod tests {
         let theirs = "a\nX\nb\nc\n";
         let (_merged, conflicts) = merge_texts(base, ours, theirs);
         // Insert vs delete on overlapping area should produce a conflict
-        assert!(!conflicts.is_empty(), "insert vs delete on same line should conflict");
+        assert!(
+            !conflicts.is_empty(),
+            "insert vs delete on same line should conflict"
+        );
     }
 
     #[test]

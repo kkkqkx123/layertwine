@@ -1,12 +1,14 @@
-use crate::checkpoint::checkpoint::Checkpoint;
 use crate::checkpoint::branch::Branch;
+use crate::checkpoint::checkpoint::Checkpoint;
 use crate::checkpoint::dag::CheckpointDag;
 use crate::core::delta::Delta;
 use crate::core::file_node::FileNode;
 use crate::core::layer::Layer;
 use crate::core::partition::Partition;
 use crate::core::snapshot::Snapshot;
-use crate::core::types::{CheckpointId, DeltaId, LayerType, PartitionId, PartitionType, SnapshotId};
+use crate::core::types::{
+    CheckpointId, DeltaId, LayerType, PartitionId, PartitionType, SnapshotId,
+};
 use crate::StorageResult;
 
 /// Snapshot storage trait
@@ -18,7 +20,10 @@ pub trait SnapshotStore {
     /// Query Snapshots by Path
     fn find_snapshots_by_file(&self, file_path: &str) -> StorageResult<Vec<Snapshot>>;
     /// Query Snapshots by Partition Type
-    fn find_snapshots_by_partition(&self, partition_type: &PartitionType) -> StorageResult<Vec<Snapshot>>;
+    fn find_snapshots_by_partition(
+        &self,
+        partition_type: &PartitionType,
+    ) -> StorageResult<Vec<Snapshot>>;
     /// Determining if a snapshot exists
     fn snapshot_exists(&self, id: &SnapshotId) -> StorageResult<bool>;
 }
@@ -40,7 +45,11 @@ pub trait PartitionStore {
     /// Creating Partitions
     fn create_partition(&self, partition: &Partition) -> StorageResult<()>;
     /// Updating the partition pointer
-    fn update_pointer(&self, partition_id: &PartitionId, snapshot_id: &SnapshotId) -> StorageResult<()>;
+    fn update_pointer(
+        &self,
+        partition_id: &PartitionId,
+        snapshot_id: &SnapshotId,
+    ) -> StorageResult<()>;
     /// Get Partition
     fn get_partition(&self, id: &PartitionId) -> StorageResult<Partition>;
     /// Get partitions by name
@@ -87,8 +96,17 @@ pub trait AtomicOps {
 
 /// Combined storage trait (full storage interface)
 pub trait Repository:
-    SnapshotStore + DeltaStore + PartitionStore + FileNodeStore + CheckpointStore + BranchStore + DagStore + LayerStore + AtomicOps
-{}
+    SnapshotStore
+    + DeltaStore
+    + PartitionStore
+    + FileNodeStore
+    + CheckpointStore
+    + BranchStore
+    + DagStore
+    + LayerStore
+    + AtomicOps
+{
+}
 
 /// Checkpoint storage trait
 pub trait CheckpointStore {

@@ -78,7 +78,10 @@ impl StratumError {
                 }
             }
             StratumError::NotFound(entity) => {
-                format!("error: {} not found\n  hint: check that the name or ID is correct", entity)
+                format!(
+                    "error: {} not found\n  hint: check that the name or ID is correct",
+                    entity
+                )
             }
             StratumError::Storage(e) => {
                 format!("error: storage operation failed\n  detail: {}\n  hint: check database integrity and permissions", e)

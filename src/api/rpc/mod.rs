@@ -29,7 +29,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-
 use crate::api::service::ApiService;
 
 /// gRPC service implementation wrapping ApiService
@@ -103,7 +102,10 @@ impl StratumGrpc {
 /// rpc::serve(Arc::new(service), addr).await.unwrap();
 /// # }
 /// ```
-pub async fn serve(service: Arc<dyn ApiService>, addr: SocketAddr) -> Result<(), crate::error::StratumError> {
+pub async fn serve(
+    service: Arc<dyn ApiService>,
+    addr: SocketAddr,
+) -> Result<(), crate::error::StratumError> {
     let _ = service; // reserved for handler implementation
     let _ = addr;
 

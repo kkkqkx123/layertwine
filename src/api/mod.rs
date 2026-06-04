@@ -3,11 +3,11 @@
 //! Provides a single `ApiService` trait implemented by `ApiServiceImpl`,
 //! with transport-specific wrappers for CLI, HTTP, and gRPC behind feature gates.
 
-pub mod types;
 pub mod service;
+pub mod types;
 
-pub use types::*;
 pub use service::{ApiService, ApiServiceImpl, ServiceConfig};
+pub use types::*;
 
 #[cfg(feature = "cli")]
 pub mod cli;

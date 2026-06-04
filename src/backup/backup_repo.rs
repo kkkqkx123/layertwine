@@ -108,9 +108,10 @@ impl BackupRepo {
     }
 
     pub fn get_backup(&self, backup_id: &BackupId) -> Result<BackupSnapshot> {
-        let conn = self.conn.lock().map_err(|e| {
-            StratumError::General(format!("mutex poisoned: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StratumError::General(format!("mutex poisoned: {}", e)))?;
         let mut stmt = conn
             .prepare(
                 "SELECT id, source_snapshot, file_path, file_hash, deltas, label, backed_at, metadata, agent_id, source_type
@@ -166,9 +167,10 @@ impl BackupRepo {
     }
 
     pub fn query_backups(&self, filter: &BackupFilter) -> Result<Vec<BackupSnapshot>> {
-        let conn = self.conn.lock().map_err(|e| {
-            StratumError::General(format!("mutex poisoned: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StratumError::General(format!("mutex poisoned: {}", e)))?;
 
         let mut sql = String::from(
             "SELECT id, source_snapshot, file_path, file_hash, deltas, label, backed_at, metadata, agent_id, source_type
@@ -333,7 +335,8 @@ impl BackupRepo {
         }
 
         // Step 1: Reconstruct the backed-up file content
-        let base_content = core_repo.get_file_content(backup.file.path_str(), &backup.file.base_hash)?;
+        let base_content =
+            core_repo.get_file_content(backup.file.path_str(), &backup.file.base_hash)?;
         let base_str = String::from_utf8(base_content)
             .map_err(|e| StratumError::General(format!("non-utf8 file content: {}", e)))?;
         // Normalise trailing newlines - apply_deltas uses .lines() which strips them
@@ -343,7 +346,10 @@ impl BackupRepo {
         // Step 2: Get current staged content
         let staged_partition = core_repo.get_partition_by_name("staged")?;
         let staged_snapshot = core_repo.get_snapshot(&staged_partition.current_snapshot)?;
-        let staged_base = core_repo.get_file_content(staged_snapshot.file.path_str(), &staged_snapshot.file.base_hash)?;
+        let staged_base = core_repo.get_file_content(
+            staged_snapshot.file.path_str(),
+            &staged_snapshot.file.base_hash,
+        )?;
         let staged_base_str = String::from_utf8(staged_base)
             .map_err(|e| StratumError::General(format!("non-utf8 file content: {}", e)))?;
         let staged_deltas = core_repo.get_deltas(&staged_snapshot.deltas)?;
@@ -358,7 +364,11 @@ impl BackupRepo {
 
         // Step 4: Compute diff from base to merged result, create delta
         let diff = diff_to_line_diff(&base_str, &merged_text);
-        let merge_delta = Delta::new(backup.file.clone(), diff, crate::core::types::SourceType::Backup);
+        let merge_delta = Delta::new(
+            backup.file.clone(),
+            diff,
+            crate::core::types::SourceType::Backup,
+        );
         core_repo.store_delta(&merge_delta)?;
 
         // Step 5: Create merge snapshot with both parents
@@ -378,12 +388,12 @@ impl BackupRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::LineDiff;
     use crate::core::file_node::FileNode;
     use crate::core::snapshot::Snapshot;
+    use crate::core::types::LineDiff;
     use crate::core::types::{DeltaId, SnapshotId, SourceType};
     use crate::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
-    use crate::storage::sqlite_storage::SqliteStorage;
+    use crate::storage::SqliteStorage;
     use std::path::PathBuf;
 
     fn setup_core_repo() -> SqliteStorage {
@@ -540,7 +550,8 @@ mod tests {
             "staged",
         );
         let staged_partition = core.get_partition_by_name("staged").unwrap();
-        core.update_pointer(&staged_partition.id, &staged_id).unwrap();
+        core.update_pointer(&staged_partition.id, &staged_id)
+            .unwrap();
 
         // Backup branch: edit "c" → "C"
         let (_backup_delta_id, backup_snap_id) = create_edited_snapshot(
@@ -568,7 +579,12 @@ mod tests {
         assert!(!merged_snapshot.parents.contains(&initial_id));
 
         // Verify content combines both edits
-        let merged_base = core.get_file_content(merged_snapshot.file.path_str(), &merged_snapshot.file.base_hash).unwrap();
+        let merged_base = core
+            .get_file_content(
+                merged_snapshot.file.path_str(),
+                &merged_snapshot.file.base_hash,
+            )
+            .unwrap();
         let merged_deltas = core.get_deltas(&merged_snapshot.deltas).unwrap();
         let merged_content =
             apply_deltas(&String::from_utf8(merged_base).unwrap(), &merged_deltas).unwrap();
@@ -581,8 +597,12 @@ mod tests {
         let backup_repo = BackupRepo::new_in_memory().unwrap();
 
         // Setup: initial file content "line1\nline2\nline3\n"
-        let (file_node, _delta_id, initial_id) =
-            create_initial_snapshot(&core, "restore.txt", b"line1\nline2\nline3\n", SourceType::Manual);
+        let (file_node, _delta_id, initial_id) = create_initial_snapshot(
+            &core,
+            "restore.txt",
+            b"line1\nline2\nline3\n",
+            SourceType::Manual,
+        );
         create_staged_partition(&core, initial_id);
 
         // Create a backup snapshot: edit "line2" → "modified"
@@ -607,7 +627,12 @@ mod tests {
         assert_eq!(staged.current_snapshot, merged_id);
 
         let merged_snapshot = core.get_snapshot(&merged_id).unwrap();
-        let merged_base = core.get_file_content(merged_snapshot.file.path_str(), &merged_snapshot.file.base_hash).unwrap();
+        let merged_base = core
+            .get_file_content(
+                merged_snapshot.file.path_str(),
+                &merged_snapshot.file.base_hash,
+            )
+            .unwrap();
         let merged_deltas = core.get_deltas(&merged_snapshot.deltas).unwrap();
         let merged_content =
             apply_deltas(&String::from_utf8(merged_base).unwrap(), &merged_deltas).unwrap();
@@ -619,11 +644,8 @@ mod tests {
         let core = setup_core_repo();
         let backup_repo = BackupRepo::new_in_memory().unwrap();
 
-        let snap_id =
-            create_test_snapshot(&core, "isolated.txt", b"isolated", SourceType::Manual);
-        backup_repo
-            .backup_snapshot(&core, snap_id, None)
-            .unwrap();
+        let snap_id = create_test_snapshot(&core, "isolated.txt", b"isolated", SourceType::Manual);
+        backup_repo.backup_snapshot(&core, snap_id, None).unwrap();
 
         assert!(core.snapshot_exists(&snap_id).unwrap());
         backup_repo.delete_backup(&snap_id).unwrap_err();

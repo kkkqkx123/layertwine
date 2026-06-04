@@ -4,7 +4,7 @@ use crate::checkpoint::dag::CheckpointDag;
 use crate::core::types::{CheckpointId, SnapshotId};
 use crate::error::{Result, StratumError};
 use crate::storage::repository::CheckpointPersist;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Checkpoint Repository - Versioning Core
 ///
@@ -68,7 +68,7 @@ impl CheckpointRepo {
         // Initialize with root when storage is empty
         if checkpoints.is_empty() {
             let metadata = CheckpointMetadata::new("system", "root checkpoint");
-            let root = Checkpoint::new(vec![], vec![], metadata);
+            let root = Checkpoint::new(vec![CheckpointId::from_content(&[])], vec![], metadata);
             let root_id = root.id;
 
             storage.store_checkpoint(&root)?;
@@ -128,10 +128,7 @@ impl CheckpointRepo {
             for branch in &self.branches {
                 storage.store_branch(branch)?;
             }
-            storage.store_metadata(
-                "current_branch",
-                &self.branches[self.current_branch].name,
-            )?;
+            storage.store_metadata("current_branch", &self.branches[self.current_branch].name)?;
         }
         Ok(())
     }
@@ -340,39 +337,37 @@ impl CheckpointRepo {
     // - -Logs - -
 
     /// Trace back the ancestor chain from the current head
+    ///
+    /// Returns checkpoints in BFS order from head to root.
+    /// For merge commits, traverses all parents to ensure no history is lost.
     pub fn log(&self, count: usize) -> Vec<&Checkpoint> {
-        let mut result = Vec::new();
-        let mut current = Some(self.current_branch_head());
-
-        while let Some(cp_id) = current {
-            if result.len() >= count {
-                break;
-            }
-            if let Some(cp) = self.checkpoints.get(&cp_id) {
-                result.push(cp);
-                current = cp.parents.first().copied();
-            } else {
-                break;
-            }
-        }
-
-        result
+        self.log_from(&self.current_branch_head(), count)
     }
 
     /// Backtracking from a given checkpoint
+    ///
+    /// Returns checkpoints in BFS order from start checkpoint.
+    /// For merge commits, traverses all parents to ensure no history is lost.
     pub fn log_from(&self, start: &CheckpointId, count: usize) -> Vec<&Checkpoint> {
         let mut result = Vec::new();
-        let mut current = Some(*start);
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(*start);
 
-        while let Some(cp_id) = current {
+        while let Some(cp_id) = queue.pop_front() {
             if result.len() >= count {
                 break;
             }
+            if !visited.insert(cp_id) {
+                continue;
+            }
             if let Some(cp) = self.checkpoints.get(&cp_id) {
                 result.push(cp);
-                current = cp.parents.first().copied();
-            } else {
-                break;
+                for parent in &cp.parents {
+                    if !visited.contains(parent) {
+                        queue.push_back(*parent);
+                    }
+                }
             }
         }
 
@@ -462,7 +457,9 @@ mod tests {
 
         let snap2 = dummy_snapshot_id(2);
         let snap3 = dummy_snapshot_id(3);
-        let cp1 = repo.commit(vec![snap2, snap3], "multi-file commit", "user").unwrap();
+        let cp1 = repo
+            .commit(vec![snap2, snap3], "multi-file commit", "user")
+            .unwrap();
 
         let cp = repo.get_checkpoint(&cp1).unwrap();
         assert_eq!(cp.baseline_snapshots.len(), 2);
@@ -501,7 +498,11 @@ mod tests {
             .unwrap();
 
         let cp = repo.get_checkpoint(&merge_cp).unwrap();
-        assert_eq!(cp.parents.len(), 2, "merge checkpoint should have 2 parents");
+        assert_eq!(
+            cp.parents.len(),
+            2,
+            "merge checkpoint should have 2 parents"
+        );
     }
 
     #[test]
@@ -536,6 +537,142 @@ mod tests {
         let snap = dummy_snapshot_id(1);
         let mut repo = CheckpointRepo::new_single(snap);
         let result = repo.commit(vec![], "empty", "user");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_switch_nonexistent_branch_fails() {
+        let snap = dummy_snapshot_id(1);
+        let mut repo = CheckpointRepo::new_single(snap);
+        let result = repo.switch_branch("nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_delete_nonexistent_checkpoint_fails() {
+        let snap = dummy_snapshot_id(1);
+        let mut repo = CheckpointRepo::new_single(snap);
+        let fake_id = CheckpointId::from_content(b"fake");
+        let result = repo.remove_checkpoint(&fake_id);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_duplicate_branch_fails() {
+        let snap = dummy_snapshot_id(1);
+        let mut repo = CheckpointRepo::new_single(snap);
+        repo.create_branch("feature").unwrap();
+        let result = repo.create_branch("feature");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_branch_from_nonexistent_checkpoint_fails() {
+        let snap = dummy_snapshot_id(1);
+        let mut repo = CheckpointRepo::new_single(snap);
+        let fake_id = CheckpointId::from_content(b"fake");
+        let result = repo.create_branch_from("feature", fake_id);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_merge_with_empty_snapshots_fails() {
+        let snap1 = dummy_snapshot_id(1);
+        let mut repo = CheckpointRepo::new_single(snap1);
+        repo.create_branch("feature").unwrap();
+        let result = repo.merge_branches("feature", vec![], "merge", "user");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_merge_nonexistent_branch_fails() {
+        let snap1 = dummy_snapshot_id(1);
+        let snap2 = dummy_snapshot_id(2);
+        let mut repo = CheckpointRepo::new_single(snap1);
+        let result = repo.merge_branches("nonexistent", vec![snap2], "merge", "user");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_log_from_merge_commit() {
+        let snap1 = dummy_snapshot_id(1);
+        let mut repo = CheckpointRepo::new_single(snap1);
+
+        let snap2 = dummy_snapshot_id(2);
+        repo.commit_single(snap2, "main v2", "user").unwrap();
+
+        repo.create_branch("feature").unwrap();
+
+        let snap3 = dummy_snapshot_id(3);
+        repo.commit_single(snap3, "feature v1", "user").unwrap();
+
+        repo.switch_branch("main").unwrap();
+
+        let snap4 = dummy_snapshot_id(4);
+        repo.merge_branches("feature", vec![snap4], "merge feature", "user")
+            .unwrap();
+
+        let log = repo.log(10);
+        assert!(log.len() >= 4);
+
+        let merge_cp = &log[0];
+        assert_eq!(merge_cp.parents.len(), 2, "merge should have 2 parents");
+    }
+
+    #[test]
+    fn test_get_branch_head_nonexistent_fails() {
+        let snap = dummy_snapshot_id(1);
+        let repo = CheckpointRepo::new_single(snap);
+        let result = repo.get_branch_head("nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_multiple_branch_switching() {
+        let snap = dummy_snapshot_id(1);
+        let mut repo = CheckpointRepo::new_single(snap);
+
+        repo.create_branch("feature-a").unwrap();
+        repo.create_branch("feature-b").unwrap();
+
+        repo.switch_branch("feature-a").unwrap();
+        assert_eq!(repo.current_branch_name(), "feature-a");
+
+        repo.switch_branch("feature-b").unwrap();
+        assert_eq!(repo.current_branch_name(), "feature-b");
+
+        repo.switch_branch("main").unwrap();
+        assert_eq!(repo.current_branch_name(), "main");
+    }
+
+    #[test]
+    fn test_remove_checkpoint_updates_dag() {
+        let snap1 = dummy_snapshot_id(1);
+        let mut repo = CheckpointRepo::new_single(snap1);
+
+        let snap2 = dummy_snapshot_id(2);
+        let _cp1 = repo.commit_single(snap2, "second", "user").unwrap();
+
+        let snap3 = dummy_snapshot_id(3);
+        let cp2 = repo.commit_single(snap3, "third", "user").unwrap();
+
+        repo.remove_checkpoint(&cp2).unwrap();
+
+        assert_eq!(repo.checkpoint_count(), 2);
+        assert!(repo.get_checkpoint(&cp2).is_err());
+        assert!(!repo.checkpoint_dag.has_node(&cp2));
+    }
+
+    #[test]
+    fn test_find_branch() {
+        let snap = dummy_snapshot_id(1);
+        let mut repo = CheckpointRepo::new_single(snap);
+
+        repo.create_branch("feature").unwrap();
+        let idx = repo.find_branch("feature").unwrap();
+        assert_eq!(repo.branches[idx].name, "feature");
+
+        let result = repo.find_branch("nonexistent");
         assert!(result.is_err());
     }
 }

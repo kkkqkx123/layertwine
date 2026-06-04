@@ -1,8 +1,8 @@
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use crate::core::delta::Delta;
 use crate::core::file_node::FileNode;
 use crate::core::types::{BackupId, ContentId, SnapshotId};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupSnapshot {

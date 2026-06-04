@@ -1,28 +1,28 @@
-use serde::{Deserialize, Serialize};
-use crate::core::types::{ContentId, DeltaId, DiffOp, LineDiff, SourceType};
 use crate::core::file_node::FileNode;
+use crate::core::types::{ContentId, DeltaId, DiffOp, LineDiff, SourceType};
+use serde::{Deserialize, Serialize};
 
-/// Delta - minimum non-variable increment
+#[derive(Serialize)]
+struct DeltaForId<'a> {
+    file: &'a FileNode,
+    diff: &'a LineDiff,
+    source: &'a SourceType,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Delta {
-    /// Unique ID (content addressing)
     pub id: DeltaId,
-    /// Linked document benchmarks
     pub file: FileNode,
-    /// Row level differences
     pub diff: LineDiff,
-    /// source (of information etc)
     pub source: SourceType,
-    /// Creating timestamps (Unix milliseconds)
     pub timestamp: i64,
 }
 
 impl Delta {
-    /// Creating a new Delta (automatic ID calculation)
     pub fn new(file: FileNode, diff: LineDiff, source: SourceType) -> Self {
         let timestamp = chrono::Utc::now().timestamp_millis();
         let mut delta = Delta {
-            id: ContentId([0u8; 32]), // occupy a position
+            id: ContentId([0u8; 32]),
             file,
             diff,
             source,
@@ -32,9 +32,13 @@ impl Delta {
         delta
     }
 
-    /// Calculate ID based on content
     pub fn compute_id(&self) -> DeltaId {
-        let json = serde_json::to_vec(self).unwrap_or_default();
+        let delta_for_id = DeltaForId {
+            file: &self.file,
+            diff: &self.diff,
+            source: &self.source,
+        };
+        let json = serde_json::to_vec(&delta_for_id).unwrap_or_default();
         ContentId::from_content(&json)
     }
 }

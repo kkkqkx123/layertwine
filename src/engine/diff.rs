@@ -2,12 +2,12 @@
 //!
 //! Convert the output of similar::TextDiff to a Delta representation within Stratum.
 
-use std::path::PathBuf;
-use similar::{ChangeTag, TextDiff};
 use crate::core::delta::Delta;
-use crate::core::types::LineDiff;
 use crate::core::file_node::FileNode;
+use crate::core::types::LineDiff;
 use crate::core::types::{DiffOp, Hunk, SourceType};
+use similar::{ChangeTag, TextDiff};
+use std::path::PathBuf;
 
 fn strip_newline(s: &str) -> String {
     s.trim_end_matches('\n').trim_end_matches('\r').to_string()
@@ -55,7 +55,8 @@ pub fn diff_to_line_diff(old: &str, new: &str) -> LineDiff {
                         });
                     }
                     similar::DiffTag::Insert => {
-                        let lines: Vec<String> = diff.iter_changes(op)
+                        let lines: Vec<String> = diff
+                            .iter_changes(op)
                             .map(|c| strip_newline(c.value()))
                             .collect();
                         my_ops.push(DiffOp::Insert {
@@ -65,7 +66,8 @@ pub fn diff_to_line_diff(old: &str, new: &str) -> LineDiff {
                     }
                     similar::DiffTag::Replace => {
                         let old_cnt = (o_range.end - o_range.start) as u32;
-                        let lines: Vec<String> = diff.iter_changes(op)
+                        let lines: Vec<String> = diff
+                            .iter_changes(op)
                             .filter(|c| c.tag() == ChangeTag::Insert)
                             .map(|c| strip_newline(c.value()))
                             .collect();
@@ -180,7 +182,9 @@ fn collect_changes_from_diff<'a>(
                 DiffOp::Insert { lines, .. } => {
                     new_len += lines.len() as u32;
                 }
-                DiffOp::Replace { old_count, lines, .. } => {
+                DiffOp::Replace {
+                    old_count, lines, ..
+                } => {
                     old_len += old_count;
                     new_len += lines.len() as u32;
                 }
@@ -199,9 +203,7 @@ fn collect_changes_from_diff<'a>(
 /// Unified diff output (with context preserved) for displaying the
 pub fn format_unified_diff(old: &str, new: &str, context: usize) -> String {
     let diff = TextDiff::from_lines(old, new);
-    diff.unified_diff()
-        .context_radius(context)
-        .to_string()
+    diff.unified_diff().context_radius(context).to_string()
 }
 
 #[cfg(test)]
@@ -242,9 +244,10 @@ mod tests {
         let line_diff = diff_to_line_diff(old, new);
         assert!(!line_diff.hunks.is_empty());
 
-        let has_delete = line_diff.hunks.iter().any(|h| {
-            h.ops.iter().any(|op| matches!(op, DiffOp::Delete { .. }))
-        });
+        let has_delete = line_diff
+            .hunks
+            .iter()
+            .any(|h| h.ops.iter().any(|op| matches!(op, DiffOp::Delete { .. })));
         assert!(has_delete);
     }
 
@@ -255,9 +258,10 @@ mod tests {
         let line_diff = diff_to_line_diff(old, new);
         assert!(!line_diff.hunks.is_empty());
 
-        let has_replace = line_diff.hunks.iter().any(|h| {
-            h.ops.iter().any(|op| matches!(op, DiffOp::Replace { .. }))
-        });
+        let has_replace = line_diff
+            .hunks
+            .iter()
+            .any(|h| h.ops.iter().any(|op| matches!(op, DiffOp::Replace { .. })));
         assert!(has_replace);
     }
 
@@ -277,9 +281,10 @@ mod tests {
         let new = "";
         let line_diff = diff_to_line_diff(old, new);
         assert!(!line_diff.hunks.is_empty());
-        let has_delete = line_diff.hunks.iter().any(|h| {
-            h.ops.iter().any(|op| matches!(op, DiffOp::Delete { .. }))
-        });
+        let has_delete = line_diff
+            .hunks
+            .iter()
+            .any(|h| h.ops.iter().any(|op| matches!(op, DiffOp::Delete { .. })));
         assert!(has_delete);
     }
 
@@ -288,7 +293,11 @@ mod tests {
         let old = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm\nn\n";
         let new = "a\nX\nc\nd\ne\nf\ng\nh\ni\nY\nk\nl\nm\nn\n";
         let line_diff = diff_to_line_diff(old, new);
-        assert_eq!(line_diff.hunks.len(), 2, "two separated changes should produce 2 hunks");
+        assert_eq!(
+            line_diff.hunks.len(),
+            2,
+            "two separated changes should produce 2 hunks"
+        );
     }
 
     #[test]
@@ -331,9 +340,11 @@ mod tests {
             SourceType::Manual,
         );
         assert!(!delta.diff.hunks.is_empty());
-        let has_insert = delta.diff.hunks.iter().any(|h| {
-            h.ops.iter().any(|op| matches!(op, DiffOp::Insert { .. }))
-        });
+        let has_insert = delta
+            .diff
+            .hunks
+            .iter()
+            .any(|h| h.ops.iter().any(|op| matches!(op, DiffOp::Insert { .. })));
         assert!(has_insert);
     }
 
@@ -357,7 +368,10 @@ mod tests {
     #[test]
     fn test_diff_to_line_diff_single_char_no_newline() {
         let diff = diff_to_line_diff("x", "y");
-        assert!(!diff.hunks.is_empty() || diff.hunks.iter().any(|h| !h.ops.is_empty()), "single char change should produce diff");
+        assert!(
+            !diff.hunks.is_empty() || diff.hunks.iter().any(|h| !h.ops.is_empty()),
+            "single char change should produce diff"
+        );
     }
 
     #[test]
@@ -369,6 +383,9 @@ mod tests {
     #[test]
     fn test_diff_to_line_diff_only_newlines() {
         let diff = diff_to_line_diff("\n\n", "\n\n\n");
-        assert!(!diff.is_empty(), "different newline count should produce diff");
+        assert!(
+            !diff.is_empty(),
+            "different newline count should produce diff"
+        );
     }
 }

@@ -7,9 +7,7 @@ use crate::core::delta::Delta;
 use crate::core::file_node::FileNode;
 use crate::core::partition::Partition;
 use crate::core::snapshot::Snapshot;
-use crate::core::types::{
-    AgentInstanceId, PartitionId, PartitionType, SnapshotId, SourceType,
-};
+use crate::core::types::{AgentInstanceId, PartitionId, PartitionType, SnapshotId, SourceType};
 use crate::engine::diff::diff_to_line_diff;
 use crate::engine::merge::apply_deltas;
 use crate::error::{Result, StratumError};
@@ -66,11 +64,12 @@ where
     S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
 {
     let pid = agent_partition_id(agent_id);
-    let partition = storage
-        .get_partition(&pid)
-        .map_err(|_| StratumError::NotFound(format!(
-            "agent partition for {} not found, call ensure_agent_partition first", agent_id
-        )))?;
+    let partition = storage.get_partition(&pid).map_err(|_| {
+        StratumError::NotFound(format!(
+            "agent partition for {} not found, call ensure_agent_partition first",
+            agent_id
+        ))
+    })?;
 
     let current_snapshot = storage
         .get_snapshot(&partition.current_snapshot)
@@ -83,12 +82,14 @@ where
             .map_err(StratumError::Storage)?;
         let content_str = String::from_utf8_lossy(
             &storage
-                .get_file_content(current_snapshot.file.path_str(), &current_snapshot.file.base_hash)
+                .get_file_content(
+                    current_snapshot.file.path_str(),
+                    &current_snapshot.file.base_hash,
+                )
                 .map_err(StratumError::Storage)?,
         )
         .to_string();
-        apply_deltas(&content_str, &deltas)
-            .map_err(|e| StratumError::Engine(e.to_string()))?
+        apply_deltas(&content_str, &deltas).map_err(|e| StratumError::Engine(e.to_string()))?
     };
 
     // Calculate diff
@@ -107,9 +108,7 @@ where
     storage
         .store_file_node(&file_node, old_content.as_bytes())
         .map_err(StratumError::Storage)?;
-    storage
-        .store_delta(&delta)
-        .map_err(StratumError::Storage)?;
+    storage.store_delta(&delta).map_err(StratumError::Storage)?;
 
     // Creating a New Snapshot
     let new_snapshot = Snapshot::from_parent(
@@ -134,10 +133,7 @@ where
 /// Corresponds to `move_agent_to_approval` in the architecture documentation.
 /// - Take the current snapshot of the agent_raw partition and the approval agent partition
 /// - Merge to generate a new snapshot to push into the approval agent partition
-pub fn move_agent_to_approval<S>(
-    storage: &S,
-    agent_id: &AgentInstanceId,
-) -> Result<SnapshotId>
+pub fn move_agent_to_approval<S>(storage: &S, agent_id: &AgentInstanceId) -> Result<SnapshotId>
 where
     S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
 {
@@ -147,12 +143,12 @@ where
     let agent_partition = storage
         .get_partition(&agent_pid)
         .map_err(|_| StratumError::NotFound(format!("agent partition {} not found", agent_id)))?;
-    let approval_partition = storage
-        .get_partition(&approval_pid)
-        .map_err(|_| StratumError::NotFound(format!(
+    let approval_partition = storage.get_partition(&approval_pid).map_err(|_| {
+        StratumError::NotFound(format!(
             "approval partition for agent {} not found, call ensure_approval_agent_partition first",
             agent_id
-        )))?;
+        ))
+    })?;
 
     let agent_snapshot = storage
         .get_snapshot(&agent_partition.current_snapshot)
@@ -162,10 +158,8 @@ where
         .map_err(StratumError::Storage)?;
 
     // Reconstructed text
-    let agent_text =
-        crate::layered::transition::reconstruct_text(storage, &agent_snapshot)?;
-    let approval_text =
-        crate::layered::transition::reconstruct_text(storage, &approval_snapshot)?;
+    let agent_text = crate::layered::transition::reconstruct_text(storage, &agent_snapshot)?;
+    let approval_text = crate::layered::transition::reconstruct_text(storage, &approval_snapshot)?;
 
     // Calculate the merge diff
     let merge_diff = diff_to_line_diff(&approval_text, &agent_text);
@@ -200,10 +194,7 @@ where
 }
 
 /// Abandon Agent modifications (switch pointer to parent Snapshot only)
-pub fn discard_agent_edit<S>(
-    storage: &S,
-    agent_id: &AgentInstanceId,
-) -> Result<()>
+pub fn discard_agent_edit<S>(storage: &S, agent_id: &AgentInstanceId) -> Result<()>
 where
     S: SnapshotStore + PartitionStore,
 {
@@ -232,12 +223,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::SourceType;
     use crate::core::delta::Delta;
     use crate::core::file_node::FileNode;
     use crate::core::snapshot::Snapshot;
-    use crate::storage::repository::{PartitionStore, SnapshotStore, FileNodeStore, DeltaStore};
-    use crate::storage::sqlite_storage::SqliteStorage;
+    use crate::core::types::SourceType;
+    use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
+    use crate::storage::SqliteStorage;
 
     fn setup_storage() -> SqliteStorage {
         SqliteStorage::new_in_memory().unwrap()
@@ -245,10 +236,16 @@ mod tests {
 
     fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {
         let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
-        storage.store_file_node(&file_node, content.as_bytes()).unwrap();
+        storage
+            .store_file_node(&file_node, content.as_bytes())
+            .unwrap();
 
         let empty_diff = crate::core::types::LineDiff::new(vec![]);
-        let delta = Delta::new(file_node.clone(), empty_diff, SourceType::Agent("test-agent".into()));
+        let delta = Delta::new(
+            file_node.clone(),
+            empty_diff,
+            SourceType::Agent("test-agent".into()),
+        );
         storage.store_delta(&delta).unwrap();
 
         let snapshot = Snapshot::new_initial(file_node, delta.id);
@@ -275,12 +272,15 @@ mod tests {
         ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
 
         // Application Editor
-        let edited_id = apply_agent_edit(&storage, &agent_id, "test.txt", "original\nchanged\n").unwrap();
+        let edited_id =
+            apply_agent_edit(&storage, &agent_id, "test.txt", "original\nchanged\n").unwrap();
         assert_ne!(edited_id, initial_id);
 
         // Abandon Editing - Fallback to Parent Snapshot
         discard_agent_edit(&storage, &agent_id).unwrap();
-        let partition = storage.get_partition(&agent_partition_id(&agent_id)).unwrap();
+        let partition = storage
+            .get_partition(&agent_partition_id(&agent_id))
+            .unwrap();
         assert_eq!(partition.current_snapshot, initial_id);
     }
 
@@ -301,8 +301,12 @@ mod tests {
         assert_ne!(a_id, b_id);
 
         // Verify that the respective partitions are independent
-        let pa = storage.get_partition(&agent_partition_id(&agent_a)).unwrap();
-        let pb = storage.get_partition(&agent_partition_id(&agent_b)).unwrap();
+        let pa = storage
+            .get_partition(&agent_partition_id(&agent_a))
+            .unwrap();
+        let pb = storage
+            .get_partition(&agent_partition_id(&agent_b))
+            .unwrap();
         assert_eq!(pa.current_snapshot, a_id);
         assert_eq!(pb.current_snapshot, b_id);
     }
@@ -340,7 +344,10 @@ mod tests {
 
         // Apply same content → no new snapshot
         let result_id = apply_agent_edit(&storage, &agent_id, "test.txt", "same").unwrap();
-        assert_eq!(result_id, initial_id, "no changes should return current snapshot id");
+        assert_eq!(
+            result_id, initial_id,
+            "no changes should return current snapshot id"
+        );
     }
 
     #[test]
@@ -371,7 +378,10 @@ mod tests {
         assert!(result.is_ok(), "move_agent_to_approval should succeed");
 
         let approval_partition = storage.get_partition(&approval_pid).unwrap();
-        assert_ne!(approval_partition.current_snapshot, initial_id, "approval should have advanced");
+        assert_ne!(
+            approval_partition.current_snapshot, initial_id,
+            "approval should have advanced"
+        );
     }
 
     #[test]
@@ -387,7 +397,9 @@ mod tests {
         let second = apply_agent_edit(&storage, &agent_id, "test.txt", "a\nmodified\nc\n").unwrap();
         assert_ne!(second, first);
 
-        let partition = storage.get_partition(&agent_partition_id(&agent_id)).unwrap();
+        let partition = storage
+            .get_partition(&agent_partition_id(&agent_id))
+            .unwrap();
         assert_eq!(partition.current_snapshot, second);
     }
 
@@ -402,16 +414,22 @@ mod tests {
         let file_node2 = FileNode::new(std::path::PathBuf::from("other.txt"), b"content2\n");
         storage.store_file_node(&file_node2, b"content2\n").unwrap();
         let empty_diff2 = crate::core::types::LineDiff::new(vec![]);
-        let delta2 = Delta::new(file_node2.clone(), empty_diff2, SourceType::Agent(agent_id.clone()));
+        let delta2 = Delta::new(
+            file_node2.clone(),
+            empty_diff2,
+            SourceType::Agent(agent_id.clone()),
+        );
         storage.store_delta(&delta2).unwrap();
         let init2 = Snapshot::new_initial(file_node2, delta2.id);
         storage.store_snapshot(&init2, b"").unwrap();
 
         // We need a different approach: just test editing two files sequentially
-        let id1 = apply_agent_edit(&storage, &agent_id, "test.txt", "content1\nmodified\n").unwrap();
+        let id1 =
+            apply_agent_edit(&storage, &agent_id, "test.txt", "content1\nmodified\n").unwrap();
         assert_ne!(id1, initial_id);
 
-        let id2 = apply_agent_edit(&storage, &agent_id, "other.txt", "content2\nmodified\n").unwrap();
+        let id2 =
+            apply_agent_edit(&storage, &agent_id, "other.txt", "content2\nmodified\n").unwrap();
         assert_ne!(id2, id1);
     }
 }

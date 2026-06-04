@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::core::types::{CheckpointId, ContentId, SnapshotId};
+use serde::{Deserialize, Serialize};
 
 /// Checkpoint Metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,7 +158,11 @@ impl CheckpointBuilder {
             message: self.message,
             git_anchor: self.git_anchor,
         };
-        Ok(Checkpoint::new(self.baseline_snapshots, self.parents, metadata))
+        Ok(Checkpoint::new(
+            self.baseline_snapshots,
+            self.parents,
+            metadata,
+        ))
     }
 }
 
@@ -202,23 +206,14 @@ mod tests {
     #[test]
     fn test_checkpoint_content_addressing() {
         let snap_id = dummy_snapshot_id();
-        let cp1 = Checkpoint::new_single(
-            snap_id,
-            vec![],
-            CheckpointMetadata::new("user", "message"),
-        );
-        let cp2 = Checkpoint::new_single(
-            snap_id,
-            vec![],
-            CheckpointMetadata::new("user", "message"),
-        );
+        let cp1 =
+            Checkpoint::new_single(snap_id, vec![], CheckpointMetadata::new("user", "message"));
+        let cp2 =
+            Checkpoint::new_single(snap_id, vec![], CheckpointMetadata::new("user", "message"));
         assert_eq!(cp1.id, cp2.id, "same content = same id");
 
-        let cp3 = Checkpoint::new_single(
-            snap_id,
-            vec![],
-            CheckpointMetadata::new("other", "message"),
-        );
+        let cp3 =
+            Checkpoint::new_single(snap_id, vec![], CheckpointMetadata::new("other", "message"));
         assert_ne!(cp1.id, cp3.id, "different author = different id");
     }
 
@@ -267,5 +262,108 @@ mod tests {
         assert_eq!(cp.baseline_snapshots.len(), 2);
         assert_eq!(cp.baseline_snapshots[0], snap1);
         assert_eq!(cp.baseline_snapshots[1], snap2);
+    }
+
+    #[test]
+    fn test_checkpoint_with_multiple_parents() {
+        let snap_id = dummy_snapshot_id();
+        let parent1 = CheckpointId::from_content(b"parent1");
+        let parent2 = CheckpointId::from_content(b"parent2");
+
+        let metadata = CheckpointMetadata::new("user", "merge commit");
+        let cp = Checkpoint::new(vec![snap_id], vec![parent1, parent2], metadata);
+
+        assert_eq!(cp.parents.len(), 2);
+        assert_eq!(cp.parents[0], parent1);
+        assert_eq!(cp.parents[1], parent2);
+    }
+
+    #[test]
+    fn test_checkpoint_id_excludes_created_at() {
+        let snap_id = dummy_snapshot_id();
+        let metadata = CheckpointMetadata::new("user", "message");
+
+        let cp1 = Checkpoint::new_single(snap_id, vec![], metadata.clone());
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let cp2 = Checkpoint::new_single(snap_id, vec![], metadata);
+
+        assert_eq!(
+            cp1.id, cp2.id,
+            "ID should be same despite different timestamps"
+        );
+        assert_ne!(
+            cp1.created_at, cp2.created_at,
+            "Timestamps should be different"
+        );
+    }
+
+    #[test]
+    fn test_checkpoint_id_includes_git_anchor() {
+        let snap_id = dummy_snapshot_id();
+        let mut metadata1 = CheckpointMetadata::new("user", "message");
+        metadata1.git_anchor = Some("commit1".to_string());
+
+        let mut metadata2 = CheckpointMetadata::new("user", "message");
+        metadata2.git_anchor = Some("commit2".to_string());
+
+        let cp1 = Checkpoint::new_single(snap_id, vec![], metadata1);
+        let cp2 = Checkpoint::new_single(snap_id, vec![], metadata2);
+
+        assert_eq!(cp1.id, cp2.id, "ID should be same regardless of git_anchor");
+    }
+
+    #[test]
+    fn test_checkpoint_builder_with_git_anchor() {
+        let snap_id = dummy_snapshot_id();
+
+        let cp = CheckpointBuilder::new()
+            .baseline_snapshot(snap_id)
+            .author("user")
+            .message("message")
+            .git_anchor("abc123")
+            .build()
+            .unwrap();
+
+        assert_eq!(cp.metadata.git_anchor, Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn test_checkpoint_builder_with_multiple_parents() {
+        let snap_id = dummy_snapshot_id();
+        let parent1 = CheckpointId::from_content(b"parent1");
+        let parent2 = CheckpointId::from_content(b"parent2");
+
+        let cp = CheckpointBuilder::new()
+            .baseline_snapshot(snap_id)
+            .parents(vec![parent1, parent2])
+            .author("user")
+            .message("merge")
+            .build()
+            .unwrap();
+
+        assert_eq!(cp.parents.len(), 2);
+        assert!(cp.parents.contains(&parent1));
+        assert!(cp.parents.contains(&parent2));
+    }
+
+    #[test]
+    fn test_checkpoint_content_addressing_different_snapshots() {
+        let snap1 = ContentId::from_content(b"file1");
+        let snap2 = ContentId::from_content(b"file2");
+
+        let cp1 = Checkpoint::new_single(snap1, vec![], CheckpointMetadata::new("user", "msg"));
+        let cp2 = Checkpoint::new_single(snap2, vec![], CheckpointMetadata::new("user", "msg"));
+
+        assert_ne!(cp1.id, cp2.id, "different snapshots = different ids");
+    }
+
+    #[test]
+    fn test_checkpoint_metadata_default() {
+        let metadata = CheckpointMetadata::new("user", "message");
+        assert_eq!(metadata.author, "user");
+        assert_eq!(metadata.message, "message");
+        assert!(metadata.git_anchor.is_none());
     }
 }

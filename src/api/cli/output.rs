@@ -1,9 +1,9 @@
 use crate::api::types::*;
 use crate::core::delta::Delta;
-use crate::core::types::LineDiff;
 use crate::core::partition::Partition;
 use crate::core::snapshot::Snapshot;
 use crate::core::types::DiffOp;
+use crate::core::types::LineDiff;
 
 /// Output format mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,7 +13,10 @@ pub enum OutputFormat {
 }
 
 /// Print status from ApiService response
-pub fn print_status_from_response(resp: &Result<StatusResponse, crate::api::types::ApiError>, format: OutputFormat) {
+pub fn print_status_from_response(
+    resp: &Result<StatusResponse, crate::api::types::ApiError>,
+    format: OutputFormat,
+) {
     match resp {
         Ok(r) => match format {
             OutputFormat::Plain => {
@@ -22,7 +25,10 @@ pub fn print_status_from_response(resp: &Result<StatusResponse, crate::api::type
                     return;
                 }
                 println!("{:-<72}", "");
-                println!("{:<16} {:<24} {:<20} History", "Layer", "Partition", "Current Snapshot");
+                println!(
+                    "{:<16} {:<24} {:<20} History",
+                    "Layer", "Partition", "Current Snapshot"
+                );
                 println!("{:-<72}", "");
                 for entry in &r.partitions {
                     let short_hash = if entry.current_snapshot.len() > 12 {
@@ -48,10 +54,7 @@ pub fn print_status_from_response(resp: &Result<StatusResponse, crate::api::type
 }
 
 /// Print checkpoint history from ApiService response
-pub fn print_log_from_response(
-    resp: &LogResponse,
-    format: OutputFormat,
-) {
+pub fn print_log_from_response(resp: &LogResponse, format: OutputFormat) {
     match format {
         OutputFormat::Plain => {
             if resp.checkpoints.is_empty() {
@@ -71,7 +74,11 @@ pub fn print_log_from_response(
                 } else {
                     cp.message.clone()
                 };
-                let git_tag = if cp.git_anchor.is_some() { " [git]" } else { "" };
+                let git_tag = if cp.git_anchor.is_some() {
+                    " [git]"
+                } else {
+                    ""
+                };
                 println!(
                     "{:<20} {:<16} {:<12} {:<12} {:<30}",
                     format!("{}{}", short_id, git_tag),
@@ -196,7 +203,9 @@ fn print_line_diff(diff: &LineDiff) {
                         println!("+{}", line);
                     }
                 }
-                DiffOp::Replace { old_count, lines, .. } => {
+                DiffOp::Replace {
+                    old_count, lines, ..
+                } => {
                     for _ in 0..*old_count {
                         println!("- ");
                     }
@@ -253,10 +262,7 @@ pub fn print_partition(partition: &Partition, format: OutputFormat) {
             println!("Partition: {}", partition.name);
             println!("  ID:      {}", partition.id);
             println!("  Type:    {:?}", partition.partition_type);
-            println!(
-                "  Current: {}",
-                &partition.current_snapshot.to_hex()[..12]
-            );
+            println!("  Current: {}", &partition.current_snapshot.to_hex()[..12]);
             println!("  History: {} snapshots", partition.history.len());
         }
         OutputFormat::Json => {

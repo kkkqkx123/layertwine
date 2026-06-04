@@ -120,6 +120,17 @@ impl PartitionType {
             PartitionType::Staged => "staged".to_string(),
         }
     }
+
+    pub fn to_layer(&self) -> crate::core::types::LayerType {
+        match self {
+            PartitionType::Manual => crate::core::types::LayerType::ManualEdit,
+            PartitionType::Agent(_) => crate::core::types::LayerType::AgentEdit,
+            PartitionType::Approval(_) | PartitionType::Integrated(_) | PartitionType::Unified => {
+                crate::core::types::LayerType::Approval
+            }
+            PartitionType::Staged => crate::core::types::LayerType::Staged,
+        }
+    }
 }
 
 /// Diff operation type
@@ -212,5 +223,29 @@ mod tests {
         let data = b"hello";
         let id = ContentId::from_content(data);
         assert_eq!(id.to_string(), id.to_hex());
+    }
+
+    #[test]
+    fn test_partition_type_to_layer() {
+        assert_eq!(PartitionType::Manual.to_layer(), LayerType::ManualEdit);
+
+        assert_eq!(
+            PartitionType::Agent(AgentInstanceId("test".into())).to_layer(),
+            LayerType::AgentEdit
+        );
+
+        assert_eq!(
+            PartitionType::Approval(AgentInstanceId("test".into())).to_layer(),
+            LayerType::Approval
+        );
+
+        assert_eq!(
+            PartitionType::Integrated("test".to_string()).to_layer(),
+            LayerType::Approval
+        );
+
+        assert_eq!(PartitionType::Unified.to_layer(), LayerType::Approval);
+
+        assert_eq!(PartitionType::Staged.to_layer(), LayerType::Staged);
     }
 }

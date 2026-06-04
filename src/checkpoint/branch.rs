@@ -3,8 +3,8 @@
 //! Branch essence: only one pointer (CheckpointId), zero data replication.
 //! Reference architecture/05-Checkpoint Warehouse and Branch Management.md §5.3
 
-use serde::{Deserialize, Serialize};
 use crate::core::types::CheckpointId;
+use serde::{Deserialize, Serialize};
 
 /// Lightweight Branches
 ///

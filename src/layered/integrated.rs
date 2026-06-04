@@ -95,9 +95,9 @@ where
     let approval_pid = crate::layered::approval::approval_agent_partition_id(agent_id);
     let integrated_pid = integrated_partition_id(integrated_name);
 
-    let approval_partition = storage
-        .get_partition(&approval_pid)
-        .map_err(|_| StratumError::NotFound(format!("approval agent partition {} not found", agent_id)))?;
+    let approval_partition = storage.get_partition(&approval_pid).map_err(|_| {
+        StratumError::NotFound(format!("approval agent partition {} not found", agent_id))
+    })?;
     let approval_snapshot = storage
         .get_snapshot(&approval_partition.current_snapshot)
         .map_err(StratumError::Storage)?;
@@ -116,8 +116,7 @@ where
         .get_snapshot(&integrated_partition.current_snapshot)
         .map_err(StratumError::Storage)?;
 
-    let approval_text =
-        crate::layered::transition::reconstruct_text(storage, &approval_snapshot)?;
+    let approval_text = crate::layered::transition::reconstruct_text(storage, &approval_snapshot)?;
     let integrated_text =
         crate::layered::transition::reconstruct_text(storage, &integrated_snapshot)?;
 
@@ -152,10 +151,7 @@ where
 }
 
 /// Merge all named Integrated partitions into the Unified partition
-pub fn move_integrated_to_unified<S>(
-    storage: &S,
-    integrated_names: &[String],
-) -> Result<SnapshotId>
+pub fn move_integrated_to_unified<S>(storage: &S, integrated_names: &[String]) -> Result<SnapshotId>
 where
     S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
 {
@@ -164,14 +160,18 @@ where
     let initial_snapshot = if integrated_names.is_empty() {
         let placeholder = SnapshotId::from_content(b"unified-placeholder");
         let _ = ensure_unified_partition(storage, placeholder)?;
-        let unified = storage.get_partition(&unified_pid)
+        let unified = storage
+            .get_partition(&unified_pid)
             .map_err(|_| StratumError::NotFound("unified partition not found".into()))?;
         return Ok(unified.current_snapshot);
     } else {
         let first_pid = integrated_partition_id(&integrated_names[0]);
-        let first_part = storage
-            .get_partition(&first_pid)
-            .map_err(|_| StratumError::NotFound(format!("integrated partition {} not found", integrated_names[0])))?;
+        let first_part = storage.get_partition(&first_pid).map_err(|_| {
+            StratumError::NotFound(format!(
+                "integrated partition {} not found",
+                integrated_names[0]
+            ))
+        })?;
         first_part.current_snapshot
     };
 
@@ -180,16 +180,15 @@ where
         .get_snapshot(&unified_partition.current_snapshot)
         .map_err(StratumError::Storage)?;
 
-    let unified_text =
-        crate::layered::transition::reconstruct_text(storage, &unified_snapshot)?;
+    let unified_text = crate::layered::transition::reconstruct_text(storage, &unified_snapshot)?;
     let mut merged_text = unified_text.clone();
     let mut parent_snapshots_owned: Vec<Snapshot> = Vec::new();
 
     for name in integrated_names {
         let pid = integrated_partition_id(name);
-        let part = storage
-            .get_partition(&pid)
-            .map_err(|_| StratumError::NotFound(format!("integrated partition {} not found", name)))?;
+        let part = storage.get_partition(&pid).map_err(|_| {
+            StratumError::NotFound(format!("integrated partition {} not found", name))
+        })?;
         let snap = storage
             .get_snapshot(&part.current_snapshot)
             .map_err(StratumError::Storage)?;
@@ -197,14 +196,8 @@ where
 
         let diff = diff_to_line_diff(&merged_text, &text);
         if !diff.is_empty() {
-            let delta = Delta::new(
-                snap.file.clone(),
-                diff,
-                SourceType::Manual,
-            );
-            storage
-                .store_delta(&delta)
-                .map_err(StratumError::Storage)?;
+            let delta = Delta::new(snap.file.clone(), diff, SourceType::Manual);
+            storage.store_delta(&delta).map_err(StratumError::Storage)?;
             merged_text = crate::engine::merge::apply_deltas(&merged_text, &[delta])
                 .map_err(|e| StratumError::Engine(e.to_string()))?;
         }
@@ -233,11 +226,7 @@ where
         .store_delta(&merge_delta)
         .map_err(StratumError::Storage)?;
 
-    let new_snapshot = Snapshot::merge(
-        all_parents,
-        merge_delta.id,
-        PartitionType::Unified.name(),
-    );
+    let new_snapshot = Snapshot::merge(all_parents, merge_delta.id, PartitionType::Unified.name());
     storage
         .store_snapshot(&new_snapshot, b"")
         .map_err(StratumError::Storage)?;
@@ -273,9 +262,9 @@ mod tests {
     use crate::core::file_node::FileNode;
     use crate::core::types::SourceType;
     use crate::engine::diff::diff_to_line_diff;
-    use crate::storage::repository::{FileNodeStore, SnapshotStore};
-    use crate::storage::sqlite_storage::SqliteStorage;
     use crate::layered::transition::reconstruct_text;
+    use crate::storage::repository::{FileNodeStore, SnapshotStore};
+    use crate::storage::SqliteStorage;
 
     fn setup_storage() -> SqliteStorage {
         SqliteStorage::new_in_memory().unwrap()
@@ -283,7 +272,9 @@ mod tests {
 
     fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {
         let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
-        storage.store_file_node(&file_node, content.as_bytes()).unwrap();
+        storage
+            .store_file_node(&file_node, content.as_bytes())
+            .unwrap();
         let empty_diff = crate::core::types::LineDiff::new(vec![]);
         let delta = Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
         storage.store_delta(&delta).unwrap();
@@ -300,7 +291,9 @@ mod tests {
     ) -> SnapshotId {
         let parent = storage.get_snapshot(parent_id).unwrap();
         let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
-        storage.store_file_node(&file_node, content.as_bytes()).unwrap();
+        storage
+            .store_file_node(&file_node, content.as_bytes())
+            .unwrap();
 
         let parent_text = reconstruct_text(storage, &parent).unwrap();
         let diff = diff_to_line_diff(&parent_text, content);
@@ -372,7 +365,10 @@ mod tests {
         assert_eq!(p1.id, p2.id);
 
         let p3 = ensure_integrated_partition(&storage, "feat-2", initial_id).unwrap();
-        assert_ne!(p1.id, p3.id, "different names should produce different partition ids");
+        assert_ne!(
+            p1.id, p3.id,
+            "different names should produce different partition ids"
+        );
     }
 
     #[test]
@@ -418,7 +414,9 @@ mod tests {
             "base\nmodified\n",
             "approval/test-agent",
         );
-        storage.update_pointer(&approval_pid, &approval_new_id).unwrap();
+        storage
+            .update_pointer(&approval_pid, &approval_new_id)
+            .unwrap();
 
         let result = move_approval_to_integrated(&storage, &agent_id, integrated_name);
         assert!(result.is_ok());
@@ -470,12 +468,21 @@ mod tests {
 
         let aa = crate::layered::approval::approval_agent_partition_id(&agent_a);
         let ab = crate::layered::approval::approval_agent_partition_id(&agent_b);
-        assert_ne!(aa, ab, "different agents should have different approval partition ids");
+        assert_ne!(
+            aa, ab,
+            "different agents should have different approval partition ids"
+        );
 
         let ia = integrated_partition_id("feat-a");
         let ib = integrated_partition_id("feat-b");
-        assert_ne!(ia, ib, "different integrations should have different partition ids");
+        assert_ne!(
+            ia, ib,
+            "different integrations should have different partition ids"
+        );
 
-        assert_ne!(aa, ia, "approval and integrated partition ids should differ");
+        assert_ne!(
+            aa, ia,
+            "approval and integrated partition ids should differ"
+        );
     }
 }

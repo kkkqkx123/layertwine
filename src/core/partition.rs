@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::core::types::{PartitionId, PartitionType, SnapshotId};
+use serde::{Deserialize, Serialize};
 
 /// Partition - partition (variable pointer)
 #[derive(Debug, Clone, Serialize, Deserialize)]

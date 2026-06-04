@@ -16,9 +16,7 @@ use crate::error::{Result, StratumError};
 ///
 /// If `old_content` is None, the reverse Insert of Delete will contain the empty string.
 pub fn inverse_delta(delta: &Delta, old_content: Option<&str>) -> Result<Delta> {
-    let old_lines: Vec<&str> = old_content
-        .map(|c| c.lines().collect())
-        .unwrap_or_default();
+    let old_lines: Vec<&str> = old_content.map(|c| c.lines().collect()).unwrap_or_default();
 
     let mut inv_hunks = Vec::new();
 
@@ -30,20 +28,14 @@ pub fn inverse_delta(delta: &Delta, old_content: Option<&str>) -> Result<Delta> 
                 DiffOp::Equal { count } => {
                     inv_ops.push(DiffOp::Equal { count: *count });
                 }
-                DiffOp::Insert {
-                    new_start,
-                    lines,
-                } => {
+                DiffOp::Insert { new_start, lines } => {
                     // The inverse of Insert is Delete (which removes the lines from the new text).
                     inv_ops.push(DiffOp::Delete {
                         old_start: *new_start,
                         count: lines.len() as u32,
                     });
                 }
-                DiffOp::Delete {
-                    old_start,
-                    count,
-                } => {
+                DiffOp::Delete { old_start, count } => {
                     // The inverse of Delete is Insert (you need to know what was deleted)
                     let deleted_lines: Vec<String> = if !old_lines.is_empty() {
                         let start = (*old_start as usize).saturating_sub(1);
@@ -144,8 +136,8 @@ pub fn inverse_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::LineDiff;
     use crate::core::file_node::FileNode;
+    use crate::core::types::LineDiff;
     use crate::core::types::{DiffOp, Hunk, SourceType};
     use crate::engine::diff::diff_to_line_diff;
     use std::path::PathBuf;
@@ -175,11 +167,11 @@ mod tests {
         let inv = inverse_delta(&delta, None).unwrap();
 
         // The inverse delta should have a Delete operation
-        let has_delete = inv.diff.hunks.iter().any(|h| {
-            h.ops
-                .iter()
-                .any(|op| matches!(op, DiffOp::Delete { .. }))
-        });
+        let has_delete = inv
+            .diff
+            .hunks
+            .iter()
+            .any(|h| h.ops.iter().any(|op| matches!(op, DiffOp::Delete { .. })));
         assert!(has_delete);
     }
 
@@ -205,11 +197,11 @@ mod tests {
 
         // Without old_content, a blank line is generated.
         let inv = inverse_delta(&delta, None).unwrap();
-        let has_insert = inv.diff.hunks.iter().any(|h| {
-            h.ops
-                .iter()
-                .any(|op| matches!(op, DiffOp::Insert { .. }))
-        });
+        let has_insert = inv
+            .diff
+            .hunks
+            .iter()
+            .any(|h| h.ops.iter().any(|op| matches!(op, DiffOp::Insert { .. })));
         assert!(has_insert);
 
         // With old_content, it should be possible to extract the deleted rows
@@ -282,18 +274,30 @@ mod tests {
             SourceType::Manual,
         );
         let inv = inverse_delta(&delta, Some("old\n")).unwrap();
-        let has_replace = inv.diff.hunks.iter().any(|h| {
-            h.ops.iter().any(|op| matches!(op, DiffOp::Replace { .. }))
-        });
+        let has_replace = inv
+            .diff
+            .hunks
+            .iter()
+            .any(|h| h.ops.iter().any(|op| matches!(op, DiffOp::Replace { .. })));
         assert!(has_replace, "inverse of Replace should be Replace");
 
         // Check that the old_start/new_start are swapped
         for hunk in &inv.diff.hunks {
             for op in &hunk.ops {
-                if let DiffOp::Replace { old_start, new_start, lines, .. } = op {
+                if let DiffOp::Replace {
+                    old_start,
+                    new_start,
+                    lines,
+                    ..
+                } = op
+                {
                     assert_eq!(*old_start, 1, "old_start should be original new_start");
                     assert_eq!(*new_start, 1, "new_start should be original old_start");
-                    assert_eq!(lines, &vec!["old".to_string()], "should contain original content");
+                    assert_eq!(
+                        lines,
+                        &vec!["old".to_string()],
+                        "should contain original content"
+                    );
                 }
             }
         }
@@ -343,9 +347,11 @@ mod tests {
             SourceType::Manual,
         );
         let inv = inverse_delta(&delta, None).unwrap();
-        let has_equal = inv.diff.hunks.iter().any(|h| {
-            h.ops.iter().any(|op| matches!(op, DiffOp::Equal { .. }))
-        });
+        let has_equal = inv
+            .diff
+            .hunks
+            .iter()
+            .any(|h| h.ops.iter().any(|op| matches!(op, DiffOp::Equal { .. })));
         assert!(has_equal, "inverse should preserve Equal ops");
     }
 
@@ -358,8 +364,14 @@ mod tests {
             new_len: 4,
             ops: vec![
                 DiffOp::Equal { count: 1 },
-                DiffOp::Delete { old_start: 2, count: 1 },
-                DiffOp::Insert { new_start: 3, lines: vec!["inserted".to_string()] },
+                DiffOp::Delete {
+                    old_start: 2,
+                    count: 1,
+                },
+                DiffOp::Insert {
+                    new_start: 3,
+                    lines: vec!["inserted".to_string()],
+                },
             ],
         };
         let diff = LineDiff::new(vec![hunk]);
@@ -371,15 +383,21 @@ mod tests {
         let inv = inverse_delta(&delta, Some("keep\ndeleted\n")).unwrap();
 
         // Inverse: Delete becomes Insert, Insert becomes Delete, Equal stays
-        let has_delete = inv.diff.hunks.iter().any(|h| {
-            h.ops.iter().any(|op| matches!(op, DiffOp::Delete { .. }))
-        });
-        let has_insert = inv.diff.hunks.iter().any(|h| {
-            h.ops.iter().any(|op| matches!(op, DiffOp::Insert { .. }))
-        });
-        let has_equal = inv.diff.hunks.iter().any(|h| {
-            h.ops.iter().any(|op| matches!(op, DiffOp::Equal { .. }))
-        });
+        let has_delete = inv
+            .diff
+            .hunks
+            .iter()
+            .any(|h| h.ops.iter().any(|op| matches!(op, DiffOp::Delete { .. })));
+        let has_insert = inv
+            .diff
+            .hunks
+            .iter()
+            .any(|h| h.ops.iter().any(|op| matches!(op, DiffOp::Insert { .. })));
+        let has_equal = inv
+            .diff
+            .hunks
+            .iter()
+            .any(|h| h.ops.iter().any(|op| matches!(op, DiffOp::Equal { .. })));
 
         assert!(has_delete, "original Insert should become Delete");
         assert!(has_insert, "original Delete should become Insert");
@@ -391,15 +409,19 @@ mod tests {
         let file_node = FileNode::new(PathBuf::from("test.txt"), b"content");
         let empty_diff = LineDiff::new(vec![]);
         let delta = Delta::new(file_node, empty_diff, SourceType::Manual);
-        let snapshot = crate::core::snapshot::Snapshot::new_initial(
-            delta.file.clone(),
-            delta.id,
-        );
+        let snapshot = crate::core::snapshot::Snapshot::new_initial(delta.file.clone(), delta.id);
         let result = inverse_snapshot(&snapshot, &[delta], &[""]);
         assert!(result.is_ok(), "inverse_snapshot should succeed");
         let inverses = result.unwrap();
-        assert_eq!(inverses.len(), 1, "a single empty delta produces one trivial inverse");
-        assert!(inverses[0].diff.is_empty(), "inverse of empty delta should also be empty");
+        assert_eq!(
+            inverses.len(),
+            1,
+            "a single empty delta produces one trivial inverse"
+        );
+        assert!(
+            inverses[0].diff.is_empty(),
+            "inverse of empty delta should also be empty"
+        );
     }
 
     #[test]
@@ -407,10 +429,7 @@ mod tests {
         let file_node = FileNode::new(PathBuf::from("test.txt"), b"content");
         let empty_diff = LineDiff::new(vec![]);
         let delta = Delta::new(file_node, empty_diff, SourceType::Manual);
-        let snapshot = crate::core::snapshot::Snapshot::new_initial(
-            delta.file.clone(),
-            delta.id,
-        );
+        let snapshot = crate::core::snapshot::Snapshot::new_initial(delta.file.clone(), delta.id);
         let result = inverse_snapshot(&snapshot, &[], &[]);
         assert!(result.is_err(), "mismatched lengths should error");
     }
@@ -424,10 +443,7 @@ mod tests {
         let diff1 = diff_to_line_diff(content0, content1);
         let delta1 = Delta::new(file.clone(), diff1, SourceType::Manual);
 
-        let snapshot = crate::core::snapshot::Snapshot::new_initial(
-            file.clone(),
-            delta1.id,
-        );
+        let snapshot = crate::core::snapshot::Snapshot::new_initial(file.clone(), delta1.id);
 
         // snapshot has one delta, inverse should undo it
         let result = inverse_snapshot(&snapshot, &[delta1], &[content0]).unwrap();
@@ -441,7 +457,10 @@ mod tests {
         let delta = Delta::new(file_node, diff, SourceType::Manual);
         let old_content = "content";
         let inverse = inverse_delta(&delta, Some(old_content)).unwrap();
-        assert!(inverse.diff.is_empty(), "empty delta inverse should also be empty");
+        assert!(
+            inverse.diff.is_empty(),
+            "empty delta inverse should also be empty"
+        );
     }
 
     #[test]
@@ -451,7 +470,11 @@ mod tests {
         let delta = Delta::new(file_node, diff, SourceType::Manual);
         let inverse = inverse_delta(&delta, Some("")).unwrap();
         // Inverse of insert should be delete
-        let has_delete = inverse.diff.hunks.iter().any(|h| h.ops.iter().any(|op| matches!(op, DiffOp::Delete { .. })));
+        let has_delete = inverse
+            .diff
+            .hunks
+            .iter()
+            .any(|h| h.ops.iter().any(|op| matches!(op, DiffOp::Delete { .. })));
         assert!(has_delete, "inverse of insert should contain Delete ops");
     }
 
@@ -462,7 +485,11 @@ mod tests {
         let delta = Delta::new(file_node, diff, SourceType::Manual);
         let inverse = inverse_delta(&delta, Some("a\nb\nc\n")).unwrap();
         // Inverse of delete should be insert
-        let has_insert = inverse.diff.hunks.iter().any(|h| h.ops.iter().any(|op| matches!(op, DiffOp::Insert { .. })));
+        let has_insert = inverse
+            .diff
+            .hunks
+            .iter()
+            .any(|h| h.ops.iter().any(|op| matches!(op, DiffOp::Insert { .. })));
         assert!(has_insert, "inverse of delete should contain Insert ops");
     }
 }
