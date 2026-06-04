@@ -5,7 +5,8 @@ use crate::backup::backup_repo::BackupRepo;
 use crate::checkpoint::branch::Branch;
 use crate::checkpoint::checkpoint::Checkpoint;
 use crate::checkpoint::repo::CheckpointRepo;
-use crate::core::delta::{Delta, LineDiff};
+use crate::core::delta::Delta;
+use crate::core::types::LineDiff;
 use crate::core::file_node::FileNode;
 use crate::core::snapshot::Snapshot;
 use crate::core::types::{
@@ -294,7 +295,7 @@ impl ApiService for ApiServiceImpl {
             storage.store_file_node(&file_node, b"").map_err(|e| map_error(StratumError::Storage(e)))?;
             let empty_diff = Delta::new(
                 file_node.clone(),
-                crate::core::delta::LineDiff::new(vec![]),
+                crate::core::types::LineDiff::new(vec![]),
                 SourceType::Manual,
             );
             storage.store_delta(&empty_diff).map_err(|e| map_error(StratumError::Storage(e)))?;
@@ -378,7 +379,7 @@ impl ApiService for ApiServiceImpl {
                     .map_err(|e| map_error(StratumError::Storage(e)))?;
                 let delta = Delta::new(
                     file_node,
-                    crate::core::delta::LineDiff::new(vec![]),
+                    crate::core::types::LineDiff::new(vec![]),
                     SourceType::Agent(agent_instance.clone()),
                 );
                 self.storage.store_delta(&delta)

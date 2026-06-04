@@ -378,7 +378,7 @@ impl BackupRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::delta::LineDiff;
+    use crate::core::types::LineDiff;
     use crate::core::file_node::FileNode;
     use crate::core::snapshot::Snapshot;
     use crate::core::types::{DeltaId, SnapshotId, SourceType};

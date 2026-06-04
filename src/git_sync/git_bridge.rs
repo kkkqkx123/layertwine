@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use crate::checkpoint::repo::CheckpointRepo;
-use crate::core::delta::{Delta, LineDiff};
+use crate::core::delta::Delta;
+use crate::core::types::LineDiff;
 use crate::core::file_node::FileNode;
 use crate::core::snapshot::Snapshot;
 use crate::core::types::{CheckpointId, SourceType};

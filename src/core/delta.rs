@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::core::types::{ContentId, DeltaId, DiffOp, SourceType};
+use crate::core::types::{ContentId, DeltaId, DiffOp, LineDiff, SourceType};
 use crate::core::file_node::FileNode;
 
 /// Delta - minimum non-variable increment
@@ -36,23 +36,6 @@ impl Delta {
     pub fn compute_id(&self) -> DeltaId {
         let json = serde_json::to_vec(self).unwrap_or_default();
         ContentId::from_content(&json)
-    }
-}
-
-/// Row level differences
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LineDiff {
-    pub hunks: Vec<super::types::Hunk>,
-}
-
-impl LineDiff {
-    pub fn new(hunks: Vec<super::types::Hunk>) -> Self {
-        LineDiff { hunks }
-    }
-
-    /// Determine if it is empty diff
-    pub fn is_empty(&self) -> bool {
-        self.hunks.is_empty()
     }
 }
 

@@ -196,7 +196,7 @@ mod tests {
         let file_node = FileNode::new(std::path::PathBuf::from(file_path), content.as_bytes());
         storage.store_file_node(&file_node, content.as_bytes()).unwrap();
 
-        let empty_diff = crate::core::delta::LineDiff::new(vec![]);
+        let empty_diff = crate::core::types::LineDiff::new(vec![]);
         let delta = Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
         storage.store_delta(&delta).unwrap();
 
@@ -312,7 +312,7 @@ mod tests {
         // Override the stored file node for a different file path
         let file_node2 = FileNode::new(std::path::PathBuf::from("file2.txt"), b"file2\n");
         storage.store_file_node(&file_node2, b"file2\n").unwrap();
-        let empty_diff2 = crate::core::delta::LineDiff::new(vec![]);
+        let empty_diff2 = crate::core::types::LineDiff::new(vec![]);
         let delta2 = Delta::new(file_node2.clone(), empty_diff2, SourceType::Manual);
         storage.store_delta(&delta2).unwrap();
         let init2 = Snapshot::new_initial(file_node2, delta2.id);

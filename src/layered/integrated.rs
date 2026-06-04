@@ -284,7 +284,7 @@ mod tests {
     fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {
         let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
         storage.store_file_node(&file_node, content.as_bytes()).unwrap();
-        let empty_diff = crate::core::delta::LineDiff::new(vec![]);
+        let empty_diff = crate::core::types::LineDiff::new(vec![]);
         let delta = Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
         storage.store_delta(&delta).unwrap();
         let snapshot = Snapshot::new_initial(file_node, delta.id);
@@ -346,7 +346,7 @@ mod tests {
                 &snap,
                 Delta::new(
                     FileNode::new(std::path::PathBuf::from("test.txt"), b"base\n"),
-                    crate::core::delta::LineDiff::new(vec![]),
+                    crate::core::types::LineDiff::new(vec![]),
                     SourceType::Manual,
                 )
                 .id,

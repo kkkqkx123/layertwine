@@ -4,7 +4,8 @@
 
 use std::path::PathBuf;
 use similar::{ChangeTag, TextDiff};
-use crate::core::delta::{Delta, LineDiff};
+use crate::core::delta::Delta;
+use crate::core::types::LineDiff;
 use crate::core::file_node::FileNode;
 use crate::core::types::{DiffOp, Hunk, SourceType};
 

@@ -4,7 +4,8 @@
 //! 1. apply_deltas: rebuilds the complete file content from the baseline content + Delta chains
 //! 2. merge_texts: three-way text merge (with conflict detection)
 
-use crate::core::delta::{Delta, LineDiff};
+use crate::core::delta::Delta;
+use crate::core::types::LineDiff;
 #[allow(unused_imports)]
 use crate::core::types::{DiffOp, Hunk};
 use crate::error::{Result, StratumError};
@@ -363,7 +364,7 @@ fn append_change(result: &mut Vec<String>, change: &ChangeRange) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::delta::LineDiff;
+    use crate::core::types::LineDiff;
     use crate::core::file_node::FileNode;
     use crate::core::types::{DiffOp, Hunk, SourceType};
     use std::path::PathBuf;

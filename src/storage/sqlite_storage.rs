@@ -1,12 +1,12 @@
 use crate::checkpoint::branch::Branch;
 use crate::checkpoint::checkpoint::Checkpoint;
 use crate::checkpoint::dag::CheckpointDag;
-use crate::core::delta::{Delta, LineDiff};
+use crate::core::delta::Delta;
 use crate::core::file_node::FileNode;
 use crate::core::layer::Layer;
 use crate::core::partition::Partition;
 use crate::core::snapshot::Snapshot;
-use crate::core::types::{CheckpointId, ContentId, DeltaId, LayerType, PartitionId, PartitionType, SnapshotId};
+use crate::core::types::{CheckpointId, ContentId, DeltaId, LayerType, LineDiff, PartitionId, PartitionType, SnapshotId};
 use crate::storage::migrations;
 use crate::storage::repository::{
     AtomicOps, BranchStore, CheckpointStore, DagStore, DeltaStore, FileNodeStore, LayerStore, PartitionStore,
@@ -960,7 +960,7 @@ impl<T: SnapshotStore + DeltaStore + PartitionStore + FileNodeStore + Checkpoint
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::delta::{Delta, LineDiff};
+    use crate::core::delta::Delta;
     use crate::core::file_node::FileNode;
     use crate::core::partition::Partition;
     use crate::core::snapshot::Snapshot;

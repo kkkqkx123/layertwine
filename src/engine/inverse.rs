@@ -3,7 +3,8 @@
 //! Generates an inverse Delta that can undo a Delta operation.
 //! Refer to Immer's inversePatches design.
 
-use crate::core::delta::{Delta, LineDiff};
+use crate::core::delta::Delta;
+use crate::core::types::LineDiff;
 use crate::core::types::{DiffOp, Hunk};
 use crate::error::{Result, StratumError};
 
@@ -143,7 +144,7 @@ pub fn inverse_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::delta::LineDiff;
+    use crate::core::types::LineDiff;
     use crate::core::file_node::FileNode;
     use crate::core::types::{DiffOp, Hunk, SourceType};
     use crate::engine::diff::diff_to_line_diff;

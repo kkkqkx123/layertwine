@@ -156,6 +156,16 @@ pub struct LineDiff {
     pub hunks: Vec<Hunk>,
 }
 
+impl LineDiff {
+    pub fn new(hunks: Vec<Hunk>) -> Self {
+        LineDiff { hunks }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.hunks.is_empty()
+    }
+}
+
 // Auxiliary functions -
 
 fn hex_encode(bytes: &[u8]) -> String {

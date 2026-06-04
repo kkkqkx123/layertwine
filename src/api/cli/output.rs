@@ -1,5 +1,6 @@
 use crate::api::types::*;
-use crate::core::delta::{Delta, LineDiff};
+use crate::core::delta::Delta;
+use crate::core::types::LineDiff;
 use crate::core::partition::Partition;
 use crate::core::snapshot::Snapshot;
 use crate::core::types::DiffOp;

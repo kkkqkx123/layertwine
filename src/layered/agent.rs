@@ -247,7 +247,7 @@ mod tests {
         let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
         storage.store_file_node(&file_node, content.as_bytes()).unwrap();
 
-        let empty_diff = crate::core::delta::LineDiff::new(vec![]);
+        let empty_diff = crate::core::types::LineDiff::new(vec![]);
         let delta = Delta::new(file_node.clone(), empty_diff, SourceType::Agent("test-agent".into()));
         storage.store_delta(&delta).unwrap();
 
@@ -401,7 +401,7 @@ mod tests {
         // Create a second initial file node for a different file
         let file_node2 = FileNode::new(std::path::PathBuf::from("other.txt"), b"content2\n");
         storage.store_file_node(&file_node2, b"content2\n").unwrap();
-        let empty_diff2 = crate::core::delta::LineDiff::new(vec![]);
+        let empty_diff2 = crate::core::types::LineDiff::new(vec![]);
         let delta2 = Delta::new(file_node2.clone(), empty_diff2, SourceType::Agent(agent_id.clone()));
         storage.store_delta(&delta2).unwrap();
         let init2 = Snapshot::new_initial(file_node2, delta2.id);
