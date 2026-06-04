@@ -3,7 +3,8 @@
 //! Self-developed checkpoint repository: Checkpoint commit process, lightweight branch creation/switching/merging, DAG history tracking.
 //! A versioning core independent of Git.
 
-pub mod checkpoint;
+#[allow(clippy::module_inception)]
+pub(crate) mod checkpoint;
 pub mod branch;
 pub mod dag;
 pub mod repo;

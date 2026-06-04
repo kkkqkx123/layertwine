@@ -39,7 +39,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 db_path: Some(cli.db_path.clone()),
                 git_repo: cli.git_repo.clone(),
                 git_ref: git_ref.clone(),
-            }).map(|_| ()).map_err(|e| e)
+            }).map(|_| ())
         }
         Commands::Status => {
             let service = match open_service(&cli) {
@@ -75,7 +75,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                     println!("Merged to staged -> snapshot {}", &staged[..12]);
                 }
             }
-            resp.map(|_| ()).map_err(|e| e)
+            resp.map(|_| ())
         }
         Commands::Agent { agent_id, action } => {
             let service = match open_service(&cli) {
@@ -106,7 +106,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                             &r.snapshot_id[..12]
                         );
                     }
-                    resp.map(|_| ()).map_err(|e| e)
+                    resp.map(|_| ())
                 }
                 AgentCommands::Submit => {
                     let resp = service.agent_submit(AgentSubmitRequest {
@@ -119,7 +119,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                             &r.snapshot_id[..12]
                         );
                     }
-                    resp.map(|_| ()).map_err(|e| e)
+                    resp.map(|_| ())
                 }
             }
         }
@@ -142,7 +142,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                     &r.staged_snapshot_id[..12]
                 );
             }
-            resp.map(|_| ()).map_err(|e| e)
+            resp.map(|_| ())
         }
         Commands::Commit { message, author } => {
             let service = match open_service(&cli) {
@@ -160,7 +160,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                     r.message
                 );
             }
-            resp.map(|_| ()).map_err(|e| e)
+            resp.map(|_| ())
         }
         Commands::Log { count } => {
             let service = match open_service(&cli) {
@@ -171,7 +171,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
             if let Ok(ref r) = resp {
                 print_log_from_response(r, format);
             }
-            resp.map(|_| ()).map_err(|e| e)
+            resp.map(|_| ())
         }
         Commands::Branch { action } => {
             let service = match open_service(&cli) {
@@ -184,14 +184,14 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                     if let Ok(ref r) = resp {
                         print_branches_from_response(r, format);
                     }
-                    resp.map(|_| ()).map_err(|e| e)
+                    resp.map(|_| ())
                 }
                 BranchCommands::Create { name } => {
                     let resp = service.branch_create(BranchCreateRequest { name: name.clone() });
                     if let Ok(ref r) = resp {
                         println!("Created branch '{}' at {}", r.name, &r.head[..12]);
                     }
-                    resp.map(|_| ()).map_err(|e| e)
+                    resp.map(|_| ())
                 }
                 BranchCommands::Switch { name } => {
                     let resp = service.branch_switch(BranchSwitchRequest { name: name.clone() });
@@ -202,7 +202,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                             &r.checkpoint_id[..12]
                         );
                     }
-                    resp.map(|_| ()).map_err(|e| e)
+                    resp.map(|_| ())
                 }
             }
         }
@@ -223,7 +223,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                     &r.checkpoint_id[..12]
                 );
             }
-            resp.map(|_| ()).map_err(|e| e)
+            resp.map(|_| ())
         }
         Commands::Backup { snapshot_id, label } => {
             let service = match open_service(&cli) {
@@ -250,7 +250,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                     );
                 }
             }
-            resp.map(|_| ()).map_err(|e| e)
+            resp.map(|_| ())
         }
         Commands::Restore { backup_id } => {
             let service = match open_service(&cli) {
@@ -267,7 +267,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                     r.file
                 );
             }
-            resp.map(|_| ()).map_err(|e| e)
+            resp.map(|_| ())
         }
         Commands::Gc => {
             let service = match open_service(&cli) {
@@ -287,7 +287,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                     println!("  Note: delta chain depth exceeded threshold");
                 }
             }
-            resp.map(|_| ()).map_err(|e| e)
+            resp.map(|_| ())
         }
         Commands::Push { remote, message } => {
             let git_repo = match &cli.git_repo {
@@ -312,7 +312,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 eprintln!("done");
                 println!("Pushed to remote '{}' (commit: {})", r.remote, r.git_commit_hash);
             }
-            resp.map(|_| ()).map_err(|e| e)
+            resp.map(|_| ())
         }
         Commands::Show { show_what, target_id } => {
             let service = match open_service(&cli) {
@@ -326,7 +326,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
             if let Ok(ref r) = resp {
                 print_show_from_response(r, format);
             }
-            resp.map(|_| ()).map_err(|e| e)
+            resp.map(|_| ())
         }
         Commands::Pull { remote, git_ref } => {
             let git_repo = match &cli.git_repo {
@@ -351,7 +351,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 eprintln!("done");
                 println!("Pulled from remote '{}' ref '{}'", r.remote, r.git_ref);
             }
-            resp.map(|_| ()).map_err(|e| e)
+            resp.map(|_| ())
         }
     };
 

@@ -72,11 +72,11 @@ impl BackupRepo {
     {
         let snapshot = core_repo
             .get_snapshot(&snapshot_id)
-            .map_err(|e| StratumError::Storage(e))?;
+            .map_err(StratumError::Storage)?;
 
         let deltas: Vec<Delta> = core_repo
             .get_deltas(&snapshot.deltas)
-            .map_err(|e| StratumError::Storage(e))?;
+            .map_err(StratumError::Storage)?;
 
         let backup = BackupSnapshot::new(snapshot_id, snapshot.file, deltas, label);
         self.store_backup(&backup)?;

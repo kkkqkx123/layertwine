@@ -35,7 +35,7 @@ pub fn ensure_staged_partition<S: PartitionStore>(
             };
             storage
                 .create_partition(&partition)
-                .map_err(|e| StratumError::Storage(e.into()))?;
+                .map_err(StratumError::Storage)?;
             Ok(partition)
         }
     }
@@ -62,10 +62,10 @@ where
 
     let approval_snapshot = storage
         .get_snapshot(&approval_partition.current_snapshot)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
     let staged_snapshot = storage
         .get_snapshot(&staged_partition.current_snapshot)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     let approval_text =
         crate::layered::transition::reconstruct_text(storage, &approval_snapshot)?;
@@ -84,7 +84,7 @@ where
     );
     storage
         .store_delta(&merge_delta)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     let new_snapshot = Snapshot::merge(
         vec![&staged_snapshot, &approval_snapshot],
@@ -93,11 +93,11 @@ where
     );
     storage
         .store_snapshot(&new_snapshot, b"")
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     storage
         .update_pointer(&staged_pid, &new_snapshot.id)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     Ok(new_snapshot.id)
 }
@@ -124,10 +124,10 @@ where
 
     let unified_snapshot = storage
         .get_snapshot(&unified_partition.current_snapshot)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
     let staged_snapshot = storage
         .get_snapshot(&staged_partition.current_snapshot)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     let unified_text =
         crate::layered::transition::reconstruct_text(storage, &unified_snapshot)?;
@@ -146,7 +146,7 @@ where
     );
     storage
         .store_delta(&merge_delta)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     let new_snapshot = Snapshot::merge(
         vec![&staged_snapshot, &unified_snapshot],
@@ -155,11 +155,11 @@ where
     );
     storage
         .store_snapshot(&new_snapshot, b"")
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     storage
         .update_pointer(&staged_pid, &new_snapshot.id)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     Ok(new_snapshot.id)
 }
@@ -195,7 +195,7 @@ where
         Err(_) => {
             // First commit: create initial branch pointing to the staged snapshot
             let branch = crate::checkpoint::branch::Branch::new(branch_name, current_snapshot_id);
-            storage.store_branch(&branch).map_err(|e| StratumError::Storage(e.into()))?;
+            storage.store_branch(&branch).map_err(StratumError::Storage)?;
             current_snapshot_id
         }
     };
@@ -212,22 +212,22 @@ where
     // 4. Store checkpoint
     storage
         .store_checkpoint(&cp)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     // 5. Update DAG (load, add edge, store)
     let mut dag = storage
         .load_dag()
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
     dag.add_node(cp_id);
     dag.add_edge(branch_head, cp_id);
     storage
         .store_dag(&dag)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     // 6. Update branch head
     storage
         .update_branch_head(branch_name, &cp_id)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     Ok(cp_id)
 }
@@ -240,7 +240,7 @@ pub fn reset_staged<S: PartitionStore>(
     let pid = staged_partition_id();
     storage
         .update_pointer(&pid, &base_snapshot_id)
-        .map_err(|e| StratumError::Storage(e.into()))
+        .map_err(StratumError::Storage)
 }
 
 #[cfg(test)]

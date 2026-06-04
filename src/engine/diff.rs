@@ -94,6 +94,7 @@ pub fn diff_to_line_diff(old: &str, new: &str) -> LineDiff {
 /// Gather all changes from diff and build the complete Delta
 ///
 /// Use iter_all_changes() to iterate over all row changes and construct a Delta containing the full content mapping.
+#[allow(dead_code)]
 fn collect_changes_from_diff<'a>(
     diff: &'a TextDiff<'a, 'a, str>,
     path: PathBuf,
@@ -114,8 +115,8 @@ fn collect_changes_from_diff<'a>(
                 if in_change {
                     // End the previous change block
                     if !current_ops.is_empty() {
-                        let old_start = old_pos.saturating_sub(1).max(0) as u32;
-                        let new_start = new_pos.saturating_sub(1).max(0) as u32;
+                        let old_start = old_pos.saturating_sub(1) as u32;
+                        let new_start = new_pos.saturating_sub(1) as u32;
                         hunks.push(Hunk {
                             old_start,
                             old_len: 0, // Will be amended below
@@ -151,8 +152,8 @@ fn collect_changes_from_diff<'a>(
 
     // Last paragraph change
     if !current_ops.is_empty() {
-        let old_start = old_pos.saturating_sub(1).max(0) as u32;
-        let new_start = new_pos.saturating_sub(1).max(0) as u32;
+        let old_start = old_pos.saturating_sub(1) as u32;
+        let new_start = new_pos.saturating_sub(1) as u32;
         hunks.push(Hunk {
             old_start,
             old_len: 0,

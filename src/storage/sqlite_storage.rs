@@ -610,7 +610,7 @@ impl CheckpointStore for SqliteStorage {
             let created_at: i64 = row.get(6)?;
 
             Ok(Checkpoint {
-                id: ContentId(id_arr).into(),
+                id: ContentId(id_arr),
                 parents,
                 baseline_snapshots,
                 metadata: crate::checkpoint::checkpoint::CheckpointMetadata {
@@ -638,7 +638,7 @@ impl CheckpointStore for SqliteStorage {
             .prepare("SELECT id FROM checkpoints ORDER BY created_at DESC")?;
         let ids: Vec<Vec<u8>> = stmt
             .query_map([], |row| row.get(0))
-            .map_err(|e| crate::StorageError::Database(e))?
+            .map_err(crate::StorageError::Database)?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -648,7 +648,7 @@ impl CheckpointStore for SqliteStorage {
         for id_bytes in ids {
             let mut id_arr = [0u8; 32];
             id_arr.copy_from_slice(&id_bytes);
-            let id = ContentId(id_arr).into();
+            let id = ContentId(id_arr);
             result.push(self.get_checkpoint(&id)?);
         }
         Ok(result)
@@ -702,7 +702,7 @@ impl BranchStore for SqliteStorage {
 
             Ok(Branch {
                 name,
-                head: ContentId(head_arr).into(),
+                head: ContentId(head_arr),
                 created_at,
                 updated_at,
             })
@@ -737,12 +737,12 @@ impl BranchStore for SqliteStorage {
 
                 Ok(Branch {
                     name,
-                    head: ContentId(head_arr).into(),
+                    head: ContentId(head_arr),
                     created_at,
                     updated_at,
                 })
             })
-            .map_err(|e| crate::StorageError::Database(e))?
+            .map_err(crate::StorageError::Database)?
             .filter_map(|r| r.ok())
             .collect();
 

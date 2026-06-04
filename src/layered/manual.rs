@@ -34,7 +34,7 @@ pub fn ensure_manual_partition<S: PartitionStore>(storage: &S, initial_snapshot_
             };
             storage
                 .create_partition(&partition)
-                .map_err(|e| StratumError::Storage(e.into()))?;
+                .map_err(StratumError::Storage)?;
             Ok(partition)
         }
     }
@@ -62,17 +62,17 @@ where
 
     let current_snapshot = storage
         .get_snapshot(&partition.current_snapshot)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     // Read old content
     let old_content = {
         let deltas = storage
             .get_deltas(&current_snapshot.deltas)
-            .map_err(|e| StratumError::Storage(e.into()))?;
+            .map_err(StratumError::Storage)?;
         let content_str = String::from_utf8_lossy(
             &storage
                 .get_file_content(current_snapshot.file.path_str(), &current_snapshot.file.base_hash)
-                .map_err(|e| StratumError::Storage(e.into()))?,
+                .map_err(StratumError::Storage)?,
         )
         .to_string();
         apply_deltas(&content_str, &deltas)
@@ -90,10 +90,10 @@ where
     let delta = Delta::new(file_node.clone(), line_diff, SourceType::Manual);
     storage
         .store_file_node(&file_node, old_content.as_bytes())
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
     storage
         .store_delta(&delta)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
     // Creating a New Snapshot
     let new_snapshot = Snapshot::from_parent(
         &current_snapshot,
@@ -102,12 +102,12 @@ where
     );
     storage
         .store_snapshot(&new_snapshot, b"")
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     // Updating the partition pointer
     storage
         .update_pointer(&pid, &new_snapshot.id)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     Ok(new_snapshot.id)
 }
@@ -134,10 +134,10 @@ where
 
     let manual_snapshot = storage
         .get_snapshot(&manual_partition.current_snapshot)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
     let staged_snapshot = storage
         .get_snapshot(&staged_partition.current_snapshot)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     // Reconstructing text content
     let manual_text = crate::layered::transition::reconstruct_text(storage, &manual_snapshot)?;
@@ -157,7 +157,7 @@ where
     );
     storage
         .store_delta(&merge_delta)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     // Create merge snapshot (dual parent)
     let new_snapshot = Snapshot::merge(
@@ -167,12 +167,12 @@ where
     );
     storage
         .store_snapshot(&new_snapshot, b"")
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     // Update staged pointer
     storage
         .update_pointer(&staged_pid, &new_snapshot.id)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     Ok(new_snapshot.id)
 }

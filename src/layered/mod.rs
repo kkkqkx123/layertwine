@@ -56,14 +56,14 @@ where
     pub fn get_partition(&self, _layer: &LayerType, partition_id: &PartitionId) -> Result<Partition> {
         self.storage
             .get_partition(partition_id)
-            .map_err(|e| StratumError::Storage(e.into()))
+            .map_err(StratumError::Storage)
     }
 
     /// Get the specified partition of the specified layer (variable)
     pub fn get_partition_mut(&self, _layer: &LayerType, partition_id: &PartitionId) -> Result<Partition> {
         self.storage
             .get_partition(partition_id)
-            .map_err(|e| StratumError::Storage(e.into()))
+            .map_err(StratumError::Storage)
     }
 
     /// Getting or creating partitions
@@ -80,7 +80,7 @@ where
             Err(_) => {
                 self.storage
                     .create_partition(partition)
-                    .map_err(|e| StratumError::Storage(e.into()))?;
+                    .map_err(StratumError::Storage)?;
                 Ok(partition.clone())
             }
         }
@@ -94,7 +94,7 @@ where
     ) -> Result<()> {
         self.storage
             .update_pointer(partition_id, snapshot_id)
-            .map_err(|e| StratumError::Storage(e.into()))
+            .map_err(StratumError::Storage)
     }
 
     // Layer management -
@@ -113,11 +113,11 @@ where
         let branch = self
             .storage
             .get_branch(branch_name)
-            .map_err(|e| StratumError::Storage(e.into()))?;
+            .map_err(StratumError::Storage)?;
         let head_cp = self
             .storage
             .get_checkpoint(&branch.head)
-            .map_err(|e| StratumError::Storage(e.into()))?;
+            .map_err(StratumError::Storage)?;
         if head_cp.baseline_snapshots.is_empty() {
              return Err(StratumError::Checkpoint(
                  "branch head checkpoint has no snapshots".into(),
@@ -131,7 +131,7 @@ where
              Ok(_) => {
                  self.storage
                      .update_pointer(&staged_pid, &base_snapshot)
-                     .map_err(|e| StratumError::Storage(e.into()))?;
+                     .map_err(StratumError::Storage)?;
              }
              Err(_) => {
                  let partition = Partition::new(
@@ -141,7 +141,7 @@ where
                  );
                  self.storage
                      .create_partition(&partition)
-                     .map_err(|e| StratumError::Storage(e.into()))?;
+                     .map_err(StratumError::Storage)?;
              }
          }
 
@@ -156,7 +156,7 @@ where
         let partitions = self
             .storage
             .list_partitions()
-            .map_err(|e| StratumError::Storage(e.into()))?;
+            .map_err(StratumError::Storage)?;
 
         let mut layer_map: HashMap<LayerType, Vec<PartitionId>> = HashMap::new();
         for p in &partitions {
@@ -169,7 +169,7 @@ where
             layer.partitions = pids.clone();
             self.storage
                 .store_layer(&layer)
-                .map_err(|e| StratumError::Storage(e.into()))?;
+                .map_err(StratumError::Storage)?;
         }
 
         Ok(())

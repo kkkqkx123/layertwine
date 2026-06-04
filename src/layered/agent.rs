@@ -46,7 +46,7 @@ pub fn ensure_agent_partition<S: PartitionStore>(
             };
             storage
                 .create_partition(&partition)
-                .map_err(|e| StratumError::Storage(e.into()))?;
+                .map_err(StratumError::Storage)?;
             Ok(partition)
         }
     }
@@ -74,17 +74,17 @@ where
 
     let current_snapshot = storage
         .get_snapshot(&partition.current_snapshot)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     // Read old content
     let old_content = {
         let deltas = storage
             .get_deltas(&current_snapshot.deltas)
-            .map_err(|e| StratumError::Storage(e.into()))?;
+            .map_err(StratumError::Storage)?;
         let content_str = String::from_utf8_lossy(
             &storage
                 .get_file_content(current_snapshot.file.path_str(), &current_snapshot.file.base_hash)
-                .map_err(|e| StratumError::Storage(e.into()))?,
+                .map_err(StratumError::Storage)?,
         )
         .to_string();
         apply_deltas(&content_str, &deltas)
@@ -106,10 +106,10 @@ where
     );
     storage
         .store_file_node(&file_node, old_content.as_bytes())
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
     storage
         .store_delta(&delta)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     // Creating a New Snapshot
     let new_snapshot = Snapshot::from_parent(
@@ -119,12 +119,12 @@ where
     );
     storage
         .store_snapshot(&new_snapshot, b"")
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     // Updating the partition pointer
     storage
         .update_pointer(&pid, &new_snapshot.id)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     Ok(new_snapshot.id)
 }
@@ -156,10 +156,10 @@ where
 
     let agent_snapshot = storage
         .get_snapshot(&agent_partition.current_snapshot)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
     let approval_snapshot = storage
         .get_snapshot(&approval_partition.current_snapshot)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     // Reconstructed text
     let agent_text =
@@ -180,7 +180,7 @@ where
     );
     storage
         .store_delta(&merge_delta)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     // Create a merge snapshot
     let new_snapshot = Snapshot::merge(
@@ -190,11 +190,11 @@ where
     );
     storage
         .store_snapshot(&new_snapshot, b"")
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     storage
         .update_pointer(&approval_pid, &new_snapshot.id)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     Ok(new_snapshot.id)
 }
@@ -214,13 +214,13 @@ where
 
     let current_snapshot = storage
         .get_snapshot(&partition.current_snapshot)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     // If a parent snapshot exists, fallback to the parent snapshot
     if let Some(&parent_id) = current_snapshot.parents.first() {
         storage
             .update_pointer(&pid, &parent_id)
-            .map_err(|e| StratumError::Storage(e.into()))?;
+            .map_err(StratumError::Storage)?;
         Ok(())
     } else {
         Err(StratumError::StateMachine(

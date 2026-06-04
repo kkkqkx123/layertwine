@@ -21,7 +21,7 @@ pub fn print_status_from_response(resp: &Result<StatusResponse, crate::api::type
                     return;
                 }
                 println!("{:-<72}", "");
-                println!("{:<16} {:<24} {:<20} {}", "Layer", "Partition", "Current Snapshot", "History");
+                println!("{:<16} {:<24} {:<20} History", "Layer", "Partition", "Current Snapshot");
                 println!("{:-<72}", "");
                 for entry in &r.partitions {
                     let short_hash = if entry.current_snapshot.len() > 12 {
@@ -98,7 +98,7 @@ pub fn print_branches_from_response(resp: &BranchListResponse, format: OutputFor
                 return;
             }
             println!("{:-<60}", "");
-            println!("{:<24} {:<20} {}", "Branch", "Head", "Updated");
+            println!("{:<24} {:<20} Updated", "Branch", "Head");
             println!("{:-<60}", "");
             for b in &resp.branches {
                 let marker = if b.is_current { "* " } else { "  " };
@@ -182,12 +182,12 @@ fn print_line_diff(diff: &LineDiff) {
             match op {
                 DiffOp::Equal { count } => {
                     for _ in 0..*count {
-                        println!(" {}", " ");
+                        println!("  ");
                     }
                 }
                 DiffOp::Delete { count, .. } => {
                     for _ in 0..*count {
-                        println!("-{}", " ");
+                        println!("- ");
                     }
                 }
                 DiffOp::Insert { lines, .. } => {
@@ -197,7 +197,7 @@ fn print_line_diff(diff: &LineDiff) {
                 }
                 DiffOp::Replace { old_count, lines, .. } => {
                     for _ in 0..*old_count {
-                        println!("-{}", " ");
+                        println!("- ");
                     }
                     for line in lines {
                         println!("+{}", line);

@@ -41,7 +41,7 @@ pub fn ensure_approval_agent_partition<S: PartitionStore>(
             };
             storage
                 .create_partition(&partition)
-                .map_err(|e| StratumError::Storage(e.into()))?;
+                .map_err(StratumError::Storage)?;
             Ok(partition)
         }
     }

@@ -149,11 +149,11 @@ impl GitBridge {
         for snapshot_id in &checkpoint.baseline_snapshots {
             let snapshot = storage
                 .get_snapshot(snapshot_id)
-                .map_err(|e| StratumError::Storage(e))?;
+                .map_err(StratumError::Storage)?;
 
             let content = storage
                 .get_file_content(snapshot.file.path_str(), &snapshot.file.base_hash)
-                .map_err(|e| StratumError::Storage(e))?;
+                .map_err(StratumError::Storage)?;
 
             let file_path_in_repo = workdir.join(&snapshot.file.file_path);
             if let Some(parent) = file_path_in_repo.parent() {
@@ -260,16 +260,16 @@ impl GitBridge {
                     SyncStatus::InSync
                 } else if ahead > 0 && behind > 0 {
                     SyncStatus::Divergent {
-                        unpushed_checkpoints: behind as usize,
-                        unpulled_commits: ahead as usize,
+                        unpushed_checkpoints: behind,
+                        unpulled_commits: ahead,
                     }
                 } else if ahead > 0 {
                     SyncStatus::Behind {
-                        unpulled_commits: ahead as usize,
+                        unpulled_commits: ahead,
                     }
                 } else {
                     SyncStatus::Ahead {
-                        unpushed_checkpoints: behind as usize,
+                        unpushed_checkpoints: behind,
                     }
                 }
             }
@@ -404,20 +404,20 @@ where
 
                     storage
                         .store_file_node(&file_node, &content)
-                        .map_err(|e| StratumError::Storage(e))?;
+                        .map_err(StratumError::Storage)?;
 
                     let diff = LineDiff::new(vec![]);
                     let delta = Delta::new(file_node.clone(), diff, SourceType::Backup);
 
                     storage
                         .store_delta(&delta)
-                        .map_err(|e| StratumError::Storage(e))?;
+                        .map_err(StratumError::Storage)?;
 
                     let snapshot = Snapshot::new_initial(file_node, delta.id);
 
                     storage
                         .store_snapshot(&snapshot, &content)
-                        .map_err(|e| StratumError::Storage(e))?;
+                        .map_err(StratumError::Storage)?;
 
                     snapshots.push(snapshot);
                 }

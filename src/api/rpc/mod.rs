@@ -29,11 +29,11 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use tonic::{transport::Server, Request, Response, Status};
 
 use crate::api::service::ApiService;
 
 /// gRPC service implementation wrapping ApiService
+#[allow(dead_code)]
 pub struct StratumGrpc {
     service: Arc<dyn ApiService>,
 }

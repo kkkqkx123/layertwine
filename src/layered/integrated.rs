@@ -51,7 +51,7 @@ pub fn ensure_integrated_partition<S: PartitionStore>(
             };
             storage
                 .create_partition(&partition)
-                .map_err(|e| StratumError::Storage(e.into()))?;
+                .map_err(StratumError::Storage)?;
             Ok(partition)
         }
     }
@@ -75,7 +75,7 @@ pub fn ensure_unified_partition<S: PartitionStore>(
             };
             storage
                 .create_partition(&partition)
-                .map_err(|e| StratumError::Storage(e.into()))?;
+                .map_err(StratumError::Storage)?;
             Ok(partition)
         }
     }
@@ -100,7 +100,7 @@ where
         .map_err(|_| StratumError::NotFound(format!("approval agent partition {} not found", agent_id)))?;
     let approval_snapshot = storage
         .get_snapshot(&approval_partition.current_snapshot)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     let integrated_partition = ensure_integrated_partition(
         storage,
@@ -114,7 +114,7 @@ where
 
     let integrated_snapshot = storage
         .get_snapshot(&integrated_partition.current_snapshot)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     let approval_text =
         crate::layered::transition::reconstruct_text(storage, &approval_snapshot)?;
@@ -133,7 +133,7 @@ where
     );
     storage
         .store_delta(&merge_delta)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     let new_snapshot = Snapshot::merge(
         vec![&integrated_snapshot, &approval_snapshot],
@@ -142,11 +142,11 @@ where
     );
     storage
         .store_snapshot(&new_snapshot, b"")
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     storage
         .update_pointer(&integrated_pid, &new_snapshot.id)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     Ok(new_snapshot.id)
 }
@@ -178,7 +178,7 @@ where
     let unified_partition = ensure_unified_partition(storage, initial_snapshot)?;
     let unified_snapshot = storage
         .get_snapshot(&unified_partition.current_snapshot)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     let unified_text =
         crate::layered::transition::reconstruct_text(storage, &unified_snapshot)?;
@@ -192,7 +192,7 @@ where
             .map_err(|_| StratumError::NotFound(format!("integrated partition {} not found", name)))?;
         let snap = storage
             .get_snapshot(&part.current_snapshot)
-            .map_err(|e| StratumError::Storage(e.into()))?;
+            .map_err(StratumError::Storage)?;
         let text = crate::layered::transition::reconstruct_text(storage, &snap)?;
 
         let diff = diff_to_line_diff(&merged_text, &text);
@@ -204,7 +204,7 @@ where
             );
             storage
                 .store_delta(&delta)
-                .map_err(|e| StratumError::Storage(e.into()))?;
+                .map_err(StratumError::Storage)?;
             merged_text = crate::engine::merge::apply_deltas(&merged_text, &[delta])
                 .map_err(|e| StratumError::Engine(e.to_string()))?;
         }
@@ -231,7 +231,7 @@ where
     );
     storage
         .store_delta(&merge_delta)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     let new_snapshot = Snapshot::merge(
         all_parents,
@@ -240,11 +240,11 @@ where
     );
     storage
         .store_snapshot(&new_snapshot, b"")
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     storage
         .update_pointer(&unified_pid, &new_snapshot.id)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     Ok(new_snapshot.id)
 }
@@ -261,7 +261,7 @@ pub fn migrate_between_partitions<S: PartitionStore>(
 
     storage
         .update_pointer(to_partition_id, &from_partition.current_snapshot)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     Ok(())
 }

@@ -46,12 +46,12 @@ pub enum RollbackTransition {
 ///
 /// Iron rule 1: No cross-layer flows - all flows must pass through neighboring layers
 pub fn check_forward_valid(from: &LayerType, to: &LayerType) -> Result<()> {
-    let valid = match (from, to) {
-        (LayerType::ManualEdit, LayerType::Staged) => true,
-        (LayerType::AgentEdit, LayerType::Approval) => true,
-        (LayerType::Approval, LayerType::Staged) => true,
-        _ => false,
-    };
+    let valid = matches!(
+        (from, to),
+        (LayerType::ManualEdit, LayerType::Staged)
+            | (LayerType::AgentEdit, LayerType::Approval)
+            | (LayerType::Approval, LayerType::Staged)
+    );
 
     if !valid {
         return Err(StratumError::StateMachine(format!(
@@ -66,13 +66,13 @@ pub fn check_forward_valid(from: &LayerType, to: &LayerType) -> Result<()> {
 ///
 /// Ironclad Rule #2: No Reverse Writes - Fallback Only Toggles Pointer
 pub fn check_rollback_valid(from: &LayerType, to: &LayerType) -> Result<()> {
-    let valid = match (from, to) {
-        (LayerType::Staged, LayerType::ManualEdit) => true,
-        (LayerType::Staged, LayerType::AgentEdit) => true,
-        (LayerType::Staged, LayerType::Approval) => true,
-        (LayerType::Approval, LayerType::AgentEdit) => true,
-        _ => false,
-    };
+    let valid = matches!(
+        (from, to),
+        (LayerType::Staged, LayerType::ManualEdit)
+            | (LayerType::Staged, LayerType::AgentEdit)
+            | (LayerType::Staged, LayerType::Approval)
+            | (LayerType::Approval, LayerType::AgentEdit)
+    );
 
     if !valid {
         return Err(StratumError::StateMachine(format!(
@@ -171,7 +171,7 @@ pub fn rollback_partition<S: PartitionStore>(
     let prev_id = partition.history[partition.history.len() - 2];
     storage
         .update_pointer(partition_id, &prev_id)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     Ok(prev_id)
 }
@@ -194,7 +194,7 @@ where
 
     let staged_snapshot = storage
         .get_snapshot(&staged_partition.current_snapshot)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     // Find the source of the target layer from staged parents
     let target_partition_type = match target_layer {
@@ -206,12 +206,12 @@ where
 
     for parent_id in &staged_snapshot.parents {
         let parent_snapshot = storage.get_snapshot(parent_id)
-            .map_err(|e| StratumError::Storage(e.into()))?;
+            .map_err(StratumError::Storage)?;
         if parent_snapshot.partition_type.contains(target_partition_type) {
             // Switch the staged pointer to this parent
             storage
                 .update_pointer(&staged_pid, parent_id)
-                .map_err(|e| StratumError::Storage(e.into()))?;
+                .map_err(StratumError::Storage)?;
             return Ok(*parent_id);
         }
     }
@@ -250,12 +250,12 @@ where
 {
     let file_content = storage
         .get_file_content(snapshot.file.path_str(), &snapshot.file.base_hash)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
     let content_str = String::from_utf8_lossy(&file_content).to_string();
 
     let deltas = storage
         .get_deltas(&snapshot.deltas)
-        .map_err(|e| StratumError::Storage(e.into()))?;
+        .map_err(StratumError::Storage)?;
 
     apply_deltas(&content_str, &deltas)
         .map_err(|e| StratumError::Engine(e.to_string()))
@@ -270,7 +270,7 @@ pub fn has_parent_of_type<S: SnapshotStore>(
     for parent_id in &snapshot.parents {
         let parent = storage
             .get_snapshot(parent_id)
-            .map_err(|e| StratumError::Storage(e.into()))?;
+            .map_err(StratumError::Storage)?;
         if parent.partition_type.contains(partition_type_prefix) {
             return Ok(true);
         }

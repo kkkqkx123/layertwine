@@ -71,7 +71,7 @@ fn open_storage(db_path: &str) -> StratumResult<Arc<SqliteStorage>> {
             .map_err(|e| StratumError::General(format!("failed to create db directory: {}", e)))?;
     }
     let storage = SqliteStorage::new_full(path)
-        .map_err(|e| StratumError::Storage(e))?;
+        .map_err(StratumError::Storage)?;
     Ok(Arc::new(storage))
 }
 
@@ -577,7 +577,7 @@ impl ApiService for ApiServiceImpl {
             self.storage.as_ref(),
             snapshot_id,
             req.label.clone(),
-        ).map_err(|e| map_error(e))?;
+        ).map_err(map_error)?;
 
         Ok(BackupResponse {
             backup_id: backup_id.to_hex(),
@@ -596,7 +596,7 @@ impl ApiService for ApiServiceImpl {
             .map_err(|e| map_error(StratumError::Storage(e)))?;
 
         let backup = backup_repo.get_backup(&backup_id)
-            .map_err(|e| map_error(e))?;
+            .map_err(map_error)?;
 
         let delta_count = backup.deltas.len();
         for delta in &backup.deltas {
