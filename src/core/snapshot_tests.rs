@@ -72,8 +72,9 @@ fn test_snapshot_merge() {
     let merge_delta = DeltaId::from_content(b"merge delta");
     let merged = Snapshot::merge(vec![&parent1, &parent2], merge_delta, "merge".to_string(), false);
 
-    assert_eq!(merged.deltas.len(), 1);
-    assert_eq!(merged.deltas[0], merge_delta);
+    assert_eq!(merged.deltas.len(), 2);
+    assert_eq!(merged.deltas[0], delta_id1);
+    assert_eq!(merged.deltas[1], merge_delta);
     assert_eq!(merged.parents.len(), 2);
     assert!(merged.parents.contains(&parent1.id));
     assert!(merged.parents.contains(&parent2.id));

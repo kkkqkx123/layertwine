@@ -67,7 +67,8 @@ impl Snapshot {
         has_conflicts: bool,
     ) -> Self {
         let file = parents[0].file.clone();
-        let deltas = vec![delta_id];
+        let mut deltas = parents[0].deltas.clone();
+        deltas.push(delta_id);
 
         let snapshot = Snapshot {
             id: ContentId([0u8; 32]),

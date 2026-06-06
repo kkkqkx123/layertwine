@@ -134,7 +134,6 @@ where
     storage
         .store_snapshot(&new_snapshot, b"")
         .map_err(StratumError::Storage)?;
-
     storage
         .update_pointer(&unified_pid, &new_snapshot.id)
         .map_err(StratumError::Storage)?;
