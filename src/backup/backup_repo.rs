@@ -421,7 +421,7 @@ mod tests {
 
     fn create_staged_partition(store: &SqliteStorage, snapshot_id: SnapshotId) {
         let partition = crate::core::partition::Partition {
-            id: uuid::Uuid::new_v4(),
+            id: uuid::Uuid::now_v7(),
             name: "staged".to_string(),
             current_snapshot: snapshot_id,
             history: vec![snapshot_id],

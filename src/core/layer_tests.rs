@@ -11,8 +11,8 @@ fn test_layer_new() {
 #[test]
 fn test_layer_add_partition() {
     let mut layer = Layer::new(LayerType::AgentEdit);
-    let id1 = PartitionId::new_v4();
-    let id2 = PartitionId::new_v4();
+    let id1 = PartitionId::now_v7();
+    let id2 = PartitionId::now_v7();
 
     layer.add_partition(id1);
     assert_eq!(layer.partitions.len(), 1);
@@ -29,8 +29,8 @@ fn test_layer_add_partition() {
 #[test]
 fn test_layer_remove_partition() {
     let mut layer = Layer::new(LayerType::Approval);
-    let id1 = PartitionId::new_v4();
-    let id2 = PartitionId::new_v4();
+    let id1 = PartitionId::now_v7();
+    let id2 = PartitionId::now_v7();
 
     layer.add_partition(id1);
     layer.add_partition(id2);
@@ -44,7 +44,7 @@ fn test_layer_remove_partition() {
 #[test]
 fn test_layer_has_partition() {
     let mut layer = Layer::new(LayerType::Staged);
-    let id = PartitionId::new_v4();
+    let id = PartitionId::now_v7();
 
     assert!(!layer.has_partition(&id));
 
@@ -55,7 +55,7 @@ fn test_layer_has_partition() {
 #[test]
 fn test_layer_serialization() {
     let mut layer = Layer::new(LayerType::ManualEdit);
-    let id = PartitionId::new_v4();
+    let id = PartitionId::now_v7();
     layer.add_partition(id);
 
     let json = serde_json::to_string(&layer).unwrap();

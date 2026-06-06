@@ -19,7 +19,7 @@ pub struct Partition {
 impl Partition {
     pub fn new(name: String, partition_type: PartitionType, initial_snapshot: SnapshotId) -> Self {
         Partition {
-            id: uuid::Uuid::new_v4(),
+            id: uuid::Uuid::now_v7(),
             name,
             current_snapshot: initial_snapshot,
             history: vec![initial_snapshot],

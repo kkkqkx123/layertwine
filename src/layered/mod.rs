@@ -219,7 +219,7 @@ mod tests {
     fn test_state_machine_new() {
         let storage = Arc::new(setup_storage());
         let sm = StateMachine::new(storage);
-        let result = sm.get_partition(&LayerType::ManualEdit, &uuid::Uuid::new_v4());
+        let result = sm.get_partition(&LayerType::ManualEdit, &uuid::Uuid::now_v7());
         assert!(
             result.is_err(),
             "non-existent partition should return error"
@@ -251,7 +251,7 @@ mod tests {
         let sm = StateMachine::new(storage.clone());
 
         let initial_id = create_initial_snapshot(&storage, "base\n");
-        let pid = uuid::Uuid::new_v4();
+        let pid = uuid::Uuid::now_v7();
         let partition = Partition {
             id: pid,
             name: "test".to_string(),
@@ -301,7 +301,7 @@ mod tests {
         let sm = StateMachine::new(storage.clone());
 
         let initial_id = create_initial_snapshot(&storage, "base\n");
-        let pid = uuid::Uuid::new_v4();
+        let pid = uuid::Uuid::now_v7();
         let partition = Partition {
             id: pid,
             name: "test".to_string(),
@@ -324,7 +324,7 @@ mod tests {
         let sm = StateMachine::new(storage.clone());
 
         let initial_id = create_initial_snapshot(&storage, "base\n");
-        let pid = uuid::Uuid::new_v4();
+        let pid = uuid::Uuid::now_v7();
         let partition = Partition {
             id: pid,
             name: "test".to_string(),
@@ -383,7 +383,7 @@ mod tests {
         let initial_id = create_initial_snapshot(&storage, "base\n");
 
         let result = sm.with_transaction(|storage| {
-            let pid = uuid::Uuid::new_v4();
+            let pid = uuid::Uuid::now_v7();
             let partition = Partition {
                 id: pid,
                 name: "transaction-test".to_string(),

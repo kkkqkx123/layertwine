@@ -36,7 +36,7 @@ src/
 ## Key patterns
 
 - **Content-addressed IDs:** Blake3 hash of `serde_json::to_vec(self)` for Snapshots, Deltas, Checkpoints
-- **Partition IDs:** UUID v4 (not content-addressed)
+- **Partition IDs:** UUID v7 (time-ordered, B-tree friendly)
 - **Storage:** `Repository` trait = `SnapshotStore + DeltaStore + PartitionStore + FileNodeStore`. Implemented by `SqliteStorage` and `StratumStorage` (thin wrapper).
 - **SQLite:** Open in WAL mode with `PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;`. Two init paths: `initialize_database` (P1 tables) and `initialize_full` (+ checkpoint/branch tables).
 - **Immutable entities are INSERT ONLY:** `file_nodes`, `deltas`, `snapshots` — no UPDATE/DELETE. Mutable state lives in `partitions`, `partition_history`, `layers`.
@@ -62,7 +62,7 @@ P1 → P2 → P3 → P4 → P6 → P7
 | similar            | Line-level diff engine (v3.x, current code needs fix for 3.x API) |
 | git2               | libgit2 bindings (stub, P6)                                       |
 | chrono             | Timestamps for Deltas, Snapshots, Partitions                      |
-| uuid v4/v7 + serde | Partition IDs                                                     |
+| uuid v5/v7 + serde | Partition IDs (v7 for new, v5 for deterministic name-based) |
 
 ## Other facts
 
