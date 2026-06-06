@@ -348,6 +348,36 @@ pub struct GcResponse {
     pub delta_chain_depth_triggered: bool,
 }
 
+// ── Compact (file maintenance) ──
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactRequest {
+    /// If true, use full VACUUM instead of incremental (requires exclusive lock).
+    pub vacuum_full: Option<bool>,
+}
+
+impl Default for CompactRequest {
+    fn default() -> Self {
+        CompactRequest { vacuum_full: None }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactResponse {
+    /// Whether WAL checkpoint was performed.
+    pub wal_checkpointed: bool,
+    /// Free pages before compaction.
+    pub freelist_before: i64,
+    /// Total pages in database.
+    pub total_pages: i64,
+    /// Free pages after compaction.
+    pub freelist_after: i64,
+    /// Whether vacuum was actually executed.
+    pub vacuum_performed: bool,
+    /// Summary message.
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushResponse {
     pub remote: String,

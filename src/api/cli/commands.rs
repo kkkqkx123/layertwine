@@ -129,6 +129,14 @@ pub enum Commands {
     #[command(name = "gc")]
     Gc,
 
+    /// Compact the database — truncate WAL and reclaim free pages
+    #[command(name = "compact")]
+    Compact {
+        /// Force full VACUUM instead of incremental (requires exclusive lock)
+        #[arg(long = "vacuum-full")]
+        vacuum_full: bool,
+    },
+
     /// Push checkpoints to Git
     #[command(name = "push")]
     Push {

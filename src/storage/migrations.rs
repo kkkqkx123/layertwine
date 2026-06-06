@@ -103,6 +103,13 @@ CREATE INDEX IF NOT EXISTS idx_checkpoints_created ON checkpoints(created_at DES
 pub fn initialize_database(conn: &rusqlite::Connection) -> Result<(), crate::StorageError> {
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
     conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+    // auto_vacuum=INCREMENTAL: moves freelist pages to end of file for truncation
+    // Must be set before any tables are created on a fresh DB.
+    conn.execute_batch("PRAGMA auto_vacuum = INCREMENTAL;")?;
+    // Limit WAL journal size to 64MB to prevent unbounded -wal file growth
+    conn.execute_batch("PRAGMA journal_size_limit = 67108864;")?;
+    // Checkpoint every 1000 pages (default) — explicit for clarity
+    conn.execute_batch("PRAGMA wal_autocheckpoint = 1000;")?;
     conn.execute_batch(MIGRATION_SQL)?;
     Ok(())
 }

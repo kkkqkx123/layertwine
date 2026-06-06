@@ -20,6 +20,7 @@ use crate::storage::repository::{
     BranchStore, CheckpointPersist, CheckpointStore, DeltaStore, FileNodeStore, PartitionStore,
     SnapshotStore,
 };
+use crate::config::{CompactOptions, StratumConfig};
 use crate::storage::SqliteStorage;
 
 use super::types::*;
@@ -58,6 +59,10 @@ pub trait ApiService: Send + Sync {
     fn backup(&self, req: BackupRequest) -> ApiResult<BackupResponse>;
     fn restore(&self, req: RestoreRequest) -> ApiResult<RestoreResponse>;
     fn gc(&self, _req: GcRequest) -> ApiResult<GcResponse>;
+    /// Compact the database — WAL checkpoint truncation + freelist reclamation.
+    /// Uses the maintenance config from `StratumConfig` by default.
+    /// Pass `vacuum_full: true` in the request to force a full VACUUM.
+    fn compact(&self, req: CompactRequest) -> ApiResult<CompactResponse>;
     fn push(&self, req: PushRequest) -> ApiResult<PushResponse>;
     fn pull(&self, req: PullRequest) -> ApiResult<PullResponse>;
     fn show(&self, req: ShowRequest) -> ApiResult<ShowResponse>;
@@ -142,6 +147,7 @@ pub struct ApiServiceImpl {
     storage: Arc<SqliteStorage>,
     state_machine: StateMachine<SqliteStorage>,
     db_path: String,
+    maintenance_cfg: crate::config::MaintenanceConfig,
 }
 
 impl ApiServiceImpl {
@@ -149,10 +155,19 @@ impl ApiServiceImpl {
     pub fn open(config: ServiceConfig) -> ApiResult<Self> {
         let storage = open_storage(&config.db_path).map_err(map_error)?;
         let state_machine = StateMachine::new(storage.clone());
+
+        // Load config via priority chain:
+        //   defaults → ~/.config/stratum.toml → <binary-dir>/stratum.toml → <db-dir>/stratum.toml
+        let db_dir = Path::new(&config.db_path).parent().unwrap_or(Path::new("."));
+        let strat_cfg = StratumConfig::load_with_priority(db_dir)
+            .unwrap_or_default();
+        let maintenance_cfg = strat_cfg.maintenance;
+
         Ok(ApiServiceImpl {
             storage,
             state_machine,
             db_path: config.db_path,
+            maintenance_cfg,
         })
     }
 
@@ -721,6 +736,25 @@ impl ApiService for ApiServiceImpl {
             removed_snapshots: stats.removed_snapshots as usize,
             freed_bytes: stats.freed_bytes,
             delta_chain_depth_triggered: stats.delta_chain_depth_triggered,
+        })
+    }
+
+    fn compact(&self, req: CompactRequest) -> ApiResult<CompactResponse> {
+        let mut opts = CompactOptions::from(&self.maintenance_cfg);
+        if let Some(vacuum_full) = req.vacuum_full {
+            opts.vacuum_full = vacuum_full;
+        }
+        let report = self
+            .storage
+            .run_maintenance_with(&opts)
+            .map_err(|e| map_error(crate::error::StratumError::Storage(e)))?;
+        Ok(CompactResponse {
+            wal_checkpointed: report.wal_checkpointed,
+            freelist_before: report.freelist_before,
+            total_pages: report.total_pages,
+            freelist_after: report.freelist_after,
+            vacuum_performed: report.vacuum_performed,
+            message: report.message,
         })
     }
 

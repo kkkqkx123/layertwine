@@ -269,6 +269,28 @@ pub fn run_with_cli(cli: Cli) -> i32 {
             }
             resp.map(|_| ())
         }
+        Commands::Compact { vacuum_full } => {
+            let service = match open_service(&cli) {
+                Ok(s) => s,
+                Err(code) => return code,
+            };
+            eprint!("  Compacting database ... ");
+            let _ = std::io::Write::flush(&mut std::io::stderr());
+            let resp = service.compact(CompactRequest {
+                vacuum_full: if *vacuum_full { Some(true) } else { None },
+            });
+            if let Ok(ref r) = resp {
+                eprintln!("done");
+                println!("{}", r.message);
+                if r.vacuum_performed {
+                    println!(
+                        "  Free pages: {} -> {} (total: {})",
+                        r.freelist_before, r.freelist_after, r.total_pages
+                    );
+                }
+            }
+            resp.map(|_| ())
+        }
         Commands::Gc => {
             let service = match open_service(&cli) {
                 Ok(s) => s,

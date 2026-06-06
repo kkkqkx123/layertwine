@@ -1,6 +1,7 @@
 pub mod api;
 pub mod backup;
 pub mod checkpoint;
+pub mod config;
 pub mod core;
 pub mod engine;
 pub mod error;

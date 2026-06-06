@@ -23,6 +23,9 @@ uuid = { version = "1", features = ["std", "v5", "v7", "serde"] }
 similar = "3"
 git2 = "0.21"
 
+# Config
+toml = "0.9"
+
 # CLI transport
 clap = { version = "4", features = ["derive"], optional = true }
 
