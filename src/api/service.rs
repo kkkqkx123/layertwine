@@ -61,6 +61,19 @@ pub trait ApiService: Send + Sync {
     fn push(&self, req: PushRequest) -> ApiResult<PushResponse>;
     fn pull(&self, req: PullRequest) -> ApiResult<PullResponse>;
     fn show(&self, req: ShowRequest) -> ApiResult<ShowResponse>;
+
+    // ── Approval-specific APIs ──
+
+    /// List all pending agent approvals
+    fn list_pending_approvals(&self) -> ApiResult<ListPendingApprovalsResponse>;
+    /// Approve a single agent submission (moves to integrated)
+    fn approve_agent(&self, req: ApproveAgentRequest) -> ApiResult<ApproveAgentResponse>;
+    /// Reject a single agent submission (rolls back to baseline)
+    fn reject_agent(&self, req: RejectAgentRequest) -> ApiResult<RejectAgentResponse>;
+    /// Merge all integrated partitions into unified
+    fn merge_to_unified(&self, req: MergeToUnifiedRequest) -> ApiResult<MergeToUnifiedResponse>;
+    /// Merge unified into staged
+    fn merge_to_staged(&self, req: MergeToStagedRequest) -> ApiResult<MergeToStagedResponse>;
 }
 
 // ── Helpers ──
@@ -517,7 +530,7 @@ impl ApiService for ApiServiceImpl {
             .collect();
 
         if !integration_names.is_empty() {
-            crate::layered::integrated::move_integrated_to_unified(
+            crate::layered::unified::move_integrated_to_unified(
                 self.storage.as_ref(),
                 &integration_names,
             )
@@ -777,5 +790,111 @@ impl ApiService for ApiServiceImpl {
                 other
             ))),
         }
+    }
+
+    // ── Approval-specific API implementations ──
+
+    fn list_pending_approvals(&self) -> ApiResult<ListPendingApprovalsResponse> {
+        let pending =
+            crate::layered::approval::list_pending_approvals(self.storage.as_ref())
+                .map_err(map_error)?;
+        let approvals: Vec<ApprovalInfo> = pending
+            .iter()
+            .map(|p| {
+                let agent_id = match &p.partition_type {
+                    crate::core::types::PartitionType::Approval(id) => id.0.clone(),
+                    _ => String::new(),
+                };
+                ApprovalInfo {
+                    agent_id,
+                    partition_name: p.name.clone(),
+                    current_snapshot: p.current_snapshot.to_hex(),
+                    history_len: p.history.len(),
+                }
+            })
+            .collect();
+        let total = approvals.len();
+        Ok(ListPendingApprovalsResponse { approvals, total })
+    }
+
+    fn approve_agent(&self, req: ApproveAgentRequest) -> ApiResult<ApproveAgentResponse> {
+        let agent_instance = crate::core::types::AgentInstanceId(req.agent_id.clone());
+        let integrated_name = req
+            .integrated_name
+            .clone()
+            .unwrap_or_else(|| req.agent_id.clone());
+
+        let integrated_snapshot_id =
+            crate::layered::integrated::move_approval_to_integrated(
+                self.storage.as_ref(),
+                &agent_instance,
+                &integrated_name,
+            )
+            .map_err(map_error)?;
+
+        Ok(ApproveAgentResponse {
+            agent_id: req.agent_id,
+            integrated_snapshot_id: snapshot_id_to_hex(&integrated_snapshot_id),
+        })
+    }
+
+    fn reject_agent(&self, req: RejectAgentRequest) -> ApiResult<RejectAgentResponse> {
+        let agent_instance = crate::core::types::AgentInstanceId(req.agent_id.clone());
+        let baseline_snapshot_id =
+            crate::layered::approval::reject_approval(self.storage.as_ref(), &agent_instance)
+                .map_err(map_error)?;
+
+        Ok(RejectAgentResponse {
+            agent_id: req.agent_id,
+            baseline_snapshot_id: snapshot_id_to_hex(&baseline_snapshot_id),
+        })
+    }
+
+    fn merge_to_unified(&self, req: MergeToUnifiedRequest) -> ApiResult<MergeToUnifiedResponse> {
+        let names = req.integration_names.unwrap_or_else(|| {
+            // Auto-detect all integrated partition names
+            self.storage
+                .list_partitions()
+                .ok()
+                .map(|partitions| {
+                    partitions
+                        .into_iter()
+                        .filter_map(|p| match p.partition_type {
+                            crate::core::types::PartitionType::Integrated(name) => Some(name),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+
+        if names.is_empty() {
+            return Err(ApiError::invalid_params(
+                "no integrated partitions found to merge",
+            ));
+        }
+
+        let merged_count = names.len();
+        let unified_snapshot_id =
+            crate::layered::unified::move_integrated_to_unified(
+                self.storage.as_ref(),
+                &names,
+            )
+            .map_err(map_error)?;
+
+        Ok(MergeToUnifiedResponse {
+            unified_snapshot_id: snapshot_id_to_hex(&unified_snapshot_id),
+            merged_count,
+        })
+    }
+
+    fn merge_to_staged(&self, _req: MergeToStagedRequest) -> ApiResult<MergeToStagedResponse> {
+        let staged_snapshot_id =
+            crate::layered::staged::merge_unified_to_staged(self.storage.as_ref())
+                .map_err(map_error)?;
+
+        Ok(MergeToStagedResponse {
+            staged_snapshot_id: snapshot_id_to_hex(&staged_snapshot_id),
+        })
     }
 }

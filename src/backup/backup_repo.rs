@@ -377,6 +377,7 @@ impl BackupRepo {
             vec![&staged_snapshot, &source_snapshot],
             merge_delta.id,
             "staged".to_string(),
+            false,
         );
         core_repo.store_snapshot(&merged, &[])?;
         core_repo.update_pointer(&staged_partition.id, &merged.id)?;

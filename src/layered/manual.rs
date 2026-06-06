@@ -157,6 +157,7 @@ where
         vec![&staged_snapshot, &manual_snapshot],
         merge_delta.id,
         PartitionType::Staged.name().to_string(),
+        false,
     );
     storage
         .store_snapshot(&new_snapshot, b"")

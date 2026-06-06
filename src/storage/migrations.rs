@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS snapshots (
     deltas          BLOB NOT NULL,
     parents         BLOB NOT NULL,
     partition_type  TEXT NOT NULL,
-    created_at      INTEGER NOT NULL
+    created_at      INTEGER NOT NULL,
+    has_conflicts   INTEGER NOT NULL DEFAULT 0
 );
 
 -- Partition Table

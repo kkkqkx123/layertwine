@@ -24,6 +24,7 @@ fn row_to_snapshot(row: &Row) -> Result<Snapshot, rusqlite::Error> {
     let parents_json: Vec<u8> = row.get(4)?;
     let partition_type: String = row.get(5)?;
     let created_at: i64 = row.get(6)?;
+    let has_conflicts: bool = row.get::<_, i32>(7)? != 0;
 
     let deltas: Vec<crate::core::types::DeltaId> = serde_json::from_slice(&deltas_json)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
@@ -40,6 +41,7 @@ fn row_to_snapshot(row: &Row) -> Result<Snapshot, rusqlite::Error> {
         parents,
         partition_type,
         created_at,
+        has_conflicts,
     })
 }
 
@@ -55,6 +57,7 @@ fn row_to_snapshot_lenient(row: &Row) -> Snapshot {
     let parents_json: Vec<u8> = row.get(4).unwrap_or_default();
     let partition_type: String = row.get(5).unwrap_or_default();
     let created_at: i64 = row.get(6).unwrap_or(0);
+    let has_conflicts: bool = row.get::<_, i32>(7).unwrap_or(0) != 0;
 
     let deltas: Vec<crate::core::types::DeltaId> =
         serde_json::from_slice(&deltas_json).unwrap_or_default();
@@ -70,6 +73,7 @@ fn row_to_snapshot_lenient(row: &Row) -> Snapshot {
         parents,
         partition_type,
         created_at,
+        has_conflicts,
     }
 }
 
@@ -80,8 +84,8 @@ impl SnapshotStore for SqliteStorage {
         let parents_json = serde_json::to_vec(&snapshot.parents)?;
 
         conn.execute(
-            "INSERT OR IGNORE INTO snapshots (id, file_path, file_hash, deltas, parents, partition_type, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT OR IGNORE INTO snapshots (id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 &snapshot.id.0.to_vec(),
                 snapshot.file.path_str(),
@@ -90,6 +94,7 @@ impl SnapshotStore for SqliteStorage {
                 parents_json,
                 snapshot.partition_type,
                 snapshot.created_at,
+                snapshot.has_conflicts as i32,
             ],
         )?;
         Ok(())
@@ -98,7 +103,7 @@ impl SnapshotStore for SqliteStorage {
     fn get_snapshot(&self, id: &SnapshotId) -> StorageResult<Snapshot> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, file_path, file_hash, deltas, parents, partition_type, created_at FROM snapshots WHERE id = ?1"
+            "SELECT id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts FROM snapshots WHERE id = ?1"
         )?;
 
         let result = stmt.query_row(params![&id.0.to_vec()], row_to_snapshot)?;
@@ -108,7 +113,7 @@ impl SnapshotStore for SqliteStorage {
     fn find_snapshots_by_file(&self, file_path: &str) -> StorageResult<Vec<Snapshot>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, file_path, file_hash, deltas, parents, partition_type, created_at
+            "SELECT id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts
              FROM snapshots WHERE file_path = ?1 ORDER BY created_at DESC",
         )?;
 
@@ -128,7 +133,7 @@ impl SnapshotStore for SqliteStorage {
     ) -> StorageResult<Vec<Snapshot>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, file_path, file_hash, deltas, parents, partition_type, created_at
+            "SELECT id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts
              FROM snapshots WHERE partition_type = ?1 ORDER BY created_at DESC",
         )?;
 

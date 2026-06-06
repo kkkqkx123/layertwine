@@ -359,3 +359,68 @@ pub struct PullResponse {
     pub remote: String,
     pub git_ref: String,
 }
+
+// ── Approval-related types ──
+
+/// Information about a pending approval
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalInfo {
+    pub agent_id: String,
+    pub partition_name: String,
+    pub current_snapshot: String,
+    pub history_len: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListPendingApprovalsResponse {
+    pub approvals: Vec<ApprovalInfo>,
+    pub total: usize,
+}
+
+/// Granular approve request (approve one agent, merge to integrated)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApproveAgentRequest {
+    pub agent_id: String,
+    /// Name for the integrated partition. Defaults to the agent_id if not provided.
+    pub integrated_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApproveAgentResponse {
+    pub agent_id: String,
+    pub integrated_snapshot_id: String,
+}
+
+/// Reject a specific agent's submission
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RejectAgentRequest {
+    pub agent_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RejectAgentResponse {
+    pub agent_id: String,
+    pub baseline_snapshot_id: String,
+}
+
+/// Merge integrated → unified
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeToUnifiedRequest {
+    /// List of integration names to merge. If empty, all integrated partitions are used.
+    pub integration_names: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeToUnifiedResponse {
+    pub unified_snapshot_id: String,
+    pub merged_count: usize,
+}
+
+/// Merge unified → staged
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeToStagedRequest;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeToStagedResponse {
+    pub staged_snapshot_id: String,
+}

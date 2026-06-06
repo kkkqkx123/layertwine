@@ -70,7 +70,7 @@ fn test_snapshot_merge() {
     let parent2 = Snapshot::new_initial(file.clone(), delta_id2);
 
     let merge_delta = DeltaId::from_content(b"merge delta");
-    let merged = Snapshot::merge(vec![&parent1, &parent2], merge_delta, "merge".to_string());
+    let merged = Snapshot::merge(vec![&parent1, &parent2], merge_delta, "merge".to_string(), false);
 
     assert_eq!(merged.deltas.len(), 1);
     assert_eq!(merged.deltas[0], merge_delta);
@@ -91,6 +91,7 @@ fn test_snapshot_merge_three_parents() {
         vec![&parent1, &parent2, &parent3],
         merge_delta,
         "merge".to_string(),
+        false,
     );
 
     assert_eq!(merged.parents.len(), 3);
@@ -100,7 +101,7 @@ fn test_snapshot_merge_three_parents() {
 #[should_panic(expected = "index out of bounds")]
 fn test_snapshot_merge_empty_parents() {
     let merge_delta = DeltaId::from_content(b"merge delta");
-    Snapshot::merge(vec![], merge_delta, "merge".to_string());
+    Snapshot::merge(vec![], merge_delta, "merge".to_string(), false);
 }
 
 #[test]

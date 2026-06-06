@@ -10,6 +10,7 @@ pub mod integrated;
 pub mod manual;
 pub mod staged;
 pub mod transition;
+pub mod unified;
 
 use crate::core::layer::Layer;
 use crate::core::partition::Partition;
@@ -18,6 +19,41 @@ use crate::error::{Result, StratumError};
 use crate::storage::repository::{BranchStore, CheckpointStore, LayerStore, PartitionStore};
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Unified merge result for all merge operations
+///
+/// Replaces FeatureMergeResult and UnifiedMergeResult with a single type.
+#[derive(Debug, Clone)]
+pub struct MergeResult {
+    pub snapshot_id: SnapshotId,
+    pub conflicts: Vec<crate::engine::merge::MergeConflict>,
+}
+
+impl MergeResult {
+    /// Check if merge has conflicts
+    pub fn has_conflicts(&self) -> bool {
+        !self.conflicts.is_empty()
+    }
+
+    /// Get conflict count
+    pub fn conflict_count(&self) -> usize {
+        self.conflicts.len()
+    }
+
+    /// Format all conflicts as Git-style markers
+    pub fn format_conflicts(&self) -> String {
+        if self.conflicts.is_empty() {
+            return String::new();
+        }
+        let mut result = String::new();
+        for (i, conflict) in self.conflicts.iter().enumerate() {
+            result.push_str(&format!("Conflict #{} (line {}):\n", i + 1, conflict.start_line));
+            result.push_str(&conflict.to_conflict_marker());
+            result.push('\n');
+        }
+        result
+    }
+}
 
 /// Hierarchical State Machine - Unified Operations Portal
 ///

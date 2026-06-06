@@ -76,76 +76,18 @@ pub fn ensure_staged_partition<S: PartitionStore>(
     }
 }
 
-/// Merge the contents of the approval Agent partition into the staged
-///
-/// Takes the current snapshot of the specified Agent partition from the approval level and merges it into staged.
-pub fn merge_approval_to_staged<S>(
-    storage: &S,
-    approval_partition_id: &PartitionId,
-) -> Result<SnapshotId>
-where
-    S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
-{
-    let staged_pid = staged_partition_id();
-
-    let approval_partition = storage
-        .get_partition(approval_partition_id)
-        .map_err(|_| StratumError::NotFound("approval partition not found".into()))?;
-    let staged_partition = storage.get_partition(&staged_pid).map_err(|_| {
-        StratumError::NotFound(
-            "staged partition not found, call ensure_staged_partition first".into(),
-        )
-    })?;
-
-    let approval_snapshot = storage
-        .get_snapshot(&approval_partition.current_snapshot)
-        .map_err(StratumError::Storage)?;
-    let staged_snapshot = storage
-        .get_snapshot(&staged_partition.current_snapshot)
-        .map_err(StratumError::Storage)?;
-
-    let approval_text = crate::layered::transition::reconstruct_text(storage, &approval_snapshot)?;
-    let staged_text = crate::layered::transition::reconstruct_text(storage, &staged_snapshot)?;
-
-    let merge_diff = diff_to_line_diff(&staged_text, &approval_text);
-    if merge_diff.is_empty() {
-        return Ok(staged_partition.current_snapshot);
-    }
-
-    let merge_delta = Delta::new(staged_snapshot.file.clone(), merge_diff, SourceType::Manual);
-    storage
-        .store_delta(&merge_delta)
-        .map_err(StratumError::Storage)?;
-
-    let new_snapshot = Snapshot::merge(
-        vec![&staged_snapshot, &approval_snapshot],
-        merge_delta.id,
-        PartitionType::Staged.name(),
-    );
-    storage
-        .store_snapshot(&new_snapshot, b"")
-        .map_err(StratumError::Storage)?;
-
-    storage
-        .update_pointer(&staged_pid, &new_snapshot.id)
-        .map_err(StratumError::Storage)?;
-
-    Ok(new_snapshot.id)
-}
-
 /// Merge the contents of the Unified partition into the staged
 /// 
-/// This is the UNIQUE entry point for merging into staged.
-/// All content should flow through the unified layer before reaching staged.
-/// This ensures proper three-way merging and conflict detection.
+/// This is the UNIQUE entry point for merging into staged from the approval pipeline.
+/// All content should flow through: approval_agent → integrated → unified → staged.
 ///
-/// This is the final step of the approval pipeline: approval_agent → integrated → unified → staged.
+/// This ensures proper three-way merging and conflict detection before the final stage.
 pub fn merge_unified_to_staged<S>(storage: &S) -> Result<SnapshotId>
 where
     S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
 {
     let staged_pid = staged_partition_id();
-    let unified_pid = crate::layered::integrated::unified_partition_id();
+    let unified_pid = crate::layered::unified::unified_partition_id();
 
     let unified_partition = storage.get_partition(&unified_pid).map_err(|_| {
         StratumError::NotFound(
@@ -187,6 +129,7 @@ where
         vec![&staged_snapshot, &unified_snapshot],
         merge_delta.id,
         PartitionType::Staged.name(),
+        false,
     );
     storage
         .store_snapshot(&new_snapshot, b"")
@@ -209,7 +152,7 @@ pub fn validate_staged_for_commit<S>(storage: &S) -> Result<ValidationResult>
 where
     S: SnapshotStore + PartitionStore,
 {
-    let unified_pid = crate::layered::integrated::unified_partition_id();
+    let unified_pid = crate::layered::unified::unified_partition_id();
     let staged_pid = staged_partition_id();
 
     let unified = storage.get_partition(&unified_pid).map_err(|_| {
@@ -360,54 +303,6 @@ mod tests {
         snap.id
     }
 
-    fn create_approval_partition(storage: &SqliteStorage, content: &str) -> PartitionId {
-        let file_path = "test.txt";
-        let agent_id = AgentInstanceId("test-agent".into());
-        let initial_id = create_initial_snapshot(storage, "base\n");
-        let pid = crate::layered::approval::approval_agent_partition_id(&agent_id);
-        let partition = Partition {
-            id: pid,
-            name: format!("approval/{}", agent_id),
-            current_snapshot: initial_id,
-            history: vec![initial_id],
-            partition_type: PartitionType::Approval(agent_id.clone()),
-        };
-        storage.create_partition(&partition).unwrap();
-
-        let file_node = FileNode::new(std::path::PathBuf::from(file_path), content.as_bytes());
-        storage
-            .store_file_node(&file_node, content.as_bytes())
-            .unwrap();
-        let diff = diff_to_line_diff("base\n", content);
-        let delta = Delta::new(file_node, diff, SourceType::Manual);
-        storage.store_delta(&delta).unwrap();
-        let snap = storage.get_snapshot(&initial_id).unwrap();
-        let new_snap = Snapshot::from_parent(
-            &snap,
-            delta.id,
-            PartitionType::Approval(AgentInstanceId("test-agent".into())).name(),
-        );
-        storage.store_snapshot(&new_snap, b"").unwrap();
-        storage.update_pointer(&pid, &new_snap.id).unwrap();
-        pid
-    }
-
-    #[test]
-    fn test_merge_approval_to_staged() {
-        let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\n");
-        ensure_staged_partition(&storage, initial_id).unwrap();
-
-        let approval_pid = create_approval_partition(&storage, "base\nmodified\n");
-        let merged_id = merge_approval_to_staged(&storage, &approval_pid).unwrap();
-
-        let staged = storage.get_partition(&staged_partition_id()).unwrap();
-        assert_eq!(staged.current_snapshot, merged_id);
-
-        let merged = storage.get_snapshot(&merged_id).unwrap();
-        assert_eq!(merged.parents.len(), 2);
-    }
-
     #[test]
     fn test_ensure_staged_partition() {
         let storage = setup_storage();
@@ -419,26 +314,12 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_approval_to_staged_no_changes() {
-        let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\n");
-        ensure_staged_partition(&storage, initial_id).unwrap();
-
-        let approval_pid = create_approval_partition(&storage, "base\n");
-        let result = merge_approval_to_staged(&storage, &approval_pid);
-        assert!(result.is_ok());
-
-        let staged = storage.get_partition(&staged_partition_id()).unwrap();
-        assert_eq!(staged.current_snapshot, initial_id);
-    }
-
-    #[test]
     fn test_merge_unified_to_staged() {
         let storage = setup_storage();
         let initial_id = create_initial_snapshot(&storage, "base\n");
         ensure_staged_partition(&storage, initial_id).unwrap();
 
-        let unified_pid = crate::layered::integrated::unified_partition_id();
+        let unified_pid = crate::layered::unified::unified_partition_id();
         let unified_part = Partition {
             id: unified_pid,
             name: "unified".to_string(),
@@ -471,7 +352,7 @@ mod tests {
         let initial_id = create_initial_snapshot(&storage, "base\n");
         ensure_staged_partition(&storage, initial_id).unwrap();
 
-        let unified_pid = crate::layered::integrated::unified_partition_id();
+        let unified_pid = crate::layered::unified::unified_partition_id();
         let unified_part = Partition {
             id: unified_pid,
             name: "unified".to_string(),

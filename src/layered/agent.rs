@@ -175,6 +175,7 @@ where
         vec![&approval_snapshot, &agent_snapshot],
         merge_delta.id,
         PartitionType::Approval(agent_id.clone()).name(),
+        false,
     );
     storage
         .store_snapshot(&new_snapshot, b"")

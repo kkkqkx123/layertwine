@@ -10,6 +10,7 @@ use crate::error::Result;
 use crate::layered::agent;
 use crate::layered::integrated;
 use crate::layered::staged;
+use crate::layered::unified;
 use crate::storage::repository::{
     BranchStore, CheckpointStore, DagStore, DeltaStore, FileNodeStore, PartitionStore,
     SnapshotStore,
@@ -63,7 +64,7 @@ where
     }
 
     // 6. Merge feature to unified
-    let unified_result = integrated::merge_features_to_unified(storage, &[feature_name.to_string()])?;
+    let unified_result = unified::merge_features_to_unified(storage, &[feature_name.to_string()])?;
     if unified_result.has_conflicts() {
         return Err(crate::error::StratumError::General(format!(
             "Merge conflicts detected: {}",
@@ -131,7 +132,7 @@ where
     }
 
     // 4. Merge feature to unified
-    let unified_result = integrated::merge_features_to_unified(storage, &[feature_name.to_string()])?;
+    let unified_result = unified::merge_features_to_unified(storage, &[feature_name.to_string()])?;
     if unified_result.has_conflicts() {
         return Err(crate::error::StratumError::General(format!(
             "Merge conflicts detected: {}",
@@ -168,7 +169,7 @@ where
     }
 
     // 1. Merge features to unified
-    let unified_result = integrated::merge_features_to_unified(storage, feature_names)?;
+    let unified_result = unified::merge_features_to_unified(storage, feature_names)?;
     if unified_result.has_conflicts() {
         return Err(crate::error::StratumError::General(format!(
             "Merge conflicts detected: {}",
@@ -201,7 +202,7 @@ where
             .map_err(crate::error::StratumError::Storage),
         Err(_) => {
             // If staged doesn't exist, try to get unified
-            match storage.get_partition(&integrated::unified_partition_id()) {
+            match storage.get_partition(&unified::unified_partition_id()) {
                 Ok(unified) => storage
                     .get_snapshot(&unified.current_snapshot)
                     .map_err(crate::error::StratumError::Storage),

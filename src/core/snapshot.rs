@@ -8,6 +8,7 @@ struct SnapshotForId<'a> {
     deltas: &'a Vec<DeltaId>,
     parents: &'a Vec<SnapshotId>,
     partition_type: &'a str,
+    has_conflicts: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,6 +19,7 @@ pub struct Snapshot {
     pub parents: Vec<SnapshotId>,
     pub partition_type: String,
     pub created_at: i64,
+    pub has_conflicts: bool,
 }
 
 impl Snapshot {
@@ -29,6 +31,7 @@ impl Snapshot {
             parents: vec![],
             partition_type: String::new(),
             created_at: chrono::Utc::now().timestamp_millis(),
+            has_conflicts: false,
         };
         let mut s = snapshot;
         s.id = s.compute_id();
@@ -46,6 +49,7 @@ impl Snapshot {
             parents: vec![parent.id],
             partition_type,
             created_at: chrono::Utc::now().timestamp_millis(),
+            has_conflicts: false,
         };
         let mut s = snapshot;
         s.id = s.compute_id();
@@ -56,7 +60,12 @@ impl Snapshot {
         Snapshot::from_parent(self, delta_id, self.partition_type.clone())
     }
 
-    pub fn merge(parents: Vec<&Snapshot>, delta_id: DeltaId, partition_type: String) -> Self {
+    pub fn merge(
+        parents: Vec<&Snapshot>,
+        delta_id: DeltaId,
+        partition_type: String,
+        has_conflicts: bool,
+    ) -> Self {
         let file = parents[0].file.clone();
         let deltas = vec![delta_id];
 
@@ -67,6 +76,7 @@ impl Snapshot {
             parents: parents.iter().map(|p| p.id).collect(),
             partition_type,
             created_at: chrono::Utc::now().timestamp_millis(),
+            has_conflicts,
         };
         let mut s = snapshot;
         s.id = s.compute_id();
@@ -79,6 +89,7 @@ impl Snapshot {
             deltas: &self.deltas,
             parents: &self.parents,
             partition_type: &self.partition_type,
+            has_conflicts: self.has_conflicts,
         };
         let json = serde_json::to_vec(&snapshot_for_id).unwrap_or_default();
         SnapshotId::from_content(&json)
@@ -92,6 +103,7 @@ pub struct SnapshotBuilder {
     deltas: Vec<DeltaId>,
     parents: Vec<SnapshotId>,
     partition_type: String,
+    has_conflicts: bool,
 }
 
 impl SnapshotBuilder {
@@ -101,6 +113,7 @@ impl SnapshotBuilder {
             deltas: vec![],
             parents: vec![],
             partition_type: String::new(),
+            has_conflicts: false,
         }
     }
 
@@ -124,6 +137,11 @@ impl SnapshotBuilder {
         self
     }
 
+    pub fn with_conflicts(mut self, has_conflicts: bool) -> Self {
+        self.has_conflicts = has_conflicts;
+        self
+    }
+
     pub fn build(self) -> Result<Snapshot, &'static str> {
         let file = self.file.ok_or("file is required")?;
         let snapshot = Snapshot {
@@ -133,6 +151,7 @@ impl SnapshotBuilder {
             parents: self.parents,
             partition_type: self.partition_type,
             created_at: chrono::Utc::now().timestamp_millis(),
+            has_conflicts: self.has_conflicts,
         };
         let mut s = snapshot;
         s.id = s.compute_id();

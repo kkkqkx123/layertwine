@@ -23,8 +23,6 @@ pub enum ForwardTransition {
     ApprovalToIntegrated,
     /// integrated → unified
     IntegratedToUnified,
-    /// approval → staged
-    ApprovalToStaged,
 }
 
 /// Type of reverse flow
@@ -50,7 +48,9 @@ pub fn check_forward_valid(from: &LayerType, to: &LayerType) -> Result<()> {
         (from, to),
         (LayerType::ManualEdit, LayerType::Staged)
             | (LayerType::AgentEdit, LayerType::Approval)
-            | (LayerType::Approval, LayerType::Staged)
+            | (LayerType::Approval, LayerType::Integrated)
+            | (LayerType::Integrated, LayerType::Unified)
+            | (LayerType::Unified, LayerType::Staged)
     );
 
     if !valid {
@@ -136,19 +136,8 @@ where
                 )
             })?;
             let names: Vec<String> = names_str.split(',').map(|s| s.trim().to_string()).collect();
-            crate::layered::integrated::move_integrated_to_unified(storage, &names)
-        }
-        ForwardTransition::ApprovalToStaged => {
-            check_forward_valid(&LayerType::Approval, &LayerType::Staged)?;
-            let approval_partition_id_str = params.first().ok_or_else(|| {
-                StratumError::StateMachine(
-                    "ApprovalToStaged requires approval_partition_id parameter".into(),
-                )
-            })?;
-            // Parsing UUIDs
-            let pid = uuid::Uuid::parse_str(approval_partition_id_str)
-                .map_err(|_| StratumError::StateMachine("invalid partition_id UUID".into()))?;
-            crate::layered::staged::merge_approval_to_staged(storage, &pid)
+            crate::layered::unified::merge_features_to_unified(storage, &names)
+                .map(|r| r.snapshot_id)
         }
     }
 }
@@ -218,6 +207,40 @@ where
     )))
 }
 
+/// Unified rollback dispatch
+///
+/// Executes the rollback operation based on the `RollbackTransition` type.
+/// This is the reverse counterpart to `execute_forward`.
+pub fn execute_rollback<S>(storage: &S, transition: RollbackTransition, _params: &[&str]) -> Result<SnapshotId>
+where
+    S: SnapshotStore + PartitionStore + DeltaStore + FileNodeStore,
+{
+    match transition {
+        RollbackTransition::StagedToManual => {
+            check_rollback_valid(&LayerType::Staged, &LayerType::ManualEdit)?;
+            rollback_staged_to_layer(storage, LayerType::ManualEdit)
+        }
+        RollbackTransition::StagedToApproval => {
+            check_rollback_valid(&LayerType::Staged, &LayerType::Approval)?;
+            rollback_staged_to_layer(storage, LayerType::Approval)
+        }
+        RollbackTransition::StagedToAgentRaw => {
+            check_rollback_valid(&LayerType::Staged, &LayerType::AgentEdit)?;
+            rollback_staged_to_layer(storage, LayerType::AgentEdit)
+        }
+        RollbackTransition::ApprovalToAgentRaw => {
+            check_rollback_valid(&LayerType::Approval, &LayerType::AgentEdit)?;
+            let agent_id = _params.first().ok_or_else(|| {
+                StratumError::StateMachine("ApprovalToAgentRaw requires agent_id parameter".into())
+            })?;
+            crate::layered::approval::reject_approval(
+                storage,
+                &crate::core::types::AgentInstanceId(agent_id.to_string()),
+            )
+        }
+    }
+}
+
 /// Merge backup snapshots into staged
 ///
 /// Uses BackupRepo to restore a backup into the staged partition.
@@ -239,11 +262,9 @@ pub fn partition_type_matches_layer(partition_type: &str, target_layer: &LayerTy
     match target_layer {
         LayerType::ManualEdit => partition_type == "manual",
         LayerType::AgentEdit => partition_type.starts_with("agent/"),
-        LayerType::Approval => {
-            partition_type.starts_with("approval/")
-                || partition_type.starts_with("integrated/")
-                || partition_type == "unified"
-        }
+        LayerType::Approval => partition_type.starts_with("approval/"),
+        LayerType::Integrated => partition_type.starts_with("integrated/"),
+        LayerType::Unified => partition_type == "unified",
         LayerType::Staged => partition_type == "staged",
     }
 }
@@ -319,11 +340,14 @@ mod tests {
         // Permitted flows
         assert!(check_forward_valid(&LayerType::ManualEdit, &LayerType::Staged).is_ok());
         assert!(check_forward_valid(&LayerType::AgentEdit, &LayerType::Approval).is_ok());
-        assert!(check_forward_valid(&LayerType::Approval, &LayerType::Staged).is_ok());
+        assert!(check_forward_valid(&LayerType::Approval, &LayerType::Integrated).is_ok());
+        assert!(check_forward_valid(&LayerType::Integrated, &LayerType::Unified).is_ok());
+        assert!(check_forward_valid(&LayerType::Unified, &LayerType::Staged).is_ok());
 
         // Prohibition of cross-layering
         assert!(check_forward_valid(&LayerType::AgentEdit, &LayerType::Staged).is_err());
         assert!(check_forward_valid(&LayerType::ManualEdit, &LayerType::Approval).is_err());
+        assert!(check_forward_valid(&LayerType::Approval, &LayerType::Staged).is_err());
     }
 
     #[test]
@@ -585,41 +609,33 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_forward_approval_to_staged() {
+    fn test_execute_rollback_staged_to_manual() {
         let storage = setup_storage();
         let initial_id = create_initial_snapshot(&storage, "base\n");
+
+        crate::layered::manual::ensure_manual_partition(&storage, initial_id).unwrap();
         crate::layered::staged::ensure_staged_partition(&storage, initial_id).unwrap();
-
-        // Create approval partition with content change
-        let agent_id = AgentInstanceId("test-agent".into());
-        let approval_pid = crate::layered::approval::approval_agent_partition_id(&agent_id);
-        let approval_part = Partition {
-            id: approval_pid,
-            name: format!("approval/{}", agent_id),
-            current_snapshot: initial_id,
-            history: vec![initial_id],
-            partition_type: PartitionType::Approval(agent_id),
-        };
-        storage.create_partition(&approval_part).unwrap();
-
-        // Create a new snapshot for the approval partition
-        let file_node = FileNode::new(PathBuf::from("test.txt"), b"base\nmodified\n");
-        storage
-            .store_file_node(&file_node, b"base\nmodified\n")
+        crate::layered::manual::apply_manual_edit(&storage, "test.txt", "base\nmodified\n")
             .unwrap();
-        let diff = diff_to_line_diff("base\n", "base\nmodified\n");
-        let delta = Delta::new(file_node, diff, SourceType::Manual);
-        storage.store_delta(&delta).unwrap();
-        let snap = storage.get_snapshot(&initial_id).unwrap();
-        let new_snap = Snapshot::from_parent(&snap, delta.id, "approval".to_string());
-        storage.store_snapshot(&new_snap, b"").unwrap();
-        storage.update_pointer(&approval_pid, &new_snap.id).unwrap();
+        crate::layered::manual::merge_manual_to_staged(&storage).unwrap();
 
-        let result = execute_forward(
+        // Verify staged has changed
+        let staged_pid = crate::layered::staged::staged_partition_id();
+        let staged_before = storage.get_partition(&staged_pid).unwrap();
+        assert_ne!(staged_before.current_snapshot, initial_id);
+
+        // Rollback staged → manual
+        let result = execute_rollback(
             &storage,
-            ForwardTransition::ApprovalToStaged,
-            &[&approval_pid.to_string()],
+            RollbackTransition::StagedToManual,
+            &[],
         );
         assert!(result.is_ok());
+
+        let staged_after = storage.get_partition(&staged_pid).unwrap();
+        // Staged should roll back to the manual partition's snapshot (not the initial)
+        let manual_pid = crate::layered::manual::manual_partition_id();
+        let manual_partition = storage.get_partition(&manual_pid).unwrap();
+        assert_eq!(staged_after.current_snapshot, manual_partition.current_snapshot);
     }
 }

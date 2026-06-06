@@ -78,6 +78,8 @@ pub enum LayerType {
     ManualEdit,
     AgentEdit,
     Approval,
+    Integrated,
+    Unified,
     Staged,
 }
 
@@ -87,6 +89,8 @@ impl LayerType {
             LayerType::ManualEdit => "manual_edit",
             LayerType::AgentEdit => "agent_edit",
             LayerType::Approval => "approval",
+            LayerType::Integrated => "integrated",
+            LayerType::Unified => "unified",
             LayerType::Staged => "staged",
         }
     }
