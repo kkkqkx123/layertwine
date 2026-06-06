@@ -4,14 +4,12 @@
 //! Provides forward flow and reverse rollback with ironclad layer-gating rules.
 
 pub mod agent;
+pub mod api;
 pub mod approval;
 pub mod integrated;
 pub mod manual;
 pub mod staged;
 pub mod transition;
-
-#[cfg(test)]
-mod test_helpers;
 
 use crate::core::layer::Layer;
 use crate::core::partition::Partition;
@@ -164,8 +162,13 @@ where
 
     // Transaction support -
 
-    /// Execute operations with potential atomic guarantees.
-    /// Delegates to `AtomicOps::with_atomic` on the storage backend.
+    /// Execute operations within an intent of atomicity.
+    ///
+    /// NOTE: The current implementation does NOT provide true SQLite savepoint
+    /// guarantees because `AtomicOps::with_atomic` acquires the Mutex lock, and
+    /// the closure's trait methods also try to acquire it, causing a deadlock.
+    /// See docs/plan/09-存储层重构与接口加固.md for the known issue.
+    /// For now this is a no-op wrapper that simply delegates to the closure.
     pub fn with_transaction<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(&S) -> Result<T>,
@@ -187,7 +190,30 @@ mod tests {
     use crate::storage::SqliteStorage;
     use std::sync::Arc;
 
-    use test_helpers::{create_initial_snapshot, setup_storage};
+    fn setup_storage() -> SqliteStorage {
+        let storage = SqliteStorage::new_in_memory().unwrap();
+        storage
+            .with_conn(|conn| crate::storage::migrations::initialize_full(conn))
+            .unwrap();
+        storage
+    }
+
+    fn create_initial_snapshot(
+        storage: &SqliteStorage,
+        content: &str,
+    ) -> crate::core::types::SnapshotId {
+        let file_node =
+            FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
+        storage
+            .store_file_node(&file_node, content.as_bytes())
+            .unwrap();
+        let empty_diff = crate::core::types::LineDiff::new(vec![]);
+        let delta = Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
+        storage.store_delta(&delta).unwrap();
+        let snapshot = Snapshot::new_initial(file_node, delta.id);
+        storage.store_snapshot(&snapshot, b"").unwrap();
+        snapshot.id
+    }
 
     #[test]
     fn test_state_machine_new() {

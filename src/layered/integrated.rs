@@ -11,18 +11,47 @@ use crate::engine::diff::diff_to_line_diff;
 use crate::error::{Result, StratumError};
 use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
 
+pub use crate::engine::merge::MergeConflict;
+
+/// Result of merging multiple features into unified
+#[derive(Debug, Clone)]
+pub struct UnifiedMergeResult {
+    pub snapshot_id: SnapshotId,
+    pub conflicts: Vec<crate::engine::merge::MergeConflict>,
+}
+
+impl UnifiedMergeResult {
+    /// Check if merge has conflicts
+    pub fn has_conflicts(&self) -> bool {
+        !self.conflicts.is_empty()
+    }
+
+    /// Get conflict count
+    pub fn conflict_count(&self) -> usize {
+        self.conflicts.len()
+    }
+
+    /// Format all conflicts as Git-style markers
+    pub fn format_conflicts(&self) -> String {
+        if self.conflicts.is_empty() {
+            return String::new();
+        }
+        let mut result = String::new();
+        for (i, conflict) in self.conflicts.iter().enumerate() {
+            result.push_str(&format!("Conflict #{} (line {}):\n", i + 1, conflict.start_line));
+            result.push_str(&conflict.to_conflict_marker());
+            result.push('\n');
+        }
+        result
+    }
+}
+
 // Partition ID generation -
 
-/// ID of the Integrated partition for the given name
+/// ID of the Integrated partition for the given name via UUIDv5
 pub fn integrated_partition_id(name: &str) -> PartitionId {
-    let uuid = uuid::Uuid::from_u128(0x4000_0000_0000_0000_0000_0000_0000_0000);
-    let bytes = uuid.as_bytes();
-    let name_bytes = name.as_bytes();
-    let mut new_bytes = *bytes;
-    for (i, b) in name_bytes.iter().enumerate().take(16) {
-        new_bytes[i] = new_bytes[i].wrapping_add(*b);
-    }
-    uuid::Uuid::from_bytes(new_bytes)
+    let namespace = uuid::Uuid::from_u128(0x4000_0000_0000_0000_0000_0000_0000_0000);
+    uuid::Uuid::new_v5(&namespace, name.as_bytes())
 }
 
 /// Fixed ID of the Unified partition
@@ -81,19 +110,88 @@ pub fn ensure_unified_partition<S: PartitionStore>(
     }
 }
 
+/// Create a new feature branch with explicit baseline
+/// This makes the baseline concept clear for feature development
+pub fn create_feature_branch<S: PartitionStore>(
+    storage: &S,
+    name: &str,
+    baseline_snapshot_id: SnapshotId,
+) -> Result<Partition> {
+    let pid = integrated_partition_id(name);
+    let partition = Partition {
+        id: pid,
+        name: format!("feature/{}", name),
+        current_snapshot: baseline_snapshot_id,
+        history: vec![baseline_snapshot_id],
+        partition_type: PartitionType::Integrated(name.to_string()),
+    };
+    storage
+        .create_partition(&partition)
+        .map_err(StratumError::Storage)?;
+    Ok(partition)
+}
+
+/// Get the baseline snapshot for a feature branch
+/// The baseline is the first snapshot in the feature's history
+pub fn get_feature_baseline<S: SnapshotStore + PartitionStore>(
+    storage: &S,
+    feature_name: &str,
+) -> Result<Snapshot> {
+    let pid = integrated_partition_id(feature_name);
+    let part = storage.get_partition(&pid).map_err(|_| {
+        StratumError::NotFound(format!("integrated partition {} not found", feature_name))
+    })?;
+    let baseline_id = &part.history[0];
+    storage.get_snapshot(baseline_id).map_err(StratumError::Storage)
+}
+
 // Forward migration operations -
 
-/// Migrate Agent approval content into an Integrated partition
-pub fn move_approval_to_integrated<S>(
+/// Result of merging an agent into a feature
+#[derive(Debug, Clone)]
+pub struct FeatureMergeResult {
+    pub snapshot_id: SnapshotId,
+    pub conflicts: Vec<crate::engine::merge::MergeConflict>,
+}
+
+impl FeatureMergeResult {
+    /// Check if merge has conflicts
+    pub fn has_conflicts(&self) -> bool {
+        !self.conflicts.is_empty()
+    }
+
+    /// Get conflict count
+    pub fn conflict_count(&self) -> usize {
+        self.conflicts.len()
+    }
+
+    /// Format all conflicts as Git-style markers
+    pub fn format_conflicts(&self) -> String {
+        if self.conflicts.is_empty() {
+            return String::new();
+        }
+        let mut result = String::new();
+        for (i, conflict) in self.conflicts.iter().enumerate() {
+            result.push_str(&format!("Conflict #{} (line {}):\n", i + 1, conflict.start_line));
+            result.push_str(&conflict.to_conflict_marker());
+            result.push('\n');
+        }
+        result
+    }
+}
+
+/// Merge an Agent's approval into a feature branch using three-way merge
+/// This supports multiple agents collaborating on the same feature
+pub fn merge_agent_to_feature<S>(
     storage: &S,
     agent_id: &AgentInstanceId,
-    integrated_name: &str,
-) -> Result<SnapshotId>
+    feature_name: &str,
+) -> Result<FeatureMergeResult>
 where
     S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
 {
     let approval_pid = crate::layered::approval::approval_agent_partition_id(agent_id);
-    let integrated_pid = integrated_partition_id(integrated_name);
+    let integrated_pid = integrated_partition_id(feature_name);
 
     let approval_partition = storage.get_partition(&approval_pid).map_err(|_| {
         StratumError::NotFound(format!("approval agent partition {} not found", agent_id))
@@ -104,29 +202,43 @@ where
 
     let integrated_partition = ensure_integrated_partition(
         storage,
-        integrated_name,
+        feature_name,
         approval_partition.current_snapshot,
     )?;
 
     if integrated_partition.current_snapshot == approval_partition.current_snapshot {
-        return Ok(integrated_partition.current_snapshot);
+        return Ok(FeatureMergeResult {
+            snapshot_id: integrated_partition.current_snapshot,
+            conflicts: vec![],
+        });
     }
 
+    let baseline_snapshot = get_feature_baseline(storage, feature_name)?;
     let integrated_snapshot = storage
         .get_snapshot(&integrated_partition.current_snapshot)
         .map_err(StratumError::Storage)?;
 
+    let baseline_text = crate::layered::transition::reconstruct_text(storage, &baseline_snapshot)?;
     let approval_text = crate::layered::transition::reconstruct_text(storage, &approval_snapshot)?;
     let integrated_text =
         crate::layered::transition::reconstruct_text(storage, &integrated_snapshot)?;
 
-    let merge_diff = diff_to_line_diff(&integrated_text, &approval_text);
+    let (merged_text, conflicts) = crate::engine::merge::merge_texts(
+        &baseline_text,
+        &approval_text,
+        &integrated_text,
+    );
+
+    let merge_diff = diff_to_line_diff(&baseline_text, &merged_text);
     if merge_diff.is_empty() {
-        return Ok(integrated_partition.current_snapshot);
+        return Ok(FeatureMergeResult {
+            snapshot_id: integrated_partition.current_snapshot,
+            conflicts,
+        });
     }
 
     let merge_delta = Delta::new(
-        approval_snapshot.file.clone(),
+        baseline_snapshot.file.clone(),
         merge_diff,
         SourceType::Agent(agent_id.clone()),
     );
@@ -135,9 +247,9 @@ where
         .map_err(StratumError::Storage)?;
 
     let new_snapshot = Snapshot::merge(
-        vec![&integrated_snapshot, &approval_snapshot],
+        vec![&baseline_snapshot, &approval_snapshot, &integrated_snapshot],
         merge_delta.id,
-        PartitionType::Integrated(integrated_name.to_string()).name(),
+        PartitionType::Integrated(feature_name.to_string()).name(),
     );
     storage
         .store_snapshot(&new_snapshot, b"")
@@ -147,44 +259,85 @@ where
         .update_pointer(&integrated_pid, &new_snapshot.id)
         .map_err(StratumError::Storage)?;
 
-    Ok(new_snapshot.id)
+    Ok(FeatureMergeResult {
+        snapshot_id: new_snapshot.id,
+        conflicts,
+    })
 }
 
-/// Merge all named Integrated partitions into the Unified partition
-pub fn move_integrated_to_unified<S>(storage: &S, integrated_names: &[String]) -> Result<SnapshotId>
+/// Migrate Agent approval content into an Integrated partition
+/// This is a simplified version that uses sequential merge (legacy, kept for backward compatibility)
+/// For new code, use merge_agent_to_feature instead
+pub fn move_approval_to_integrated<S>(
+    storage: &S,
+    agent_id: &AgentInstanceId,
+    integrated_name: &str,
+) -> Result<SnapshotId>
 where
     S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
 {
+    let result = merge_agent_to_feature(storage, agent_id, integrated_name)?;
+    Ok(result.snapshot_id)
+}
+
+/// Get the common baseline for multiple features
+fn get_common_baseline<S: SnapshotStore + PartitionStore>(
+    storage: &S,
+    feature_names: &[String],
+) -> Result<Snapshot> {
+    if feature_names.is_empty() {
+        return Err(StratumError::General("至少需要一个feature".into()));
+    }
+    
+    let first_pid = integrated_partition_id(&feature_names[0]);
+    let first_part = storage.get_partition(&first_pid).map_err(|_| {
+        StratumError::NotFound(format!(
+            "integrated partition {} not found",
+            feature_names[0]
+        ))
+    })?;
+    let baseline_id = &first_part.history[0];
+    storage.get_snapshot(baseline_id).map_err(StratumError::Storage)
+}
+
+/// Merge all named Integrated partitions into the Unified partition
+/// Uses three-way merge based on the common baseline instead of sequential merge
+pub fn move_integrated_to_unified<S>(
+    storage: &S,
+    integrated_names: &[String],
+) -> Result<SnapshotId>
+where
+    S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
+{
+    let result = merge_features_to_unified(storage, integrated_names)?;
+    Ok(result.snapshot_id)
+}
+
+/// Merge multiple feature branches into unified
+/// Uses three-way merge engine, all features merge based on the original baseline
+pub fn merge_features_to_unified<S>(
+    storage: &S,
+    feature_names: &[String],
+) -> Result<UnifiedMergeResult>
+where
+    S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
+{
+    if feature_names.is_empty() {
+        return Err(StratumError::General("至少需要一个feature".into()));
+    }
+
     let unified_pid = unified_partition_id();
 
-    let initial_snapshot = if integrated_names.is_empty() {
-        let placeholder = SnapshotId::from_content(b"unified-placeholder");
-        let _ = ensure_unified_partition(storage, placeholder)?;
-        let unified = storage
-            .get_partition(&unified_pid)
-            .map_err(|_| StratumError::NotFound("unified partition not found".into()))?;
-        return Ok(unified.current_snapshot);
-    } else {
-        let first_pid = integrated_partition_id(&integrated_names[0]);
-        let first_part = storage.get_partition(&first_pid).map_err(|_| {
-            StratumError::NotFound(format!(
-                "integrated partition {} not found",
-                integrated_names[0]
-            ))
-        })?;
-        first_part.current_snapshot
-    };
+    let common_baseline = get_common_baseline(storage, feature_names)?;
 
-    let unified_partition = ensure_unified_partition(storage, initial_snapshot)?;
-    let unified_snapshot = storage
-        .get_snapshot(&unified_partition.current_snapshot)
-        .map_err(StratumError::Storage)?;
+    let unified_partition = ensure_unified_partition(storage, common_baseline.id)?;
 
-    let unified_text = crate::layered::transition::reconstruct_text(storage, &unified_snapshot)?;
-    let mut merged_text = unified_text.clone();
-    let mut parent_snapshots_owned: Vec<Snapshot> = Vec::new();
+    let baseline_text = crate::layered::transition::reconstruct_text(storage, &common_baseline)?;
+    let mut current_text = baseline_text.clone();
+    let mut all_conflicts: Vec<crate::engine::merge::MergeConflict> = Vec::new();
+    let mut all_parents: Vec<Snapshot> = vec![common_baseline.clone()];
 
-    for name in integrated_names {
+    for name in feature_names {
         let pid = integrated_partition_id(name);
         let part = storage.get_partition(&pid).map_err(|_| {
             StratumError::NotFound(format!("integrated partition {} not found", name))
@@ -192,31 +345,35 @@ where
         let snap = storage
             .get_snapshot(&part.current_snapshot)
             .map_err(StratumError::Storage)?;
-        let text = crate::layered::transition::reconstruct_text(storage, &snap)?;
+        let feature_text = crate::layered::transition::reconstruct_text(storage, &snap)?;
 
-        let diff = diff_to_line_diff(&merged_text, &text);
-        if !diff.is_empty() {
-            let delta = Delta::new(snap.file.clone(), diff, SourceType::Manual);
-            storage.store_delta(&delta).map_err(StratumError::Storage)?;
-            merged_text = crate::engine::merge::apply_deltas(&merged_text, &[delta])
-                .map_err(|e| StratumError::Engine(e.to_string()))?;
-        }
-        parent_snapshots_owned.push(snap);
-    }
+        let (merged_text, conflicts) = crate::engine::merge::merge_texts(
+            &baseline_text,
+            &current_text,
+            &feature_text,
+        );
 
-    if parent_snapshots_owned.is_empty() {
-        return Ok(unified_partition.current_snapshot);
-    }
-
-    let mut all_parents: Vec<&Snapshot> = vec![&unified_snapshot];
-    for snap in &parent_snapshots_owned {
+        current_text = merged_text;
+        all_conflicts.extend(conflicts);
         all_parents.push(snap);
     }
 
+    let unified_snapshot = storage
+        .get_snapshot(&unified_partition.current_snapshot)
+        .map_err(StratumError::Storage)?;
+
     let final_diff = diff_to_line_diff(
         &crate::layered::transition::reconstruct_text(storage, &unified_snapshot)?,
-        &merged_text,
+        &current_text,
     );
+    
+    if final_diff.is_empty() {
+        return Ok(UnifiedMergeResult {
+            snapshot_id: unified_snapshot.id,
+            conflicts: all_conflicts,
+        });
+    }
+
     let merge_delta = Delta::new(
         unified_snapshot.file.clone(),
         final_diff,
@@ -226,7 +383,10 @@ where
         .store_delta(&merge_delta)
         .map_err(StratumError::Storage)?;
 
-    let new_snapshot = Snapshot::merge(all_parents, merge_delta.id, PartitionType::Unified.name());
+    let mut parent_refs: Vec<&Snapshot> = all_parents.iter().collect();
+    parent_refs.insert(0, &unified_snapshot);
+
+    let new_snapshot = Snapshot::merge(parent_refs, merge_delta.id, PartitionType::Unified.name());
     storage
         .store_snapshot(&new_snapshot, b"")
         .map_err(StratumError::Storage)?;
@@ -235,7 +395,10 @@ where
         .update_pointer(&unified_pid, &new_snapshot.id)
         .map_err(StratumError::Storage)?;
 
-    Ok(new_snapshot.id)
+    Ok(UnifiedMergeResult {
+        snapshot_id: new_snapshot.id,
+        conflicts: all_conflicts,
+    })
 }
 
 /// Copy current_snapshot pointer from one partition to another (pointer-only, no data writes)

@@ -8,16 +8,10 @@ use crate::core::types::{AgentInstanceId, PartitionId, PartitionType, SnapshotId
 use crate::error::{Result, StratumError};
 use crate::storage::repository::PartitionStore;
 
-/// ID of the Agent partition in the approval layer
+/// ID of the Agent partition in the approval layer via UUIDv5
 pub fn approval_agent_partition_id(agent_id: &AgentInstanceId) -> PartitionId {
-    let uuid = uuid::Uuid::from_u128(0x3000_0000_0000_0000_0000_0000_0000_0000);
-    let bytes = uuid.as_bytes();
-    let agent_bytes = agent_id.0.as_bytes();
-    let mut new_bytes = *bytes;
-    for (i, b) in agent_bytes.iter().enumerate().take(16) {
-        new_bytes[i] = new_bytes[i].wrapping_add(*b);
-    }
-    uuid::Uuid::from_bytes(new_bytes)
+    let namespace = uuid::Uuid::from_u128(0x3000_0000_0000_0000_0000_0000_0000_0000);
+    uuid::Uuid::new_v5(&namespace, agent_id.0.as_bytes())
 }
 
 /// Get or create an Agent partition at the approval level

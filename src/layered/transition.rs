@@ -199,21 +199,11 @@ where
         .map_err(StratumError::Storage)?;
 
     // Find the source of the target layer from staged parents
-    let target_partition_type = match target_layer {
-        LayerType::ManualEdit => "manual",
-        LayerType::AgentEdit => "agent",
-        LayerType::Approval => "approval",
-        LayerType::Staged => "staged",
-    };
-
     for parent_id in &staged_snapshot.parents {
         let parent_snapshot = storage
             .get_snapshot(parent_id)
             .map_err(StratumError::Storage)?;
-        if parent_snapshot
-            .partition_type
-            .contains(target_partition_type)
-        {
+        if partition_type_matches_layer(&parent_snapshot.partition_type, &target_layer) {
             // Switch the staged pointer to this parent
             storage
                 .update_pointer(&staged_pid, parent_id)
@@ -243,6 +233,20 @@ where
 }
 
 // ===== Utility functions =====
+
+/// Check if a partition_type string matches a LayerType via structural matching
+pub fn partition_type_matches_layer(partition_type: &str, target_layer: &LayerType) -> bool {
+    match target_layer {
+        LayerType::ManualEdit => partition_type == "manual",
+        LayerType::AgentEdit => partition_type.starts_with("agent/"),
+        LayerType::Approval => {
+            partition_type.starts_with("approval/")
+                || partition_type.starts_with("integrated/")
+                || partition_type == "unified"
+        }
+        LayerType::Staged => partition_type == "staged",
+    }
+}
 
 /// Reconstructs the complete text content from Snapshot's delta chains
 ///

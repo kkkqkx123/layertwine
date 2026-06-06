@@ -1,7 +1,12 @@
 //! staged layer operation
 //!
-//The Staged layer is the last layer before submission. The Staged layer is the last layer before the commit, and the contents of the Approval layer are merged into this layer.
-//! can be packaged as a Checkpoint via commit.
+//! The Staged layer is the last layer before commit submission.
+//! It serves as the final preparation area for checkpoint commits.
+//!
+//! Responsibility:
+//! 1. Accept merge results from unified layer (unique entry point)
+//! 2. Support final validation before checkpoint submission
+//! 3. Provide checkpoint commit functionality
 
 use crate::checkpoint::checkpoint::{Checkpoint, CheckpointMetadata};
 use crate::core::delta::Delta;
@@ -14,6 +19,33 @@ use crate::storage::repository::{
     BranchStore, CheckpointStore, DagStore, DeltaStore, FileNodeStore, PartitionStore,
     SnapshotStore,
 };
+
+/// Validation result for staged before commit
+#[derive(Debug, Clone, PartialEq)]
+pub enum ValidationResult {
+    /// Staged is ready to commit
+    Ready,
+    /// Staged has unresolved conflicts
+    HasConflicts(Vec<String>),
+    /// Staged has other unresolved problems
+    HasUnresolvedProblems(Vec<String>),
+}
+
+impl ValidationResult {
+    /// Check if staged is ready to commit
+    pub fn is_ready(&self) -> bool {
+        matches!(self, ValidationResult::Ready)
+    }
+
+    /// Get error messages if validation failed
+    pub fn get_errors(&self) -> Vec<String> {
+        match self {
+            ValidationResult::Ready => vec![],
+            ValidationResult::HasConflicts(errors) => errors.clone(),
+            ValidationResult::HasUnresolvedProblems(errors) => errors.clone(),
+        }
+    }
+}
 
 /// Fixed ID of the staged partition
 pub fn staged_partition_id() -> PartitionId {
@@ -102,8 +134,11 @@ where
 }
 
 /// Merge the contents of the Unified partition into the staged
+/// 
+/// This is the UNIQUE entry point for merging into staged.
+/// All content should flow through the unified layer before reaching staged.
+/// This ensures proper three-way merging and conflict detection.
 ///
-/// Takes the current snapshot of the Unified partition and merges it into staged.
 /// This is the final step of the approval pipeline: approval_agent → integrated → unified → staged.
 pub fn merge_unified_to_staged<S>(storage: &S) -> Result<SnapshotId>
 where
@@ -122,6 +157,11 @@ where
             "staged partition not found, call ensure_staged_partition first".into(),
         )
     })?;
+
+    // If unified and staged point to the same snapshot, no merge needed
+    if unified_partition.current_snapshot == staged_partition.current_snapshot {
+        return Ok(staged_partition.current_snapshot);
+    }
 
     let unified_snapshot = storage
         .get_snapshot(&unified_partition.current_snapshot)
@@ -159,6 +199,39 @@ where
     Ok(new_snapshot.id)
 }
 
+/// Validate staged before commit
+///
+/// Checks if staged is ready to commit by:
+/// 1. Verifying staged contains all content from unified
+/// 2. Checking for unresolved conflicts
+/// 3. Checking for other problems
+pub fn validate_staged_for_commit<S>(storage: &S) -> Result<ValidationResult>
+where
+    S: SnapshotStore + PartitionStore,
+{
+    let unified_pid = crate::layered::integrated::unified_partition_id();
+    let staged_pid = staged_partition_id();
+
+    let unified = storage.get_partition(&unified_pid).map_err(|_| {
+        StratumError::NotFound("unified partition not found".into())
+    })?;
+    let staged = storage.get_partition(&staged_pid).map_err(|_| {
+        StratumError::NotFound("staged partition not found".into())
+    })?;
+
+    // Check if staged contains unified content
+    if staged.current_snapshot == unified.current_snapshot {
+        Ok(ValidationResult::Ready)
+    } else {
+        // Check if there are unresolved conflicts or other problems
+        // TODO: Need to record conflict status during merge
+        // For now, we assume if staged != unified, there might be pending changes
+        Ok(ValidationResult::HasUnresolvedProblems(vec![
+            "Staged does not contain all unified content. Call merge_unified_to_staged first.".to_string(),
+        ]))
+    }
+}
+
 /// Submit staged as Checkpoint
 ///
 /// 1. Get staged partition current snapshot
@@ -170,6 +243,7 @@ where
 /// 7. Return the new CheckpointId
 pub fn commit_staged_to_checkpoint<S>(
     storage: &S,
+    branch_name: &str,
     message: &str,
     author: &str,
 ) -> Result<CheckpointId>
@@ -183,8 +257,7 @@ where
         .map_err(|_| StratumError::NotFound("staged partition not found".into()))?;
     let current_snapshot_id = staged_partition.current_snapshot;
 
-    // 2. Get or create a default "main" branch
-    let branch_name = "main";
+    // 2. Get or create branch
     let branch_head = match storage.get_branch(branch_name) {
         Ok(b) => b.head,
         Err(_) => {
@@ -241,9 +314,51 @@ mod tests {
     use crate::storage::repository::{DeltaStore, SnapshotStore};
     use crate::storage::SqliteStorage;
 
-    use crate::layered::test_helpers::{
-        create_initial_snapshot, create_snapshot_with_content, setup_storage,
-    };
+    fn setup_storage() -> SqliteStorage {
+        let storage = SqliteStorage::new_in_memory().unwrap();
+        storage
+            .with_conn(|conn| crate::storage::migrations::initialize_full(conn))
+            .unwrap();
+        storage
+    }
+
+    fn create_initial_snapshot(
+        storage: &SqliteStorage,
+        content: &str,
+    ) -> crate::core::types::SnapshotId {
+        let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
+        storage
+            .store_file_node(&file_node, content.as_bytes())
+            .unwrap();
+        let empty_diff = crate::core::types::LineDiff::new(vec![]);
+        let delta = Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
+        storage.store_delta(&delta).unwrap();
+        let snapshot = Snapshot::new_initial(file_node, delta.id);
+        storage.store_snapshot(&snapshot, b"").unwrap();
+        snapshot.id
+    }
+
+    fn create_snapshot_with_content(
+        storage: &SqliteStorage,
+        parent_id: &crate::core::types::SnapshotId,
+        content: &str,
+        partition_type: &str,
+    ) -> crate::core::types::SnapshotId {
+        let parent = storage.get_snapshot(parent_id).unwrap();
+        let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
+        storage
+            .store_file_node(&file_node, content.as_bytes())
+            .unwrap();
+
+        let parent_text = crate::layered::transition::reconstruct_text(storage, &parent).unwrap();
+        let diff = diff_to_line_diff(&parent_text, content);
+        let delta = Delta::new(file_node, diff, SourceType::Manual);
+        storage.store_delta(&delta).unwrap();
+
+        let snap = Snapshot::from_parent(&parent, delta.id, partition_type.to_string());
+        storage.store_snapshot(&snap, b"").unwrap();
+        snap.id
+    }
 
     fn create_approval_partition(storage: &SqliteStorage, content: &str) -> PartitionId {
         let file_path = "test.txt";
@@ -379,7 +494,7 @@ mod tests {
         let initial_id = create_initial_snapshot(&storage, "base\n");
         ensure_staged_partition(&storage, initial_id).unwrap();
 
-        let cp_id = commit_staged_to_checkpoint(&storage, "test commit", "test-author").unwrap();
+        let cp_id = commit_staged_to_checkpoint(&storage, "main", "test commit", "test-author").unwrap();
 
         let checkpoint = storage.get_checkpoint(&cp_id).unwrap();
         assert_eq!(checkpoint.baseline_snapshots.len(), 1);
@@ -395,8 +510,8 @@ mod tests {
         let initial_id = create_initial_snapshot(&storage, "base\n");
         ensure_staged_partition(&storage, initial_id).unwrap();
 
-        let cp_id1 = commit_staged_to_checkpoint(&storage, "first commit", "test-author").unwrap();
-        let cp_id2 = commit_staged_to_checkpoint(&storage, "second commit", "test-author").unwrap();
+        let cp_id1 = commit_staged_to_checkpoint(&storage, "main", "first commit", "test-author").unwrap();
+        let cp_id2 = commit_staged_to_checkpoint(&storage, "main", "second commit", "test-author").unwrap();
 
         assert_ne!(
             cp_id1, cp_id2,

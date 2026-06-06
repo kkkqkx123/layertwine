@@ -13,16 +13,10 @@ use crate::engine::merge::apply_deltas;
 use crate::error::{Result, StratumError};
 use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
 use std::path::PathBuf;
-/// Generate stable IDs for agent partitions
+/// Generate stable IDs for agent partitions via UUIDv5
 pub fn agent_partition_id(agent_id: &AgentInstanceId) -> PartitionId {
-    let uuid = uuid::Uuid::from_u128(0x2000_0000_0000_0000_0000_0000_0000_0000);
-    let bytes = uuid.as_bytes();
-    let agent_bytes = agent_id.0.as_bytes();
-    let mut new_bytes = *bytes;
-    for (i, b) in agent_bytes.iter().enumerate().take(16) {
-        new_bytes[i] = new_bytes[i].wrapping_add(*b);
-    }
-    uuid::Uuid::from_bytes(new_bytes)
+    let namespace = uuid::Uuid::from_u128(0x2000_0000_0000_0000_0000_0000_0000_0000);
+    uuid::Uuid::new_v5(&namespace, agent_id.0.as_bytes())
 }
 
 /// Getting or creating agent_edit partitions

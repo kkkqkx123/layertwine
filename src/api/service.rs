@@ -537,6 +537,7 @@ impl ApiService for ApiServiceImpl {
         let author = req.author.as_deref().unwrap_or("user");
         let cp_id = crate::layered::staged::commit_staged_to_checkpoint(
             self.storage.as_ref(),
+            "main",
             &req.message,
             author,
         )

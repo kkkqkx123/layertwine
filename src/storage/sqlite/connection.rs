@@ -7,6 +7,14 @@ pub struct SqliteStorage {
     pub conn: Arc<Mutex<Connection>>,
 }
 
+impl Clone for SqliteStorage {
+    fn clone(&self) -> Self {
+        SqliteStorage {
+            conn: self.conn.clone(),
+        }
+    }
+}
+
 impl crate::storage::repository::AtomicOps for SqliteStorage {
     fn with_atomic<F, T>(&self, f: F) -> StorageResult<T>
     where
