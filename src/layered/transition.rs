@@ -23,6 +23,8 @@ pub enum ForwardTransition {
     ApprovalToIntegrated,
     /// integrated → unified
     IntegratedToUnified,
+    /// unified → staged
+    UnifiedToStaged,
 }
 
 /// Type of reverse flow
@@ -83,6 +85,25 @@ pub fn check_rollback_valid(from: &LayerType, to: &LayerType) -> Result<()> {
     Ok(())
 }
 
+// ===== Pointer operations =====
+
+/// Copy current_snapshot pointer from one partition to another (pointer-only, no data writes)
+pub fn migrate_between_partitions<S: PartitionStore>(
+    storage: &S,
+    from_partition_id: &PartitionId,
+    to_partition_id: &PartitionId,
+) -> Result<()> {
+    let from_partition = storage
+        .get_partition(from_partition_id)
+        .map_err(|_| StratumError::NotFound("source partition not found".into()))?;
+
+    storage
+        .update_pointer(to_partition_id, &from_partition.current_snapshot)
+        .map_err(StratumError::Storage)?;
+
+    Ok(())
+}
+
 // ===== Forward transitions =====
 
 /// Implementation of positive flow
@@ -122,11 +143,12 @@ where
                     "ApprovalToIntegrated requires integrated_name parameter".into(),
                 )
             })?;
-            crate::layered::integrated::move_approval_to_integrated(
+            crate::layered::integrated::merge_agent_to_feature(
                 storage,
                 &crate::core::types::AgentInstanceId(agent_id.to_string()),
                 integrated_name,
             )
+            .map(|r| r.snapshot_id)
         }
         ForwardTransition::IntegratedToUnified => {
             // integrated_names passed in via params, separated by commas
@@ -138,6 +160,10 @@ where
             let names: Vec<String> = names_str.split(',').map(|s| s.trim().to_string()).collect();
             crate::layered::unified::merge_features_to_unified(storage, &names)
                 .map(|r| r.snapshot_id)
+        }
+        ForwardTransition::UnifiedToStaged => {
+            check_forward_valid(&LayerType::Unified, &LayerType::Staged)?;
+            crate::layered::staged::merge_unified_to_staged(storage)
         }
     }
 }

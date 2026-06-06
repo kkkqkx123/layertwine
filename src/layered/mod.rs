@@ -1,6 +1,6 @@
 //! Layered State Machine Module (Phase 3)
 //!
-//! Manages the four-layer pipeline: manual_edit → agent_edit → approval → staged.
+//! Manages the six-layer pipeline: manual_edit → agent_edit → approval → integrated → unified → staged.
 //! Provides forward flow and reverse rollback with ironclad layer-gating rules.
 
 pub mod agent;
@@ -221,7 +221,7 @@ mod tests {
     use crate::core::snapshot::Snapshot;
     use crate::core::types::{LayerType, SourceType};
     use crate::storage::repository::{
-        BranchStore, DeltaStore, FileNodeStore, PartitionStore, SnapshotStore,
+        DeltaStore, FileNodeStore, PartitionStore, SnapshotStore,
     };
     use crate::storage::SqliteStorage;
     use std::sync::Arc;

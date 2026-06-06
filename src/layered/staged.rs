@@ -251,7 +251,7 @@ mod tests {
     use crate::core::delta::Delta;
     use crate::core::file_node::FileNode;
     use crate::core::snapshot::Snapshot;
-    use crate::core::types::{AgentInstanceId, PartitionType, SourceType};
+    use crate::core::types::{PartitionType, SourceType};
     use crate::engine::diff::diff_to_line_diff;
     use crate::storage::repository::FileNodeStore;
     use crate::storage::repository::{DeltaStore, SnapshotStore};

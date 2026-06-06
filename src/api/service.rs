@@ -511,11 +511,12 @@ impl ApiService for ApiServiceImpl {
     fn approve(&self, req: ApproveRequest) -> ApiResult<ApproveResponse> {
         let agent_instance = AgentInstanceId(req.agent_id.clone());
 
-        let integrated_id = crate::layered::integrated::move_approval_to_integrated(
+        let integrated_id = crate::layered::integrated::merge_agent_to_feature(
             self.storage.as_ref(),
             &agent_instance,
             &req.agent_id,
         )
+        .map(|r| r.snapshot_id)
         .map_err(map_error)?;
 
         let integration_names: Vec<String> = self
@@ -825,11 +826,12 @@ impl ApiService for ApiServiceImpl {
             .unwrap_or_else(|| req.agent_id.clone());
 
         let integrated_snapshot_id =
-            crate::layered::integrated::move_approval_to_integrated(
+            crate::layered::integrated::merge_agent_to_feature(
                 self.storage.as_ref(),
                 &agent_instance,
                 &integrated_name,
             )
+            .map(|r| r.snapshot_id)
             .map_err(map_error)?;
 
         Ok(ApproveAgentResponse {

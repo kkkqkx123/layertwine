@@ -1,7 +1,8 @@
 //! Unified partition operations
 //!
-//! The Unified partition is the final aggregation point within the approval layer.
-//! Individual feature (Integrated) partitions are merged here before flowing into Staged.
+//! The Unified partition is the aggregation point between Integrated and Staged layers.
+//! Individual feature (Integrated) partitions are merged here via three-way merge
+//! using each feature's own baseline, before flowing into Staged.
 //!
 //! Flow: approval_agent → integrated → unified → staged
 
