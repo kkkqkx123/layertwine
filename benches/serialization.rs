@@ -1,8 +1,8 @@
+use std::path::PathBuf;
 use stratum::core::delta::Delta;
 use stratum::core::file_node::FileNode;
 use stratum::core::snapshot::Snapshot;
 use stratum::core::types::{ContentId, DiffOp, Hunk, LineDiff, SourceType};
-use std::path::PathBuf;
 
 fn generate_test_text(lines: usize) -> String {
     (0..lines).map(|i| format!("line {}\n", i)).collect()
@@ -43,8 +43,8 @@ fn create_test_snapshot(lines: usize) -> Snapshot {
 fn create_complex_delta(_lines: usize, num_hunks: usize) -> Delta {
     let file_node = FileNode::new(PathBuf::from("test.txt"), b"base content\n");
 
-    let hunks = (0..num_hunks).map(|i| {
-        Hunk {
+    let hunks = (0..num_hunks)
+        .map(|i| Hunk {
             old_start: (i * 10 + 1) as u32,
             old_len: 5,
             new_start: (i * 10 + 1) as u32,
@@ -59,70 +59,115 @@ fn create_complex_delta(_lines: usize, num_hunks: usize) -> Delta {
                 },
                 DiffOp::Equal { count: 2 },
             ],
-        }
-    }).collect();
+        })
+        .collect();
 
     let diff = LineDiff { hunks };
     Delta::new(file_node, diff, SourceType::Manual)
 }
 
-fn benchmark_serialize_delta(c: &mut criterion::Criterion, name: &str, lines: usize, change_rate: f64) {
+fn benchmark_serialize_delta(
+    c: &mut criterion::Criterion,
+    name: &str,
+    lines: usize,
+    change_rate: f64,
+) {
     let delta = create_test_delta(lines, change_rate);
 
-    c.bench_function(&format!("serialize_delta_{}_{}_lines_{}_percent", name, lines, (change_rate * 100.0) as usize), |b| {
-        b.iter(|| serde_json::to_vec(&delta))
-    });
+    c.bench_function(
+        &format!(
+            "serialize_delta_{}_{}_lines_{}_percent",
+            name,
+            lines,
+            (change_rate * 100.0) as usize
+        ),
+        |b| b.iter(|| serde_json::to_vec(&delta)),
+    );
 }
 
-fn benchmark_deserialize_delta(c: &mut criterion::Criterion, name: &str, lines: usize, change_rate: f64) {
+fn benchmark_deserialize_delta(
+    c: &mut criterion::Criterion,
+    name: &str,
+    lines: usize,
+    change_rate: f64,
+) {
     let delta = create_test_delta(lines, change_rate);
     let serialized = serde_json::to_vec(&delta).unwrap();
 
-    c.bench_function(&format!("deserialize_delta_{}_{}_lines_{}_percent", name, lines, (change_rate * 100.0) as usize), |b| {
-        b.iter(|| serde_json::from_slice::<Delta>(&serialized))
-    });
+    c.bench_function(
+        &format!(
+            "deserialize_delta_{}_{}_lines_{}_percent",
+            name,
+            lines,
+            (change_rate * 100.0) as usize
+        ),
+        |b| b.iter(|| serde_json::from_slice::<Delta>(&serialized)),
+    );
 }
 
 fn benchmark_serialize_snapshot(c: &mut criterion::Criterion, name: &str, lines: usize) {
     let snapshot = create_test_snapshot(lines);
 
-    c.bench_function(&format!("serialize_snapshot_{}_{}_lines", name, lines), |b| {
-        b.iter(|| serde_json::to_vec(&snapshot))
-    });
+    c.bench_function(
+        &format!("serialize_snapshot_{}_{}_lines", name, lines),
+        |b| b.iter(|| serde_json::to_vec(&snapshot)),
+    );
 }
 
 fn benchmark_deserialize_snapshot(c: &mut criterion::Criterion, name: &str, lines: usize) {
     let snapshot = create_test_snapshot(lines);
     let serialized = serde_json::to_vec(&snapshot).unwrap();
 
-    c.bench_function(&format!("deserialize_snapshot_{}_{}_lines", name, lines), |b| {
-        b.iter(|| serde_json::from_slice::<Snapshot>(&serialized))
-    });
+    c.bench_function(
+        &format!("deserialize_snapshot_{}_{}_lines", name, lines),
+        |b| b.iter(|| serde_json::from_slice::<Snapshot>(&serialized)),
+    );
 }
 
-fn benchmark_serialize_complex_delta(c: &mut criterion::Criterion, name: &str, lines: usize, num_hunks: usize) {
+fn benchmark_serialize_complex_delta(
+    c: &mut criterion::Criterion,
+    name: &str,
+    lines: usize,
+    num_hunks: usize,
+) {
     let delta = create_complex_delta(lines, num_hunks);
 
-    c.bench_function(&format!("serialize_complex_delta_{}_{}_lines_{}_hunks", name, lines, num_hunks), |b| {
-        b.iter(|| serde_json::to_vec(&delta))
-    });
+    c.bench_function(
+        &format!(
+            "serialize_complex_delta_{}_{}_lines_{}_hunks",
+            name, lines, num_hunks
+        ),
+        |b| b.iter(|| serde_json::to_vec(&delta)),
+    );
 }
 
-fn benchmark_serialize_line_diff(c: &mut criterion::Criterion, name: &str, lines: usize, change_rate: f64) {
+fn benchmark_serialize_line_diff(
+    c: &mut criterion::Criterion,
+    name: &str,
+    lines: usize,
+    change_rate: f64,
+) {
     let delta = create_test_delta(lines, change_rate);
 
-    c.bench_function(&format!("serialize_line_diff_{}_{}_lines_{}_percent", name, lines, (change_rate * 100.0) as usize), |b| {
-        b.iter(|| serde_json::to_vec(&delta.diff))
-    });
+    c.bench_function(
+        &format!(
+            "serialize_line_diff_{}_{}_lines_{}_percent",
+            name,
+            lines,
+            (change_rate * 100.0) as usize
+        ),
+        |b| b.iter(|| serde_json::to_vec(&delta.diff)),
+    );
 }
 
 fn benchmark_serialize_file_node(c: &mut criterion::Criterion, name: &str, lines: usize) {
     let content = generate_test_text(lines).as_bytes().to_vec();
     let file_node = FileNode::new(PathBuf::from("test.txt"), &content);
 
-    c.bench_function(&format!("serialize_file_node_{}_{}_lines", name, lines), |b| {
-        b.iter(|| serde_json::to_vec(&file_node))
-    });
+    c.bench_function(
+        &format!("serialize_file_node_{}_{}_lines", name, lines),
+        |b| b.iter(|| serde_json::to_vec(&file_node)),
+    );
 }
 
 pub fn bench_serialize_delta(c: &mut criterion::Criterion) {

@@ -5,8 +5,8 @@
 
 use crate::core::partition::Partition;
 use crate::core::types::{AgentInstanceId, PartitionId, PartitionType, SnapshotId};
-use crate::error::{Result, StratumError};
 use crate::error::StorageError;
+use crate::error::{Result, StratumError};
 use crate::storage::repository::PartitionStore;
 use rusqlite::params;
 
@@ -92,12 +92,9 @@ pub fn reject_approval<S: PartitionStore + 'static>(
         let now = chrono::Utc::now().timestamp_millis();
         conn.execute(
             "UPDATE partitions SET current_snapshot = ?1, updated_at = ?2 WHERE id = ?3",
-            params![
-                &base_snapshot.0.to_vec(),
-                now,
-                &pid.as_bytes().to_vec()
-            ],
-        ).map_err(|e| StratumError::Storage(StorageError::Database(e)))?;
+            params![&base_snapshot.0.to_vec(), now, &pid.as_bytes().to_vec()],
+        )
+        .map_err(|e| StratumError::Storage(StorageError::Database(e)))?;
 
         // Delete all history except the first (baseline)
         conn.execute(
@@ -107,7 +104,8 @@ pub fn reject_approval<S: PartitionStore + 'static>(
                  WHERE partition_id = ?1 ORDER BY seq ASC LIMIT 1
              )",
             params![&pid.as_bytes().to_vec()],
-        ).map_err(|e| StratumError::Storage(StorageError::Database(e)))?;
+        )
+        .map_err(|e| StratumError::Storage(StorageError::Database(e)))?;
 
         Ok(*base_snapshot)
     } else {

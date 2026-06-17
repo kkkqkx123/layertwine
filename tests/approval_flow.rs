@@ -1,12 +1,12 @@
 //! Approval flow E2E tests
 
-use stratum::api::{InitRequest, CommitRequest, LogRequest, ApiService};
-use stratum::core::types::SnapshotId;
-use stratum::storage::repository::PartitionStore;
-use crate::common::fixture::{TestEnvironment, TestConfig};
+use crate::common::assertions::*;
+use crate::common::fixture::{TestConfig, TestEnvironment};
 use crate::common::helpers::*;
 use crate::common::output::*;
-use crate::common::assertions::*;
+use stratum::api::{ApiService, CommitRequest, InitRequest, LogRequest};
+use stratum::core::types::SnapshotId;
+use stratum::storage::repository::PartitionStore;
 
 #[test]
 fn test_complete_approval_flow() {
@@ -30,61 +30,90 @@ fn test_complete_approval_flow() {
     print_info("Step 3: Agent workflow - edit");
     let agent_content = "Base line\nAgent addition";
     let agent_snapshot = apply_agent_edit(&env, "test-agent", "approval_test.txt", &agent_content);
-    print_success(&format!("Agent edit applied, snapshot_id: {}", agent_snapshot.to_hex()));
+    print_success(&format!(
+        "Agent edit applied, snapshot_id: {}",
+        agent_snapshot.to_hex()
+    ));
 
     print_info("Step 4: Agent workflow - submit");
     let submit_snapshot = submit_agent(&env, "test-agent");
-    print_success(&format!("Agent submitted, snapshot_id: {}", submit_snapshot.to_hex()));
+    print_success(&format!(
+        "Agent submitted, snapshot_id: {}",
+        submit_snapshot.to_hex()
+    ));
 
     // Verify approval layer
     print_info("Step 5: Verify approval layer");
-    let approval_partitions = get_partitions_by_layer(&env, stratum::core::types::LayerType::Approval);
-    assert!(!approval_partitions.is_empty(), "approval layer should have partitions");
+    let approval_partitions =
+        get_partitions_by_layer(&env, stratum::core::types::LayerType::Approval);
+    assert!(
+        !approval_partitions.is_empty(),
+        "approval layer should have partitions"
+    );
 
     print_info("Approval layer partitions:");
     for partition in &approval_partitions {
-        print_info(&format!("  - {}, snapshot: {}, history: {}",
+        print_info(&format!(
+            "  - {}, snapshot: {}, history: {}",
             partition.name,
             truncate_id(&partition.current_snapshot.to_hex()),
-            partition.history.len()));
+            partition.history.len()
+        ));
     }
 
     // Verify pending approvals
     print_info("Step 6: List pending approvals");
-    let pending = env.api.list_pending_approvals()
+    let pending = env
+        .api
+        .list_pending_approvals()
         .expect("Failed to list pending approvals");
 
     print_info(&format!("Pending approvals: {}", pending.total));
     for approval in &pending.approvals {
-        print_info(&format!("  - Agent: {}, Partition: {}, Snapshot: {}",
+        print_info(&format!(
+            "  - Agent: {}, Partition: {}, Snapshot: {}",
             approval.agent_id,
             approval.partition_name,
-            truncate_id(&approval.current_snapshot)));
+            truncate_id(&approval.current_snapshot)
+        ));
     }
 
     assert_eq!(pending.total, 1, "Should have 1 pending approval");
-    assert_eq!(pending.approvals[0].agent_id, "test-agent",
-        "Pending approval should be for test-agent");
+    assert_eq!(
+        pending.approvals[0].agent_id, "test-agent",
+        "Pending approval should be for test-agent"
+    );
 
     print_info("Step 7: Agent workflow - approve");
-    let approve_response = env.api.approve_agent(stratum::api::ApproveAgentRequest {
-        agent_id: "test-agent".to_string(),
-        integrated_name: Some("test-feature".to_string()),
-    }).expect("Failed to approve agent");
-    print_success(&format!("Agent approved, snapshot_id: {}",
-        truncate_id(&approve_response.integrated_snapshot_id)));
+    let approve_response = env
+        .api
+        .approve_agent(stratum::api::ApproveAgentRequest {
+            agent_id: "test-agent".to_string(),
+            integrated_name: Some("test-feature".to_string()),
+        })
+        .expect("Failed to approve agent");
+    print_success(&format!(
+        "Agent approved, snapshot_id: {}",
+        truncate_id(&approve_response.integrated_snapshot_id)
+    ));
 
     // Verify integrated layer
     print_info("Step 8: Verify integrated layer");
-    let integrated_partitions = get_partitions_by_layer(&env, stratum::core::types::LayerType::Integrated);
-    assert!(!integrated_partitions.is_empty(), "integrated layer should have partitions");
+    let integrated_partitions =
+        get_partitions_by_layer(&env, stratum::core::types::LayerType::Integrated);
+    assert!(
+        !integrated_partitions.is_empty(),
+        "integrated layer should have partitions"
+    );
 
     print_info("Integrated layer partitions:");
     for partition in &integrated_partitions {
-        print_info(&format!("  - {}, snapshot: {}, history: {}",
+        print_info(&format!(
+            "  - {}, snapshot: {}, history: {}",
             partition.name,
             truncate_id(&partition.current_snapshot.to_hex()),
-            partition.history.len()));
+            partition.history.len()
+        ));
     }
 
     // Merge to unified layer
@@ -94,8 +123,12 @@ fn test_complete_approval_flow() {
 
     // Verify unified layer
     print_info("Step 10: Verify unified layer");
-    let unified_partitions = get_partitions_by_layer(&env, stratum::core::types::LayerType::Unified);
-    assert!(!unified_partitions.is_empty(), "unified layer should have partitions");
+    let unified_partitions =
+        get_partitions_by_layer(&env, stratum::core::types::LayerType::Unified);
+    assert!(
+        !unified_partitions.is_empty(),
+        "unified layer should have partitions"
+    );
 
     // Merge unified to staged layer
     print_info("Step 10.5: Merge unified to staged layer");
@@ -105,7 +138,10 @@ fn test_complete_approval_flow() {
     // Verify staged layer
     print_info("Step 11: Verify staged layer");
     let staged_partitions = get_partitions_by_layer(&env, stratum::core::types::LayerType::Staged);
-    assert!(!staged_partitions.is_empty(), "staged layer should have partitions");
+    assert!(
+        !staged_partitions.is_empty(),
+        "staged layer should have partitions"
+    );
 
     // Commit merged changes
     print_info("Step 12: Commit staged changes");
@@ -114,13 +150,19 @@ fn test_complete_approval_flow() {
 
     // Verify no pending approvals (note: approval partitions are not cleared after approval)
     print_info("Step 13: Verify pending approvals");
-    let pending_after = env.api.list_pending_approvals()
+    let pending_after = env
+        .api
+        .list_pending_approvals()
         .expect("Failed to list pending approvals");
 
     print_info(&format!("Pending approvals: {}", pending_after.total));
     for approval in &pending_after.approvals {
-        print_info(&format!("  - Agent: {}, Snapshot: {}, History: {}",
-            approval.agent_id, truncate_id(&approval.current_snapshot), approval.history_len));
+        print_info(&format!(
+            "  - Agent: {}, Snapshot: {}, History: {}",
+            approval.agent_id,
+            truncate_id(&approval.current_snapshot),
+            approval.history_len
+        ));
     }
 
     // Note: Approval partitions remain after approval, this is current design
@@ -144,7 +186,9 @@ fn test_complete_approval_flow() {
 
     // Final state
     print_info("Final state verification");
-    let all_partitions = env.storage.list_partitions()
+    let all_partitions = env
+        .storage
+        .list_partitions()
         .expect("Failed to list partitions");
     print_all_layer_states(&all_partitions);
 
@@ -178,31 +222,42 @@ fn test_multiple_agents_pending() {
 
     // Verify all pending approvals
     print_info("Step 3: Verify pending approvals");
-    let pending = env.api.list_pending_approvals()
+    let pending = env
+        .api
+        .list_pending_approvals()
         .expect("Failed to list pending approvals");
 
     print_info(&format!("Pending approvals: {}", pending.total));
     for approval in &pending.approvals {
-        print_info(&format!("  - Agent: {}, Partition: {}",
-            approval.agent_id, approval.partition_name));
+        print_info(&format!(
+            "  - Agent: {}, Partition: {}",
+            approval.agent_id, approval.partition_name
+        ));
     }
 
     assert_eq!(pending.total, 3, "Should have 3 pending approvals");
 
     // Approve first agent
     print_info("Step 4: Approve first agent");
-    env.api.approve_agent(stratum::api::ApproveAgentRequest {
-        agent_id: "agent-1".to_string(),
-        integrated_name: Some("feature-1".to_string()),
-    }).expect("Failed to approve agent-1");
+    env.api
+        .approve_agent(stratum::api::ApproveAgentRequest {
+            agent_id: "agent-1".to_string(),
+            integrated_name: Some("feature-1".to_string()),
+        })
+        .expect("Failed to approve agent-1");
     print_success("agent-1 approved");
 
     // Verify remaining pending approvals
     print_info("Step 5: Verify remaining pending approvals");
-    let pending_after = env.api.list_pending_approvals()
+    let pending_after = env
+        .api
+        .list_pending_approvals()
         .expect("Failed to list pending approvals");
 
-    print_info(&format!("Remaining pending approvals: {}", pending_after.total));
+    print_info(&format!(
+        "Remaining pending approvals: {}",
+        pending_after.total
+    ));
     for approval in &pending_after.approvals {
         print_info(&format!("  - Agent: {}", approval.agent_id));
     }
@@ -212,23 +267,29 @@ fn test_multiple_agents_pending() {
 
     // Approve second agent
     print_info("Step 6: Approve second agent");
-    env.api.approve_agent(stratum::api::ApproveAgentRequest {
-        agent_id: "agent-2".to_string(),
-        integrated_name: Some("feature-2".to_string()),
-    }).expect("Failed to approve agent-2");
+    env.api
+        .approve_agent(stratum::api::ApproveAgentRequest {
+            agent_id: "agent-2".to_string(),
+            integrated_name: Some("feature-2".to_string()),
+        })
+        .expect("Failed to approve agent-2");
     print_success("agent-2 approved");
 
     // Approve third agent
     print_info("Step 7: Approve third agent");
-    env.api.approve_agent(stratum::api::ApproveAgentRequest {
-        agent_id: "agent-3".to_string(),
-        integrated_name: Some("feature-3".to_string()),
-    }).expect("Failed to approve agent-3");
+    env.api
+        .approve_agent(stratum::api::ApproveAgentRequest {
+            agent_id: "agent-3".to_string(),
+            integrated_name: Some("feature-3".to_string()),
+        })
+        .expect("Failed to approve agent-3");
     print_success("agent-3 approved");
 
     // Verify no pending approvals
     print_info("Step 8: Verify no pending approvals");
-    let pending_final = env.api.list_pending_approvals()
+    let pending_final = env
+        .api
+        .list_pending_approvals()
         .expect("Failed to list pending approvals");
 
     print_info(&format!("Final pending approvals: {}", pending_final.total));
@@ -257,19 +318,32 @@ fn test_multiple_agents_pending() {
 
     // Verify all features in integrated
     print_info("Step 10: Verify all features in integrated");
-    let integrated_partitions = get_partitions_by_layer(&env, stratum::core::types::LayerType::Integrated);
+    let integrated_partitions =
+        get_partitions_by_layer(&env, stratum::core::types::LayerType::Integrated);
 
     print_info("Integrated partitions:");
     for p in &integrated_partitions {
         print_info(&format!("  - {}", p.name));
     }
 
-    assert!(integrated_partitions.iter().any(|p| p.name.contains("feature-1")),
-        "feature-1 should be in integrated");
-    assert!(integrated_partitions.iter().any(|p| p.name.contains("feature-2")),
-        "feature-2 should be in integrated");
-    assert!(integrated_partitions.iter().any(|p| p.name.contains("feature-3")),
-        "feature-3 should be in integrated");
+    assert!(
+        integrated_partitions
+            .iter()
+            .any(|p| p.name.contains("feature-1")),
+        "feature-1 should be in integrated"
+    );
+    assert!(
+        integrated_partitions
+            .iter()
+            .any(|p| p.name.contains("feature-2")),
+        "feature-2 should be in integrated"
+    );
+    assert!(
+        integrated_partitions
+            .iter()
+            .any(|p| p.name.contains("feature-3")),
+        "feature-3 should be in integrated"
+    );
 
     print_success("All features verified in integrated");
 
@@ -294,52 +368,73 @@ fn test_approval_workflow_states() {
 
     // Initial state
     print_info("  Initial state:");
-    let all_partitions = env.storage.list_partitions()
+    let all_partitions = env
+        .storage
+        .list_partitions()
         .expect("Failed to list partitions");
     print_all_layer_states(&all_partitions);
 
     // Agent edit
     print_info("  After agent edit:");
-    apply_agent_edit(&env, "workflow-agent", "workflow.txt", "Initial\nAgent edit");
-    let all_partitions = env.storage.list_partitions()
+    apply_agent_edit(
+        &env,
+        "workflow-agent",
+        "workflow.txt",
+        "Initial\nAgent edit",
+    );
+    let all_partitions = env
+        .storage
+        .list_partitions()
         .expect("Failed to list partitions");
     print_all_layer_states(&all_partitions);
 
     // Agent submit
     print_info("  After agent submit:");
     submit_agent(&env, "workflow-agent");
-    let all_partitions = env.storage.list_partitions()
+    let all_partitions = env
+        .storage
+        .list_partitions()
         .expect("Failed to list partitions");
     print_all_layer_states(&all_partitions);
 
     // Approve
     print_info("  After approval:");
-    env.api.approve_agent(stratum::api::ApproveAgentRequest {
-        agent_id: "workflow-agent".to_string(),
-        integrated_name: Some("workflow-feature".to_string()),
-    }).expect("Failed to approve");
-    let all_partitions = env.storage.list_partitions()
+    env.api
+        .approve_agent(stratum::api::ApproveAgentRequest {
+            agent_id: "workflow-agent".to_string(),
+            integrated_name: Some("workflow-feature".to_string()),
+        })
+        .expect("Failed to approve");
+    let all_partitions = env
+        .storage
+        .list_partitions()
         .expect("Failed to list partitions");
     print_all_layer_states(&all_partitions);
 
     // Merge to unified
     print_info("  After merge to unified:");
     merge_to_unified(&env, None);
-    let all_partitions = env.storage.list_partitions()
+    let all_partitions = env
+        .storage
+        .list_partitions()
         .expect("Failed to list partitions");
     print_all_layer_states(&all_partitions);
 
     // Merge to staged
     print_info("  After merge to staged:");
     merge_to_staged(&env);
-    let all_partitions = env.storage.list_partitions()
+    let all_partitions = env
+        .storage
+        .list_partitions()
         .expect("Failed to list partitions");
     print_all_layer_states(&all_partitions);
 
     // Commit
     print_info("  After commit:");
     commit_changes(&env, "Complete workflow", "user-1");
-    let all_partitions = env.storage.list_partitions()
+    let all_partitions = env
+        .storage
+        .list_partitions()
         .expect("Failed to list partitions");
     print_all_layer_states(&all_partitions);
 

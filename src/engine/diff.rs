@@ -10,10 +10,10 @@ use std::path::PathBuf;
 
 // Performance optimizations
 use lazy_static::lazy_static;
-use std::collections::HashMap;
-use std::sync::Mutex;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::Mutex;
 
 lazy_static! {
     static ref DIFF_CACHE: Mutex<HashMap<u64, String>> = Mutex::new(HashMap::new());

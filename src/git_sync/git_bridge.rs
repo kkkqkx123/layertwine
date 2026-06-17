@@ -499,7 +499,9 @@ mod tests {
         // Create initial snapshot
         let initial_content = b"initial content";
         let file_node1 = FileNode::new(PathBuf::from("pushed.txt"), initial_content);
-        storage.store_file_node(&file_node1, initial_content).unwrap();
+        storage
+            .store_file_node(&file_node1, initial_content)
+            .unwrap();
         let diff1 = LineDiff::new(vec![]);
         let delta1 = Delta::new(file_node1.clone(), diff1, SourceType::Manual);
         storage.store_delta(&delta1).unwrap();
@@ -511,15 +513,13 @@ mod tests {
         // Create a new snapshot with different content
         let modified_content = b"test content for push";
         let file_node2 = FileNode::new(PathBuf::from("pushed.txt"), modified_content);
-        storage.store_file_node(&file_node2, modified_content).unwrap();
+        storage
+            .store_file_node(&file_node2, modified_content)
+            .unwrap();
         let diff2 = diff_to_line_diff("initial content", "test content for push");
         let delta2 = Delta::new(file_node2.clone(), diff2, SourceType::Manual);
         storage.store_delta(&delta2).unwrap();
-        let snapshot2 = Snapshot::from_parent(
-            &snapshot1,
-            delta2.id,
-            "manual_edit".to_string(),
-        );
+        let snapshot2 = Snapshot::from_parent(&snapshot1, delta2.id, "manual_edit".to_string());
         storage.store_snapshot(&snapshot2, b"").unwrap();
 
         // Commit the modified snapshot
@@ -692,7 +692,9 @@ mod tests {
         // Create initial snapshot
         let initial_content = b"initial content";
         let file_node1 = FileNode::new(PathBuf::from("empty.txt"), initial_content);
-        storage.store_file_node(&file_node1, initial_content).unwrap();
+        storage
+            .store_file_node(&file_node1, initial_content)
+            .unwrap();
         let diff1 = LineDiff::new(vec![]);
         let delta1 = Delta::new(file_node1.clone(), diff1, SourceType::Manual);
         storage.store_delta(&delta1).unwrap();
@@ -704,15 +706,13 @@ mod tests {
         // Create a new snapshot with different content
         let modified_content = b"empty test";
         let file_node2 = FileNode::new(PathBuf::from("empty.txt"), modified_content);
-        storage.store_file_node(&file_node2, modified_content).unwrap();
+        storage
+            .store_file_node(&file_node2, modified_content)
+            .unwrap();
         let diff2 = diff_to_line_diff("initial content", "empty test");
         let delta2 = Delta::new(file_node2.clone(), diff2, SourceType::Manual);
         storage.store_delta(&delta2).unwrap();
-        let snapshot2 = Snapshot::from_parent(
-            &snapshot1,
-            delta2.id,
-            "manual_edit".to_string(),
-        );
+        let snapshot2 = Snapshot::from_parent(&snapshot1, delta2.id, "manual_edit".to_string());
         storage.store_snapshot(&snapshot2, b"").unwrap();
 
         // Commit the modified snapshot
@@ -801,7 +801,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn test_compare_status_ahead() {
         let dir = tempfile::tempdir().unwrap();
         let git_path = dir.path().join("git_repo");
@@ -813,7 +813,9 @@ mod tests {
         // Create initial snapshot
         let initial_content = b"initial content";
         let file_node1 = FileNode::new(PathBuf::from("ahead.txt"), initial_content);
-        storage.store_file_node(&file_node1, initial_content).unwrap();
+        storage
+            .store_file_node(&file_node1, initial_content)
+            .unwrap();
         let diff1 = LineDiff::new(vec![]);
         let delta1 = Delta::new(file_node1.clone(), diff1, SourceType::Manual);
         storage.store_delta(&delta1).unwrap();
@@ -825,15 +827,13 @@ mod tests {
         // Create a new snapshot with different content
         let modified_content = b"ahead test";
         let file_node2 = FileNode::new(PathBuf::from("ahead.txt"), modified_content);
-        storage.store_file_node(&file_node2, modified_content).unwrap();
+        storage
+            .store_file_node(&file_node2, modified_content)
+            .unwrap();
         let diff2 = diff_to_line_diff("initial content", "ahead test");
         let delta2 = Delta::new(file_node2.clone(), diff2, SourceType::Manual);
         storage.store_delta(&delta2).unwrap();
-        let snapshot2 = Snapshot::from_parent(
-            &snapshot1,
-            delta2.id,
-            "manual_edit".to_string(),
-        );
+        let snapshot2 = Snapshot::from_parent(&snapshot1, delta2.id, "manual_edit".to_string());
         storage.store_snapshot(&snapshot2, b"").unwrap();
 
         // Create a new commit with the modified snapshot

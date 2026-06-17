@@ -1,12 +1,12 @@
 //! Basic workflow E2E tests
 
-use stratum::api::{InitRequest, EditRequest, CommitRequest, LogRequest, ApiService};
-use stratum::core::types::SnapshotId;
-use stratum::storage::repository::PartitionStore;
-use crate::common::fixture::{TestEnvironment, TestConfig};
+use crate::common::assertions::*;
+use crate::common::fixture::{TestConfig, TestEnvironment};
 use crate::common::helpers::*;
 use crate::common::output::*;
-use crate::common::assertions::*;
+use stratum::api::{ApiService, CommitRequest, EditRequest, InitRequest, LogRequest};
+use stratum::core::types::SnapshotId;
+use stratum::storage::repository::PartitionStore;
 
 #[test]
 fn test_complete_edit_workflow() {
@@ -20,11 +20,13 @@ fn test_complete_edit_workflow() {
 
     // Step 1: Initialize repository
     print_info("Step 1: Initialize repository");
-    env.api.init(InitRequest {
-        db_path: Some(env.db_path_str()),
-        git_repo: None,
-        git_ref: None,
-    }).expect("Failed to initialize repository");
+    env.api
+        .init(InitRequest {
+            db_path: Some(env.db_path_str()),
+            git_repo: None,
+            git_ref: None,
+        })
+        .expect("Failed to initialize repository");
     print_success("Repository initialized");
 
     // Verify initial state
@@ -34,36 +36,54 @@ fn test_complete_edit_workflow() {
     // Step 2: Apply edit
     print_info("Step 2: Apply edit to 'test.txt'");
     let file_content = "Hello, World!\nThis is a test file.";
-    let edit_response = env.api.edit(EditRequest {
-        file: "test.txt".into(),
-        content: Some(file_content.to_string()),
-    }).expect("Failed to apply edit");
-    print_success(&format!("Edit applied, snapshot_id: {}", &edit_response.snapshot_id[..12]));
+    let edit_response = env
+        .api
+        .edit(EditRequest {
+            file: "test.txt".into(),
+            content: Some(file_content.to_string()),
+        })
+        .expect("Failed to apply edit");
+    print_success(&format!(
+        "Edit applied, snapshot_id: {}",
+        &edit_response.snapshot_id[..12]
+    ));
 
-    let snapshot_id = SnapshotId::from_hex(&edit_response.snapshot_id)
-        .expect("Invalid snapshot ID");
+    let snapshot_id =
+        SnapshotId::from_hex(&edit_response.snapshot_id).expect("Invalid snapshot ID");
     assert_valid_snapshot_id(&snapshot_id);
 
     // Step 3: Commit changes
     print_info("Step 3: Commit changes");
-    let commit_response = env.api.commit(CommitRequest {
-        message: "Initial commit".into(),
-        author: Some("test-user".into()),
-    }).expect("Failed to commit");
-    print_success(&format!("Changes committed, checkpoint_id: {}", &commit_response.checkpoint_id[..12]));
+    let commit_response = env
+        .api
+        .commit(CommitRequest {
+            message: "Initial commit".into(),
+            author: Some("test-user".into()),
+        })
+        .expect("Failed to commit");
+    print_success(&format!(
+        "Changes committed, checkpoint_id: {}",
+        &commit_response.checkpoint_id[..12]
+    ));
 
-    let checkpoint_id = SnapshotId::from_hex(&commit_response.checkpoint_id)
-        .expect("Invalid checkpoint ID");
+    let checkpoint_id =
+        SnapshotId::from_hex(&commit_response.checkpoint_id).expect("Invalid checkpoint ID");
     assert_valid_snapshot_id(&checkpoint_id);
 
     // Step 4: Verify log history
     print_info("Step 4: Verify log history");
-    let log_response = env.api.log(LogRequest { count: Some(10) })
+    let log_response = env
+        .api
+        .log(LogRequest { count: Some(10) })
         .expect("Failed to get log");
 
-    print_checkpoint_log(&log_response.checkpoints.iter()
-        .map(|cp| format!("{}: {}", cp.id, cp.message))
-        .collect::<Vec<_>>());
+    print_checkpoint_log(
+        &log_response
+            .checkpoints
+            .iter()
+            .map(|cp| format!("{}: {}", cp.id, cp.message))
+            .collect::<Vec<_>>(),
+    );
 
     assert_log_entry_count(&env, 1);
     assert_log_contains(&env, "Initial commit");
@@ -147,16 +167,26 @@ fn test_manual_to_staged_flow() {
     print_info("Step 2: Apply manual edit");
     let content = "Manual edit content\nLine 2\nLine 3";
     let snapshot_id = apply_edit(&env, "manual.txt", content);
-    print_success(&format!("Manual edit applied, snapshot_id: {}", snapshot_id.to_hex()));
+    print_success(&format!(
+        "Manual edit applied, snapshot_id: {}",
+        snapshot_id.to_hex()
+    ));
 
     // Verify manual_edit layer
     print_info("Step 3: Verify manual_edit layer");
-    let manual_partitions = get_partitions_by_layer(&env, stratum::core::types::LayerType::ManualEdit);
-    assert!(!manual_partitions.is_empty(), "manual_edit layer should have partitions");
+    let manual_partitions =
+        get_partitions_by_layer(&env, stratum::core::types::LayerType::ManualEdit);
+    assert!(
+        !manual_partitions.is_empty(),
+        "manual_edit layer should have partitions"
+    );
 
     for partition in &manual_partitions {
-        print_info(&format!("  - Partition: {}, current_snapshot: {}",
-            partition.name, truncate_id(&partition.current_snapshot.to_hex())));
+        print_info(&format!(
+            "  - Partition: {}, current_snapshot: {}",
+            partition.name,
+            truncate_id(&partition.current_snapshot.to_hex())
+        ));
     }
 
     // Commit to staged
@@ -167,11 +197,17 @@ fn test_manual_to_staged_flow() {
     // Verify staged layer
     print_info("Step 5: Verify staged layer");
     let staged_partitions = get_partitions_by_layer(&env, stratum::core::types::LayerType::Staged);
-    assert!(!staged_partitions.is_empty(), "staged layer should have partitions");
+    assert!(
+        !staged_partitions.is_empty(),
+        "staged layer should have partitions"
+    );
 
     for partition in &staged_partitions {
-        print_info(&format!("  - Partition: {}, current_snapshot: {}",
-            partition.name, truncate_id(&partition.current_snapshot.to_hex())));
+        print_info(&format!(
+            "  - Partition: {}, current_snapshot: {}",
+            partition.name,
+            truncate_id(&partition.current_snapshot.to_hex())
+        ));
     }
 
     // Verify content reconstruction
@@ -185,7 +221,9 @@ fn test_manual_to_staged_flow() {
 
     // Final state
     print_info("Final state verification");
-    let all_partitions = env.storage.list_partitions()
+    let all_partitions = env
+        .storage
+        .list_partitions()
         .expect("Failed to list partitions");
     print_all_layer_states(&all_partitions);
 
@@ -205,8 +243,7 @@ fn test_file_content_evolution() {
     commit_changes(&env, "Add version 1", "user-1");
     print_success("Version 1 committed");
 
-    let v1_content = reconstruct_text(&env, &v1_snapshot)
-        .expect("Failed to reconstruct V1");
+    let v1_content = reconstruct_text(&env, &v1_snapshot).expect("Failed to reconstruct V1");
     print_info("V1 content:");
     print_file_content(&v1_content, 5);
 
@@ -217,8 +254,7 @@ fn test_file_content_evolution() {
     commit_changes(&env, "Add versions 2 and 3", "user-1");
     print_success("Version 2 committed");
 
-    let reconstructed_v2 = reconstruct_text(&env, &v2_snapshot)
-        .expect("Failed to reconstruct V2");
+    let reconstructed_v2 = reconstruct_text(&env, &v2_snapshot).expect("Failed to reconstruct V2");
     print_info("V2 content:");
     print_file_content(&reconstructed_v2, 5);
     assert_eq!(reconstructed_v2, v2_content, "V2 content mismatch");
@@ -230,8 +266,7 @@ fn test_file_content_evolution() {
     commit_changes(&env, "Modify all lines", "user-1");
     print_success("Version 3 committed");
 
-    let reconstructed_v3 = reconstruct_text(&env, &v3_snapshot)
-        .expect("Failed to reconstruct V3");
+    let reconstructed_v3 = reconstruct_text(&env, &v3_snapshot).expect("Failed to reconstruct V3");
     print_info("V3 content:");
     print_file_content(&reconstructed_v3, 5);
     assert_eq!(reconstructed_v3, v3_content, "V3 content mismatch");
@@ -269,8 +304,8 @@ fn test_empty_to_content_flow() {
     commit_changes(&env, "Create empty file", "user-1");
     print_success("Empty file created");
 
-    let empty_content = reconstruct_text(&env, &empty_snapshot)
-        .expect("Failed to reconstruct empty");
+    let empty_content =
+        reconstruct_text(&env, &empty_snapshot).expect("Failed to reconstruct empty");
     assert!(empty_content.is_empty(), "Empty file should be empty");
     print_info("Empty file verified");
 
@@ -281,8 +316,8 @@ fn test_empty_to_content_flow() {
     commit_changes(&env, "Add content", "user-1");
     print_success("Content added");
 
-    let reconstructed_content = reconstruct_text(&env, &content_snapshot)
-        .expect("Failed to reconstruct content");
+    let reconstructed_content =
+        reconstruct_text(&env, &content_snapshot).expect("Failed to reconstruct content");
     print_file_content(&reconstructed_content, 5);
     assert_eq!(reconstructed_content, content, "Content mismatch");
 

@@ -168,3 +168,9 @@ impl From<serde_json::Error> for StorageError {
         StorageError::Serialization(e.to_string())
     }
 }
+
+impl From<crate::api::types::ApiError> for StratumError {
+    fn from(e: crate::api::types::ApiError) -> Self {
+        StratumError::General(format!("[{}] {}", e.code, e.message))
+    }
+}

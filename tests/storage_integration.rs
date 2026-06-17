@@ -21,8 +21,8 @@ use stratum::core::types::{
     AgentInstanceId, ContentId, DiffOp, Hunk, LayerType, LineDiff, PartitionType, SourceType,
 };
 use stratum::storage::repository::{
-    AtomicOps, BranchStore, CheckpointStore, DeltaStore, FileNodeStore, LayerStore,
-    MetadataStore, PartitionStore, SnapshotStore,
+    AtomicOps, BranchStore, CheckpointStore, DeltaStore, FileNodeStore, LayerStore, MetadataStore,
+    PartitionStore, SnapshotStore,
 };
 use stratum::storage::SqliteStorage;
 use stratum::StorageResult;
@@ -225,7 +225,11 @@ fn test_store_snapshots_batch_atomic() -> StorageResult<()> {
     };
 
     // Store snapshots in a batch with atomic guarantee
-    storage.store_snapshots_batch(&[(&snapshot1, b"content1"), (&snapshot2, b"content2"), (&snapshot3, b"content3")])?;
+    storage.store_snapshots_batch(&[
+        (&snapshot1, b"content1"),
+        (&snapshot2, b"content2"),
+        (&snapshot3, b"content3"),
+    ])?;
 
     // Verify all snapshots were stored
     let retrieved1 = storage.get_snapshot(&snapshot1.id)?;

@@ -209,8 +209,9 @@ impl CheckpointRepo {
         let current_head = self.current_branch_head();
 
         // Check if there are actual changes compared to current head
-        let current_cp = self.checkpoints.get(&current_head)
-            .ok_or_else(|| StratumError::NotFound(format!("checkpoint {} not found", current_head)))?;
+        let current_cp = self.checkpoints.get(&current_head).ok_or_else(|| {
+            StratumError::NotFound(format!("checkpoint {} not found", current_head))
+        })?;
 
         if current_cp.baseline_snapshots == snapshot_ids {
             return Err(StratumError::Checkpoint(

@@ -1,13 +1,13 @@
 //! Fixture definitions and generation for E2E tests
 
 use std::path::{Path, PathBuf};
-use tempfile::TempDir;
-use stratum::core::types::{DiffOp, Hunk, LineDiff, PartitionType, LayerType};
-use stratum::core::file_node::FileNode;
-use stratum::core::snapshot::Snapshot;
-use stratum::core::partition::Partition;
 use stratum::api::{ApiService, ApiServiceImpl, ServiceConfig};
+use stratum::core::file_node::FileNode;
+use stratum::core::partition::Partition;
+use stratum::core::snapshot::Snapshot;
+use stratum::core::types::{DiffOp, Hunk, LayerType, LineDiff, PartitionType};
 use stratum::storage::SqliteStorage;
+use tempfile::TempDir;
 
 /// Test environment configuration
 #[derive(Debug, Clone)]
@@ -44,13 +44,13 @@ impl TestEnvironment {
         let db_path = temp_dir.path().join(&config.db_name);
 
         // Initialize storage
-        let storage = SqliteStorage::new_full(&db_path)
-            .expect("Failed to initialize storage");
+        let storage = SqliteStorage::new_full(&db_path).expect("Failed to initialize storage");
 
         // Create API service
         let api = ApiServiceImpl::open(ServiceConfig {
             db_path: db_path.to_string_lossy().to_string(),
-        }).expect("Failed to create API service");
+        })
+        .expect("Failed to create API service");
 
         TestEnvironment {
             temp_dir,
@@ -106,7 +106,9 @@ impl TestEnvironment {
 
     /// Get the git repo path as string
     pub fn git_repo_path(&self) -> Option<String> {
-        self.git_repo.as_ref().map(|p| p.to_string_lossy().to_string())
+        self.git_repo
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
     }
 
     /// Clean up the test environment
@@ -149,15 +151,11 @@ impl TestScenario {
         match self {
             TestScenario::EmptyFile => String::new(),
             TestScenario::SingleLineFile => "Hello, World!\n".to_string(),
-            TestScenario::MultiLineFile => {
-                "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n".to_string()
-            }
+            TestScenario::MultiLineFile => "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n".to_string(),
             TestScenario::SimpleInsert => "Line 1\nLine 3\n".to_string(),
             TestScenario::SimpleDelete => "Line 1\nLine 2\nLine 3\n".to_string(),
             TestScenario::SimpleReplace => "Old Line\n".to_string(),
-            TestScenario::MultipleEdits => {
-                "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n".to_string()
-            }
+            TestScenario::MultipleEdits => "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n".to_string(),
             TestScenario::TwoAgentsParallel => "Base line\n".to_string(),
             TestScenario::ThreeAgentsSequential => "Base content\n".to_string(),
             TestScenario::SameLineConflict => "Line 1\nLine 2\nLine 3\n".to_string(),
@@ -266,8 +264,13 @@ mod tests {
     #[test]
     fn test_scenario_initial_content() {
         assert_eq!(TestScenario::EmptyFile.initial_content(), "");
-        assert_eq!(TestScenario::SingleLineFile.initial_content(), "Hello, World!\n");
-        assert!(TestScenario::MultiLineFile.initial_content().contains("Line 1"));
+        assert_eq!(
+            TestScenario::SingleLineFile.initial_content(),
+            "Hello, World!\n"
+        );
+        assert!(TestScenario::MultiLineFile
+            .initial_content()
+            .contains("Line 1"));
     }
 
     #[test]

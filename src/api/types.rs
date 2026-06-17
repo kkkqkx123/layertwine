@@ -442,7 +442,7 @@ pub struct MergeToUnifiedResponse {
 
 /// Merge unified → staged
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MergeToStagedRequest;
+pub struct MergeToStagedRequest {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MergeToStagedResponse {

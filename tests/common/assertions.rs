@@ -1,11 +1,14 @@
 //! Custom assertions for E2E tests
 
-use stratum::core::types::{SnapshotId, LayerType, ContentId};
 use crate::common::fixture::TestEnvironment;
+use stratum::core::types::{ContentId, LayerType, SnapshotId};
 
 /// Assert that a snapshot ID is valid
 pub fn assert_valid_snapshot_id(snapshot_id: &SnapshotId) {
-    assert!(!snapshot_id.0.iter().all(|&b| b == 0), "Snapshot ID should not be all zeros");
+    assert!(
+        !snapshot_id.0.iter().all(|&b| b == 0),
+        "Snapshot ID should not be all zeros"
+    );
 }
 
 /// Assert that a partition exists
@@ -24,16 +27,23 @@ pub fn assert_partition_not_exists(env: &TestEnvironment, name: &str) {
 pub fn assert_layer_partition_count(env: &TestEnvironment, layer_type: LayerType, expected: usize) {
     let layer_name = layer_type.name();
     let count = crate::common::helpers::count_partitions(env, layer_type.clone());
-    assert_eq!(count, expected,
+    assert_eq!(
+        count, expected,
         "Layer '{}' should have {} partitions, but has {}",
-        layer_name, expected, count);
+        layer_name, expected, count
+    );
 }
 
 /// Assert that log has expected number of entries (excluding root checkpoint)
 pub fn assert_log_entry_count(env: &TestEnvironment, expected: usize) {
     let log = crate::common::helpers::get_log_excluding_root(env, None);
-    assert_eq!(log.len(), expected,
-        "Log should have {} entries (excluding root), but has {}", expected, log.len());
+    assert_eq!(
+        log.len(),
+        expected,
+        "Log should have {} entries (excluding root), but has {}",
+        expected,
+        log.len()
+    );
 }
 
 /// Assert that log contains a specific message (excluding root checkpoint)
@@ -46,12 +56,17 @@ pub fn assert_log_contains(env: &TestEnvironment, message: &str) {
 /// Assert that file content matches expected
 pub fn assert_file_content(env: &TestEnvironment, snapshot_id: &SnapshotId, expected: &str) {
     let content = crate::common::helpers::reconstruct_text(env, snapshot_id);
-    assert!(content.is_some(), "Failed to reconstruct text from snapshot");
+    assert!(
+        content.is_some(),
+        "Failed to reconstruct text from snapshot"
+    );
 
     let actual = content.unwrap();
-    assert_eq!(actual, expected,
+    assert_eq!(
+        actual, expected,
         "File content mismatch.\nExpected:\n{}\n\nActual:\n{}",
-        expected, actual);
+        expected, actual
+    );
 }
 
 /// Assert that two snapshot IDs are different
@@ -66,8 +81,14 @@ pub fn assert_snapshots_equal(id1: &SnapshotId, id2: &SnapshotId) {
 
 /// Assert that Git repository exists
 pub fn assert_git_repo_exists(env: &TestEnvironment) {
-    assert!(env.git_repo.is_some(), "Git repository should be configured");
-    assert!(env.git_repo.as_ref().unwrap().exists(), "Git repository path should exist");
+    assert!(
+        env.git_repo.is_some(),
+        "Git repository should be configured"
+    );
+    assert!(
+        env.git_repo.as_ref().unwrap().exists(),
+        "Git repository path should exist"
+    );
 }
 
 /// Macro for running test with timing
@@ -99,18 +120,19 @@ macro_rules! test_step {
         let result = std::panic::catch_unwind(|| $action);
 
         match result {
-            Ok(inner_result) => {
-                match inner_result {
-                    Ok(_) => {
-                        $crate::common::output::print_success(&format!("Step {} completed", $step_num));
-                        Ok(())
-                    }
-                    Err(e) => {
-                        $crate::common::output::print_error(&format!("Step {} failed: {}", $step_num, e));
-                        Err(e)
-                    }
+            Ok(inner_result) => match inner_result {
+                Ok(_) => {
+                    $crate::common::output::print_success(&format!("Step {} completed", $step_num));
+                    Ok(())
                 }
-            }
+                Err(e) => {
+                    $crate::common::output::print_error(&format!(
+                        "Step {} failed: {}",
+                        $step_num, e
+                    ));
+                    Err(e)
+                }
+            },
             Err(_) => {
                 $crate::common::output::print_error(&format!("Step {} panicked", $step_num));
                 Err("Test panicked".into())

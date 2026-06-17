@@ -1,3 +1,4 @@
+use std::path::Path;
 use stratum::core::delta::Delta;
 use stratum::core::file_node::FileNode;
 use stratum::core::snapshot::Snapshot;
@@ -5,7 +6,6 @@ use stratum::core::types::{ContentId, SourceType};
 use stratum::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
 use stratum::storage::sqlite::SqliteStorage;
 use tempfile::TempDir;
-use std::path::Path;
 
 fn generate_test_text(lines: usize) -> String {
     (0..lines).map(|i| format!("line {}\n", i)).collect()
@@ -106,7 +106,12 @@ fn benchmark_get_delta(c: &mut criterion::Criterion, name: &str, lines: usize) {
     });
 }
 
-fn benchmark_batch_store_snapshots(c: &mut criterion::Criterion, name: &str, batch_size: usize, lines: usize) {
+fn benchmark_batch_store_snapshots(
+    c: &mut criterion::Criterion,
+    name: &str,
+    batch_size: usize,
+    lines: usize,
+) {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.db");
     let storage = SqliteStorage::new(&db_path).unwrap();
@@ -123,9 +128,13 @@ fn benchmark_batch_store_snapshots(c: &mut criterion::Criterion, name: &str, bat
         .map(|(s, c)| (s, c.as_slice()))
         .collect();
 
-    c.bench_function(&format!("batch_store_snapshots_{}_{}_batch_{}_lines", name, batch_size, lines), |b| {
-        b.iter(|| storage.store_snapshots_batch(&snapshots_ref))
-    });
+    c.bench_function(
+        &format!(
+            "batch_store_snapshots_{}_{}_batch_{}_lines",
+            name, batch_size, lines
+        ),
+        |b| b.iter(|| storage.store_snapshots_batch(&snapshots_ref)),
+    );
 }
 
 fn benchmark_store_file_node(c: &mut criterion::Criterion, name: &str, lines: usize) {

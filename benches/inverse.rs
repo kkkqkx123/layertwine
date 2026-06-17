@@ -1,9 +1,9 @@
+use std::path::PathBuf;
 use stratum::core::delta::Delta;
 use stratum::core::file_node::FileNode;
 use stratum::core::types::{DiffOp, Hunk, LineDiff, SourceType};
 use stratum::engine::diff::diff_to_line_diff;
 use stratum::engine::inverse::inverse_delta;
-use std::path::PathBuf;
 
 fn generate_test_text(lines: usize) -> String {
     (0..lines).map(|i| format!("line {}\n", i)).collect()
@@ -30,7 +30,10 @@ fn generate_modified_text(base: &str, change_rate: f64) -> String {
 fn create_delta_from_texts(old: &str, new: &str) -> (Delta, String) {
     let file_node = FileNode::new(PathBuf::from("test.txt"), old.as_bytes());
     let diff = diff_to_line_diff(old, new);
-    (Delta::new(file_node, diff, SourceType::Manual), old.to_string())
+    (
+        Delta::new(file_node, diff, SourceType::Manual),
+        old.to_string(),
+    )
 }
 
 fn create_delta_with_only_inserts(old: &str, insert_lines: Vec<String>) -> (Delta, String) {
@@ -49,7 +52,10 @@ fn create_delta_with_only_inserts(old: &str, insert_lines: Vec<String>) -> (Delt
             }],
         }],
     };
-    (Delta::new(file_node, diff, SourceType::Manual), old.to_string())
+    (
+        Delta::new(file_node, diff, SourceType::Manual),
+        old.to_string(),
+    )
 }
 
 fn create_delta_with_only_deletes(old: &str, delete_count: u32) -> (Delta, String) {
@@ -66,20 +72,23 @@ fn create_delta_with_only_deletes(old: &str, delete_count: u32) -> (Delta, Strin
             }],
         }],
     };
-    (Delta::new(file_node, diff, SourceType::Manual), old.to_string())
+    (
+        Delta::new(file_node, diff, SourceType::Manual),
+        old.to_string(),
+    )
 }
 
 fn create_delta_with_replaces(old: &str, replace_count: u32) -> (Delta, String) {
     let file_node = FileNode::new(PathBuf::from("test.txt"), old.as_bytes());
 
-    let ops = (0..replace_count).map(|i| {
-        DiffOp::Replace {
+    let ops = (0..replace_count)
+        .map(|i| DiffOp::Replace {
             old_start: i + 1,
             old_count: 1,
             new_start: i + 1,
             lines: vec![format!("REPLACED line {}", i + 1)],
-        }
-    }).collect();
+        })
+        .collect();
 
     let diff = LineDiff {
         hunks: vec![Hunk {
@@ -90,17 +99,31 @@ fn create_delta_with_replaces(old: &str, replace_count: u32) -> (Delta, String) 
             ops,
         }],
     };
-    (Delta::new(file_node, diff, SourceType::Manual), old.to_string())
+    (
+        Delta::new(file_node, diff, SourceType::Manual),
+        old.to_string(),
+    )
 }
 
-fn benchmark_inverse_delta(c: &mut criterion::Criterion, name: &str, lines: usize, change_rate: f64) {
+fn benchmark_inverse_delta(
+    c: &mut criterion::Criterion,
+    name: &str,
+    lines: usize,
+    change_rate: f64,
+) {
     let old_text = generate_test_text(lines);
     let new_text = generate_modified_text(&old_text, change_rate);
     let (delta, old_content) = create_delta_from_texts(&old_text, &new_text);
 
-    c.bench_function(&format!("inverse_delta_{}_{}_lines_{}_percent", name, lines, (change_rate * 100.0) as usize), |b| {
-        b.iter(|| inverse_delta(&delta, Some(old_content.as_str())))
-    });
+    c.bench_function(
+        &format!(
+            "inverse_delta_{}_{}_lines_{}_percent",
+            name,
+            lines,
+            (change_rate * 100.0) as usize
+        ),
+        |b| b.iter(|| inverse_delta(&delta, Some(old_content.as_str()))),
+    );
 }
 
 pub fn bench_inverse_delta_small(c: &mut criterion::Criterion) {
@@ -123,7 +146,10 @@ pub fn bench_inverse_delta_large(c: &mut criterion::Criterion) {
 pub fn bench_inverse_operations(c: &mut criterion::Criterion) {
     let base_text = generate_test_text(100);
 
-    let (delta_insert, old_insert) = create_delta_with_only_inserts(&base_text, (0..10).map(|i| format!("inserted line {}\n", i)).collect());
+    let (delta_insert, old_insert) = create_delta_with_only_inserts(
+        &base_text,
+        (0..10).map(|i| format!("inserted line {}\n", i)).collect(),
+    );
     c.bench_function("inverse_delta_insert_only_10_lines", |b| {
         b.iter(|| inverse_delta(&delta_insert, Some(old_insert.as_str())))
     });
@@ -144,9 +170,10 @@ pub fn bench_inverse_without_old_content(c: &mut criterion::Criterion) {
     let new_text = generate_modified_text(&base_text, 0.3);
     let (delta, _) = create_delta_from_texts(&base_text, &new_text);
 
-    c.bench_function("inverse_delta_without_old_content_100_lines_30_percent", |b| {
-        b.iter(|| inverse_delta(&delta, None::<&str>))
-    });
+    c.bench_function(
+        "inverse_delta_without_old_content_100_lines_30_percent",
+        |b| b.iter(|| inverse_delta(&delta, None::<&str>)),
+    );
 }
 
 criterion::criterion_group!(inverse_small, bench_inverse_delta_small);

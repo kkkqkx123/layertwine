@@ -26,18 +26,35 @@ fn benchmark_diff(c: &mut criterion::Criterion, name: &str, lines: usize, change
     let old_text = generate_test_text(lines);
     let new_text = generate_modified_text(&old_text, change_rate);
 
-    c.bench_function(&format!("diff_to_line_diff_{}_{}_lines_{}_percent", name, lines, (change_rate * 100.0) as usize), |b| {
-        b.iter(|| diff_to_line_diff(&old_text, &new_text))
-    });
+    c.bench_function(
+        &format!(
+            "diff_to_line_diff_{}_{}_lines_{}_percent",
+            name,
+            lines,
+            (change_rate * 100.0) as usize
+        ),
+        |b| b.iter(|| diff_to_line_diff(&old_text, &new_text)),
+    );
 }
 
-fn benchmark_unified_diff(c: &mut criterion::Criterion, name: &str, lines: usize, change_rate: f64) {
+fn benchmark_unified_diff(
+    c: &mut criterion::Criterion,
+    name: &str,
+    lines: usize,
+    change_rate: f64,
+) {
     let old_text = generate_test_text(lines);
     let new_text = generate_modified_text(&old_text, change_rate);
 
-    c.bench_function(&format!("format_unified_diff_{}_{}_lines_{}_percent", name, lines, (change_rate * 100.0) as usize), |b| {
-        b.iter(|| format_unified_diff(&old_text, &new_text, 3))
-    });
+    c.bench_function(
+        &format!(
+            "format_unified_diff_{}_{}_lines_{}_percent",
+            name,
+            lines,
+            (change_rate * 100.0) as usize
+        ),
+        |b| b.iter(|| format_unified_diff(&old_text, &new_text, 3)),
+    );
 }
 
 pub fn bench_diff_small(c: &mut criterion::Criterion) {
@@ -72,10 +89,4 @@ criterion::criterion_group!(diff_large, bench_diff_large);
 criterion::criterion_group!(diff_huge, bench_diff_huge);
 criterion::criterion_group!(unified, bench_unified_diff);
 
-criterion::criterion_main!(
-    diff_small,
-    diff_medium,
-    diff_large,
-    diff_huge,
-    unified
-);
+criterion::criterion_main!(diff_small, diff_medium, diff_large, diff_huge, unified);

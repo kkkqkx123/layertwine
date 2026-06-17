@@ -166,8 +166,7 @@ impl ApiServiceImpl {
 
         // Load checkpoint repo
         let persist: Box<dyn CheckpointPersist> = Box::new(storage.share());
-        let checkpoint_repo = CheckpointRepo::load(persist)
-            .map_err(map_error)?;
+        let checkpoint_repo = CheckpointRepo::load(persist).map_err(map_error)?;
 
         Ok(ApiServiceImpl {
             storage,
@@ -238,7 +237,14 @@ impl ApiServiceImpl {
 
         let new_text = self.reconstruct_text_from_id(&staged_partition.current_snapshot)?;
         let old_text = self.last_checkpoint_text();
-        let file_path = staged_snapshot.file.path_str().to_string();
+        let staged_deltas = self
+            .storage
+            .get_deltas(&staged_snapshot.deltas)
+            .map_err(|e| map_error(StratumError::Storage(e)))?;
+        let file_path = staged_deltas
+            .last()
+            .map(|d| d.file.path_str().to_string())
+            .unwrap_or_else(|| staged_snapshot.file.path_str().to_string());
 
         let unified_diff = crate::engine::diff::format_unified_diff(&old_text, &new_text, 3);
         let line_diff = crate::engine::diff::diff_to_line_diff(&old_text, &new_text);
@@ -275,7 +281,14 @@ impl ApiServiceImpl {
             .get_snapshot(new_snapshot_id)
             .map_err(|e| map_error(StratumError::Storage(e)))?;
         let new_text = self.reconstruct_text_from_id(new_snapshot_id)?;
-        let file_path = new_snapshot.file.path_str().to_string();
+        let new_deltas = self
+            .storage
+            .get_deltas(&new_snapshot.deltas)
+            .map_err(|e| map_error(StratumError::Storage(e)))?;
+        let file_path = new_deltas
+            .last()
+            .map(|d| d.file.path_str().to_string())
+            .unwrap_or_else(|| new_snapshot.file.path_str().to_string());
 
         // "Before" text from the parent checkpoint's baseline snapshot
         let old_text = match checkpoint.parents.first() {
@@ -317,7 +330,14 @@ impl ApiServiceImpl {
             .get_snapshot(&partition.current_snapshot)
             .map_err(|e| map_error(StratumError::Storage(e)))?;
         let new_text = self.reconstruct_text_from_id(&partition.current_snapshot)?;
-        let file_path = snapshot.file.path_str().to_string();
+        let partition_deltas = self
+            .storage
+            .get_deltas(&snapshot.deltas)
+            .map_err(|e| map_error(StratumError::Storage(e)))?;
+        let file_path = partition_deltas
+            .last()
+            .map(|d| d.file.path_str().to_string())
+            .unwrap_or_else(|| snapshot.file.path_str().to_string());
         let old_text = self.last_checkpoint_text();
 
         let unified_diff = crate::engine::diff::format_unified_diff(&old_text, &new_text, 3);
@@ -524,16 +544,17 @@ impl ApiService for ApiServiceImpl {
         let snapshot_id =
             crate::layered::agent::move_agent_to_approval(self.storage.as_ref(), &agent_instance)
                 .map_err(|e| {
-                    // Check if the error is because agent partition doesn't exist
-                    let agent_pid = crate::layered::agent::agent_partition_id(&agent_instance);
-                    if self.storage.get_partition(&agent_pid).is_err() {
-                        ApiError::invalid_params(
-                            format!("agent '{}' has not made any edits yet. Call agent_edit first.", req.agent_id)
-                        )
-                    } else {
-                        map_error(e)
-                    }
-                })?;
+                // Check if the error is because agent partition doesn't exist
+                let agent_pid = crate::layered::agent::agent_partition_id(&agent_instance);
+                if self.storage.get_partition(&agent_pid).is_err() {
+                    ApiError::invalid_params(format!(
+                        "agent '{}' has not made any edits yet. Call agent_edit first.",
+                        req.agent_id
+                    ))
+                } else {
+                    map_error(e)
+                }
+            })?;
 
         Ok(SubmitResponse {
             snapshot_id: snapshot_id_to_hex(&snapshot_id),
@@ -584,14 +605,19 @@ impl ApiService for ApiServiceImpl {
 
         // Get staged partition
         let staged_pid = crate::layered::staged::staged_partition_id();
-        let staged_partition = self.storage.get_partition(&staged_pid)
+        let staged_partition = self
+            .storage
+            .get_partition(&staged_pid)
             .map_err(|e| map_error(StratumError::Storage(e)))?;
         let current_snapshot_id = staged_partition.current_snapshot;
 
         // Commit using checkpoint repo
-        let mut checkpoint_repo = self.checkpoint_repo.write()
+        let mut checkpoint_repo = self
+            .checkpoint_repo
+            .write()
             .map_err(|e| ApiError::internal(format!("Failed to acquire lock: {}", e)))?;
-        let cp_id = checkpoint_repo.commit_single(current_snapshot_id, &req.message, author)
+        let cp_id = checkpoint_repo
+            .commit_single(current_snapshot_id, &req.message, author)
             .map_err(map_error)?;
 
         Ok(CommitResponse {
@@ -604,19 +630,26 @@ impl ApiService for ApiServiceImpl {
         let count = req.count.unwrap_or(20);
 
         // Use checkpoint repo to get log for current branch
-        let checkpoint_repo = self.checkpoint_repo.read()
+        let checkpoint_repo = self
+            .checkpoint_repo
+            .read()
             .map_err(|e| ApiError::internal(format!("Failed to acquire lock: {}", e)))?;
         let checkpoints = checkpoint_repo.log(count);
         let total = checkpoints.len();
 
         Ok(LogResponse {
-            checkpoints: checkpoints.into_iter().map(|cp| checkpoint_to_info(cp)).collect(),
+            checkpoints: checkpoints
+                .into_iter()
+                .map(|cp| checkpoint_to_info(cp))
+                .collect(),
             total,
         })
     }
 
     fn branch_create(&self, req: BranchCreateRequest) -> ApiResult<BranchCreateResponse> {
-        let mut checkpoint_repo = self.checkpoint_repo.write()
+        let mut checkpoint_repo = self
+            .checkpoint_repo
+            .write()
             .map_err(|e| ApiError::internal(format!("Failed to acquire lock: {}", e)))?;
 
         if checkpoint_repo.branches.iter().any(|b| b.name == req.name) {
@@ -627,11 +660,11 @@ impl ApiService for ApiServiceImpl {
         }
 
         // Create branch from current branch head
-        checkpoint_repo.create_branch(&req.name)
+        checkpoint_repo
+            .create_branch(&req.name)
             .map_err(map_error)?;
 
-        let branch_idx = checkpoint_repo.find_branch(&req.name)
-            .map_err(map_error)?;
+        let branch_idx = checkpoint_repo.find_branch(&req.name).map_err(map_error)?;
         let head = checkpoint_repo.branches[branch_idx].head;
 
         drop(checkpoint_repo);
@@ -649,9 +682,12 @@ impl ApiService for ApiServiceImpl {
             .map_err(|_| ApiError::not_found(format!("branch '{}'", req.name)))?;
 
         // Update checkpoint repo's current branch
-        let mut checkpoint_repo = self.checkpoint_repo.write()
+        let mut checkpoint_repo = self
+            .checkpoint_repo
+            .write()
             .map_err(|e| ApiError::internal(format!("Failed to acquire lock: {}", e)))?;
-        let cp_id = checkpoint_repo.switch_branch(&req.name)
+        let cp_id = checkpoint_repo
+            .switch_branch(&req.name)
             .map_err(map_error)?;
 
         // Reset staged partition to the branch's base snapshot
@@ -675,18 +711,23 @@ impl ApiService for ApiServiceImpl {
             .storage
             .list_branches()
             .map_err(|e| map_error(StratumError::Storage(e)))?;
+        let checkpoint_repo = self
+            .checkpoint_repo
+            .read()
+            .map_err(|e| ApiError::internal(format!("Failed to acquire lock: {}", e)))?;
+        let current_name = checkpoint_repo.current_branch_name().to_string();
         let infos = branches
             .iter()
             .map(|b| BranchInfo {
                 name: b.name.clone(),
                 head: b.head.to_hex(),
                 updated_at: b.updated_at.to_string(),
-                is_current: false,
+                is_current: b.name == current_name,
             })
             .collect();
         Ok(BranchListResponse {
             branches: infos,
-            current: None,
+            current: Some(current_name),
         })
     }
 
@@ -696,7 +737,9 @@ impl ApiService for ApiServiceImpl {
 
         // Get source branch's staged snapshots
         let source_head = repo.get_branch_head(&req.branch).map_err(map_error)?;
-        let source_checkpoint = repo.checkpoints.get(&source_head)
+        let source_checkpoint = repo
+            .checkpoints
+            .get(&source_head)
             .ok_or_else(|| ApiError::not_found(format!("source checkpoint not found")))?;
 
         // Use the baseline_snapshots from source branch's head checkpoint
@@ -763,9 +806,15 @@ impl ApiService for ApiServiceImpl {
                 .map_err(|e| map_error(StratumError::Storage(e)))?;
         }
 
+        let restore_file = backup
+            .deltas
+            .last()
+            .map(|d| d.file.path_str().to_string())
+            .unwrap_or_else(|| backup.file.path_str().to_string());
+
         Ok(RestoreResponse {
             backup_id: req.backup_id,
-            file: backup.file.path_str().to_string(),
+            file: restore_file,
             deltas_restored: delta_count,
         })
     }

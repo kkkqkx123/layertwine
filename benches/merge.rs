@@ -1,10 +1,10 @@
+use std::path::PathBuf;
 use stratum::core::delta::Delta;
 use stratum::core::file_node::FileNode;
 use stratum::core::types::{DiffOp, Hunk, LineDiff, SourceType};
 use stratum::engine::diff::diff_to_line_diff;
 use stratum::engine::merge::apply_deltas;
 use stratum::engine::merge::merge_texts;
-use std::path::PathBuf;
 
 fn generate_test_text(lines: usize) -> String {
     (0..lines).map(|i| format!("line {}\n", i)).collect()
@@ -51,7 +51,13 @@ fn create_manual_delta(old_start: u32, insert_lines: Vec<String>) -> Delta {
     Delta::new(file_node, diff, SourceType::Manual)
 }
 
-fn benchmark_apply_deltas(c: &mut criterion::Criterion, name: &str, lines: usize, num_deltas: usize, change_rate: f64) {
+fn benchmark_apply_deltas(
+    c: &mut criterion::Criterion,
+    name: &str,
+    lines: usize,
+    num_deltas: usize,
+    change_rate: f64,
+) {
     let base_text = generate_test_text(lines);
     let mut deltas = Vec::new();
 
@@ -62,9 +68,16 @@ fn benchmark_apply_deltas(c: &mut criterion::Criterion, name: &str, lines: usize
         current_text = new_text;
     }
 
-    c.bench_function(&format!("apply_deltas_{}_{}_deltas_{}_lines_{}_percent", name, num_deltas, lines, (change_rate * 100.0) as usize), |b| {
-        b.iter(|| apply_deltas(&base_text, &deltas))
-    });
+    c.bench_function(
+        &format!(
+            "apply_deltas_{}_{}_deltas_{}_lines_{}_percent",
+            name,
+            num_deltas,
+            lines,
+            (change_rate * 100.0) as usize
+        ),
+        |b| b.iter(|| apply_deltas(&base_text, &deltas)),
+    );
 }
 
 fn benchmark_merge_texts(c: &mut criterion::Criterion, name: &str, lines: usize) {

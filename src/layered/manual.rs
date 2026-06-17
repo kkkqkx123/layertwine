@@ -147,7 +147,14 @@ where
         return Ok(staged_partition.current_snapshot); // no change
     }
 
-    let merge_delta = Delta::new(staged_snapshot.file.clone(), merge_diff, SourceType::Manual);
+    let manual_deltas = storage
+        .get_deltas(&manual_snapshot.deltas)
+        .map_err(StratumError::Storage)?;
+    let merge_file = manual_deltas
+        .last()
+        .map(|d| d.file.clone())
+        .unwrap_or_else(|| staged_snapshot.file.clone());
+    let merge_delta = Delta::new(merge_file, merge_diff, SourceType::Manual);
     storage
         .store_delta(&merge_delta)
         .map_err(StratumError::Storage)?;

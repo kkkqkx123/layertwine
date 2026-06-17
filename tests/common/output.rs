@@ -1,9 +1,9 @@
 //! Formatted output utilities for E2E tests
 
 use std::fmt;
+use stratum::api::StatusResponse;
 use stratum::core::partition::Partition;
 use stratum::core::types::LayerType;
-use stratum::api::StatusResponse;
 use stratum::core::types::SnapshotId;
 
 /// Formatted layer state output
@@ -49,7 +49,11 @@ impl fmt::Display for LayerStateOutput {
         for partition in &self.partitions {
             writeln!(f)?;
             writeln!(f, "    - {}", partition.name)?;
-            writeln!(f, "      Current snapshot: {}", truncate_id(&partition.current_snapshot))?;
+            writeln!(
+                f,
+                "      Current snapshot: {}",
+                truncate_id(&partition.current_snapshot)
+            )?;
             writeln!(f, "      History depth: {}", partition.history_depth)?;
             writeln!(f, "      Preview: {}", preview_lines(&partition.preview))?;
         }
@@ -64,8 +68,11 @@ impl fmt::Display for DiffOutput {
         writeln!(f)?;
         writeln!(f, "{}", self.unified_diff)?;
         writeln!(f)?;
-        writeln!(f, "Stats: {} insert, {} delete, {} replace",
-            self.stats.inserts, self.stats.deletes, self.stats.replaces)?;
+        writeln!(
+            f,
+            "Stats: {} insert, {} delete, {} replace",
+            self.stats.inserts, self.stats.deletes, self.stats.replaces
+        )?;
 
         if !self.conflicts.is_empty() {
             writeln!(f)?;
@@ -84,8 +91,11 @@ impl fmt::Display for DiffOutput {
 
 impl fmt::Display for DiffStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} insert, {} delete, {} replace",
-            self.inserts, self.deletes, self.replaces)
+        write!(
+            f,
+            "{} insert, {} delete, {} replace",
+            self.inserts, self.deletes, self.replaces
+        )
     }
 }
 
@@ -165,14 +175,20 @@ pub fn print_layer_state_from_status(status: &StatusResponse) {
         std::collections::HashMap::new();
 
     for partition in &status.partitions {
-        layers.entry(partition.layer.clone())
+        layers
+            .entry(partition.layer.clone())
             .or_default()
             .push(partition);
     }
 
     // Define layer order
     let layer_order = vec![
-        "manual_edit", "agent_edit", "approval", "integrated", "unified", "staged"
+        "manual_edit",
+        "agent_edit",
+        "approval",
+        "integrated",
+        "unified",
+        "staged",
     ];
 
     for layer_name in layer_order {
@@ -183,7 +199,10 @@ pub fn print_layer_state_from_status(status: &StatusResponse) {
             for partition in partitions {
                 println!();
                 println!("    - {}", partition.name);
-                println!("      Current snapshot: {}", truncate_id(&partition.current_snapshot));
+                println!(
+                    "      Current snapshot: {}",
+                    truncate_id(&partition.current_snapshot)
+                );
                 println!("      History depth: {}", partition.history_len);
             }
 
@@ -223,7 +242,8 @@ pub fn print_empty_state() {
 pub fn format_partitions(partitions: &[Partition], layer_type: LayerType) -> LayerStateOutput {
     let layer_name = layer_type.name().to_string();
 
-    let partition_outputs: Vec<PartitionOutput> = partitions.iter()
+    let partition_outputs: Vec<PartitionOutput> = partitions
+        .iter()
         .map(|p| {
             let preview = format_partition_preview(p);
             PartitionOutput {
@@ -246,7 +266,10 @@ pub fn format_partitions(partitions: &[Partition], layer_type: LayerType) -> Lay
 
 /// Format partition preview
 fn format_partition_preview(partition: &Partition) -> String {
-    format!("(snapshot: {})", truncate_id(&partition.current_snapshot.to_hex()))
+    format!(
+        "(snapshot: {})",
+        truncate_id(&partition.current_snapshot.to_hex())
+    )
 }
 
 /// Truncate ID to readable format
@@ -265,10 +288,7 @@ fn preview_lines(text: &str) -> String {
     if lines.is_empty() {
         "(empty)".to_string()
     } else if lines.len() <= 3 {
-        text.lines()
-            .take(3)
-            .collect::<Vec<_>>()
-            .join("\\n")
+        text.lines().take(3).collect::<Vec<_>>().join("\\n")
     } else {
         format!("{}\\n...\\n{}", lines[0], lines.last().unwrap())
     }
@@ -279,7 +299,8 @@ pub fn create_layer_state_output(
     all_partitions: &[Partition],
     layer_type: LayerType,
 ) -> LayerStateOutput {
-    let layer_partitions: Vec<Partition> = all_partitions.iter()
+    let layer_partitions: Vec<Partition> = all_partitions
+        .iter()
         .filter(|p| p.partition_type.to_layer() == layer_type)
         .cloned()
         .collect();
@@ -348,7 +369,10 @@ mod tests {
 
     #[test]
     fn test_preview_lines() {
-        assert_eq!(preview_lines("line1\nline2\nline3"), "line1\\nline2\\nline3");
+        assert_eq!(
+            preview_lines("line1\nline2\nline3"),
+            "line1\\nline2\\nline3"
+        );
         assert_eq!(preview_lines(""), "(empty)");
         assert!(preview_lines("line1\nline2\nline3\nline4").contains("..."));
     }

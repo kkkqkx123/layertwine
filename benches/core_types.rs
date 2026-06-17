@@ -1,9 +1,9 @@
+use std::path::PathBuf;
 use stratum::core::delta::Delta;
 use stratum::core::file_node::FileNode;
 use stratum::core::snapshot::Snapshot;
 use stratum::core::types::{ContentId, SourceType};
 use stratum::engine::diff::diff_to_line_diff;
-use std::path::PathBuf;
 
 fn generate_test_text(lines: usize) -> String {
     (0..lines).map(|i| format!("line {}\n", i)).collect()
@@ -30,9 +30,10 @@ fn generate_modified_text(base: &str, change_rate: f64) -> String {
 fn benchmark_content_id(c: &mut criterion::Criterion, name: &str, size: usize) {
     let data = vec![0u8; size];
 
-    c.bench_function(&format!("content_id_from_content_{}_{}_bytes", name, size), |b| {
-        b.iter(|| ContentId::from_content(&data))
-    });
+    c.bench_function(
+        &format!("content_id_from_content_{}_{}_bytes", name, size),
+        |b| b.iter(|| ContentId::from_content(&data)),
+    );
 }
 
 fn benchmark_content_id_hex(c: &mut criterion::Criterion, name: &str) {
@@ -54,16 +55,27 @@ fn benchmark_content_id_from_hex(c: &mut criterion::Criterion, name: &str) {
     });
 }
 
-fn benchmark_delta_compute_id(c: &mut criterion::Criterion, name: &str, lines: usize, change_rate: f64) {
+fn benchmark_delta_compute_id(
+    c: &mut criterion::Criterion,
+    name: &str,
+    lines: usize,
+    change_rate: f64,
+) {
     let old_text = generate_test_text(lines);
     let new_text = generate_modified_text(&old_text, change_rate);
     let file_node = FileNode::new(PathBuf::from("test.txt"), old_text.as_bytes());
     let diff = diff_to_line_diff(&old_text, &new_text);
     let delta = Delta::new(file_node, diff, SourceType::Manual);
 
-    c.bench_function(&format!("delta_compute_id_{}_{}_lines_{}_percent", name, lines, (change_rate * 100.0) as usize), |b| {
-        b.iter(|| delta.compute_id())
-    });
+    c.bench_function(
+        &format!(
+            "delta_compute_id_{}_{}_lines_{}_percent",
+            name,
+            lines,
+            (change_rate * 100.0) as usize
+        ),
+        |b| b.iter(|| delta.compute_id()),
+    );
 }
 
 fn benchmark_snapshot_compute_id(c: &mut criterion::Criterion, name: &str, lines: usize) {
@@ -74,22 +86,36 @@ fn benchmark_snapshot_compute_id(c: &mut criterion::Criterion, name: &str, lines
     let delta = Delta::new(file_node, diff, SourceType::Manual);
     let snapshot = Snapshot::new_initial(delta.file.clone(), delta.id);
 
-    c.bench_function(&format!("snapshot_compute_id_{}_{}_lines", name, lines), |b| {
-        b.iter(|| snapshot.compute_id())
-    });
+    c.bench_function(
+        &format!("snapshot_compute_id_{}_{}_lines", name, lines),
+        |b| b.iter(|| snapshot.compute_id()),
+    );
 }
 
-fn benchmark_delta_creation(c: &mut criterion::Criterion, name: &str, lines: usize, change_rate: f64) {
+fn benchmark_delta_creation(
+    c: &mut criterion::Criterion,
+    name: &str,
+    lines: usize,
+    change_rate: f64,
+) {
     let old_text = generate_test_text(lines);
     let new_text = generate_modified_text(&old_text, change_rate);
     let file_node = FileNode::new(PathBuf::from("test.txt"), old_text.as_bytes());
 
-    c.bench_function(&format!("delta_creation_{}_{}_lines_{}_percent", name, lines, (change_rate * 100.0) as usize), |b| {
-        b.iter(|| {
-            let diff = diff_to_line_diff(&old_text, &new_text);
-            Delta::new(file_node.clone(), diff, SourceType::Manual)
-        })
-    });
+    c.bench_function(
+        &format!(
+            "delta_creation_{}_{}_lines_{}_percent",
+            name,
+            lines,
+            (change_rate * 100.0) as usize
+        ),
+        |b| {
+            b.iter(|| {
+                let diff = diff_to_line_diff(&old_text, &new_text);
+                Delta::new(file_node.clone(), diff, SourceType::Manual)
+            })
+        },
+    );
 }
 
 pub fn bench_content_id(c: &mut criterion::Criterion) {

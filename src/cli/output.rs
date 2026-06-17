@@ -219,11 +219,16 @@ fn print_line_diff(diff: &LineDiff) {
 }
 
 /// Print snapshot summary
-pub fn print_snapshot(snapshot: &Snapshot, format: OutputFormat) {
+pub fn print_snapshot(snapshot: &Snapshot, deltas: &[Delta], format: OutputFormat) {
+    let file_path = deltas
+        .last()
+        .map(|d| d.file.path_str())
+        .unwrap_or_else(|| snapshot.file.path_str());
+
     match format {
         OutputFormat::Plain => {
             println!("Snapshot: {}", snapshot.id.to_hex());
-            println!("  File:     {}", snapshot.file.path_str());
+            println!("  File:     {}", file_path);
             println!("  Type:     {}", snapshot.partition_type);
             println!("  Deltas:   {}", snapshot.deltas.len());
             println!("  Parents:  {}", snapshot.parents.len());
@@ -243,7 +248,7 @@ pub fn print_snapshot(snapshot: &Snapshot, format: OutputFormat) {
         OutputFormat::Json => {
             let json = serde_json::json!({
                 "id": snapshot.id.to_hex(),
-                "file": snapshot.file.path_str(),
+                "file": file_path,
                 "partition_type": snapshot.partition_type,
                 "delta_count": snapshot.deltas.len(),
                 "parent_count": snapshot.parents.len(),
@@ -283,11 +288,16 @@ pub fn print_backup_snapshot(
     bs: &crate::backup::backup_snapshot::BackupSnapshot,
     format: OutputFormat,
 ) {
+    let file_path = bs.deltas
+        .last()
+        .map(|d| d.file.path_str())
+        .unwrap_or_else(|| bs.file.path_str());
+
     match format {
         OutputFormat::Plain => {
             println!("Backup: {}", bs.id.to_hex());
             println!("  Source:  {}", bs.source_snapshot.to_hex());
-            println!("  File:    {}", bs.file.path_str());
+            println!("  File:    {}", file_path);
             println!("  Deltas:  {}", bs.deltas.len());
             if let Some(ref label) = bs.label {
                 println!("  Label:   {}", label);
@@ -303,7 +313,7 @@ pub fn print_backup_snapshot(
             let json = serde_json::json!({
                 "id": bs.id.to_hex(),
                 "source_snapshot": bs.source_snapshot.to_hex(),
-                "file": bs.file.path_str(),
+                "file": file_path,
                 "deltas_count": bs.deltas.len(),
                 "label": bs.label,
                 "backed_at": bs.backed_at,

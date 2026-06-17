@@ -1,72 +1,95 @@
 //! Helper functions for E2E tests
 
-use std::path::PathBuf;
 use crate::common::fixture::TestEnvironment;
+use std::path::PathBuf;
 use stratum::api::{
-    ApiService, InitRequest, EditRequest, AgentEditRequest, AgentSubmitRequest,
-    ApproveAgentRequest, CommitRequest, LogRequest, StatusResponse,
+    AgentEditRequest, AgentSubmitRequest, ApiService, ApproveAgentRequest, CommitRequest,
+    EditRequest, InitRequest, LogRequest, StatusResponse,
 };
-use stratum::core::types::SnapshotId;
 use stratum::core::partition::Partition;
 use stratum::core::snapshot::Snapshot;
-use stratum::storage::repository::{PartitionStore, SnapshotStore};
 use stratum::core::types::LayerType;
+use stratum::core::types::SnapshotId;
+use stratum::storage::repository::{PartitionStore, SnapshotStore};
 
 /// Initialize a stratum repository
 pub fn init_repository(env: &TestEnvironment) {
-    env.api.init(InitRequest {
-        db_path: Some(env.db_path_str()),
-        git_repo: env.git_repo_path(),
-        git_ref: None,
-    }).expect("Failed to initialize repository");
+    env.api
+        .init(InitRequest {
+            db_path: Some(env.db_path_str()),
+            git_repo: env.git_repo_path(),
+            git_ref: None,
+        })
+        .expect("Failed to initialize repository");
 }
 
 /// Apply a manual edit
 pub fn apply_edit(env: &TestEnvironment, file: &str, content: &str) -> SnapshotId {
-    let response = env.api.edit(EditRequest {
-        file: file.to_string(),
-        content: Some(content.to_string()),
-    }).expect("Failed to apply edit");
+    let response = env
+        .api
+        .edit(EditRequest {
+            file: file.to_string(),
+            content: Some(content.to_string()),
+        })
+        .expect("Failed to apply edit");
 
     SnapshotId::from_hex(&response.snapshot_id).expect("Invalid snapshot ID")
 }
 
 /// Apply an agent edit
-pub fn apply_agent_edit(env: &TestEnvironment, agent_id: &str, file: &str, content: &str) -> SnapshotId {
-    let response = env.api.agent_edit(AgentEditRequest {
-        agent_id: agent_id.to_string(),
-        file: file.to_string(),
-        content: Some(content.to_string()),
-    }).expect("Failed to apply agent edit");
+pub fn apply_agent_edit(
+    env: &TestEnvironment,
+    agent_id: &str,
+    file: &str,
+    content: &str,
+) -> SnapshotId {
+    let response = env
+        .api
+        .agent_edit(AgentEditRequest {
+            agent_id: agent_id.to_string(),
+            file: file.to_string(),
+            content: Some(content.to_string()),
+        })
+        .expect("Failed to apply agent edit");
 
     SnapshotId::from_hex(&response.snapshot_id).expect("Invalid snapshot ID")
 }
 
 /// Submit agent changes
 pub fn submit_agent(env: &TestEnvironment, agent_id: &str) -> SnapshotId {
-    let response = env.api.agent_submit(AgentSubmitRequest {
-        agent_id: agent_id.to_string(),
-    }).expect("Failed to submit agent");
+    let response = env
+        .api
+        .agent_submit(AgentSubmitRequest {
+            agent_id: agent_id.to_string(),
+        })
+        .expect("Failed to submit agent");
 
     SnapshotId::from_hex(&response.snapshot_id).expect("Invalid snapshot ID")
 }
 
 /// Approve an agent
 pub fn approve_agent(env: &TestEnvironment, agent_id: &str, feature_name: &str) -> SnapshotId {
-    let response = env.api.approve_agent(ApproveAgentRequest {
-        agent_id: agent_id.to_string(),
-        integrated_name: Some(feature_name.to_string()),
-    }).expect("Failed to approve agent");
+    let response = env
+        .api
+        .approve_agent(ApproveAgentRequest {
+            agent_id: agent_id.to_string(),
+            integrated_name: Some(feature_name.to_string()),
+        })
+        .expect("Failed to approve agent");
 
     SnapshotId::from_hex(&response.integrated_snapshot_id).expect("Invalid snapshot ID")
 }
 
 /// Merge integrated layers to unified layer
-pub fn merge_to_unified(env: &TestEnvironment, integration_names: Option<Vec<String>>) -> SnapshotId {
+pub fn merge_to_unified(
+    env: &TestEnvironment,
+    integration_names: Option<Vec<String>>,
+) -> SnapshotId {
     use stratum::api::MergeToUnifiedRequest;
-    let response = env.api.merge_to_unified(MergeToUnifiedRequest {
-        integration_names,
-    }).expect("Failed to merge to unified");
+    let response = env
+        .api
+        .merge_to_unified(MergeToUnifiedRequest { integration_names })
+        .expect("Failed to merge to unified");
 
     SnapshotId::from_hex(&response.unified_snapshot_id).expect("Invalid snapshot ID")
 }
@@ -74,7 +97,9 @@ pub fn merge_to_unified(env: &TestEnvironment, integration_names: Option<Vec<Str
 /// Merge unified layer to staged layer
 pub fn merge_to_staged(env: &TestEnvironment) -> SnapshotId {
     use stratum::api::MergeToStagedRequest;
-    let response = env.api.merge_to_staged(MergeToStagedRequest {})
+    let response = env
+        .api
+        .merge_to_staged(MergeToStagedRequest {})
         .expect("Failed to merge to staged");
 
     SnapshotId::from_hex(&response.staged_snapshot_id).expect("Invalid snapshot ID")
@@ -82,30 +107,41 @@ pub fn merge_to_staged(env: &TestEnvironment) -> SnapshotId {
 
 /// Commit staged changes
 pub fn commit_changes(env: &TestEnvironment, message: &str, author: &str) -> SnapshotId {
-    let response = env.api.commit(CommitRequest {
-        message: message.to_string(),
-        author: Some(author.to_string()),
-    }).expect("Failed to commit");
+    let response = env
+        .api
+        .commit(CommitRequest {
+            message: message.to_string(),
+            author: Some(author.to_string()),
+        })
+        .expect("Failed to commit");
 
     SnapshotId::from_hex(&response.checkpoint_id).expect("Invalid snapshot ID")
 }
 
 /// Get log history
 pub fn get_log(env: &TestEnvironment, count: Option<usize>) -> Vec<String> {
-    let response = env.api.log(LogRequest { count })
+    let response = env
+        .api
+        .log(LogRequest { count })
         .expect("Failed to get log");
 
-    response.checkpoints.iter()
+    response
+        .checkpoints
+        .iter()
         .map(|cp| format!("{}: {}", cp.id, cp.message))
         .collect()
 }
 
 /// Get log history excluding root checkpoint
 pub fn get_log_excluding_root(env: &TestEnvironment, count: Option<usize>) -> Vec<String> {
-    let response = env.api.log(LogRequest { count })
+    let response = env
+        .api
+        .log(LogRequest { count })
         .expect("Failed to get log");
 
-    response.checkpoints.iter()
+    response
+        .checkpoints
+        .iter()
         .filter(|cp| !cp.message.eq_ignore_ascii_case("root checkpoint"))
         .map(|cp| format!("{}: {}", cp.id, cp.message))
         .collect()
@@ -140,10 +176,10 @@ pub fn setup_initial_content(env: &TestEnvironment, file: &str, content: &str) {
 
 /// Get partitions by layer type
 pub fn get_partitions_by_layer(env: &TestEnvironment, layer_type: LayerType) -> Vec<Partition> {
-    let all_partitions = env.storage.list_partitions()
-        .unwrap_or_default();
+    let all_partitions = env.storage.list_partitions().unwrap_or_default();
 
-    all_partitions.into_iter()
+    all_partitions
+        .into_iter()
         .filter(|p| p.partition_type.to_layer() == layer_type)
         .collect()
 }
@@ -155,7 +191,8 @@ pub fn count_partitions(env: &TestEnvironment, layer_type: LayerType) -> usize {
 
 /// Check if a partition exists
 pub fn partition_exists(env: &TestEnvironment, name: &str) -> bool {
-    env.storage.list_partitions()
+    env.storage
+        .list_partitions()
         .map(|partitions| partitions.iter().any(|p| p.name == name))
         .unwrap_or(false)
 }
@@ -201,7 +238,9 @@ pub fn read_test_file(env: &TestEnvironment, file_path: &str) -> Option<String> 
 pub fn run_git_command(env: &TestEnvironment, args: &[&str]) -> Result<String, String> {
     use std::process::Command;
 
-    let git_repo = env.git_repo.as_ref()
+    let git_repo = env
+        .git_repo
+        .as_ref()
         .ok_or_else(|| "No git repository configured".to_string())?;
 
     let output = Command::new("git")

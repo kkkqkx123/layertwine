@@ -28,7 +28,11 @@ pub fn apply_deltas(content: &str, deltas: &[Delta]) -> Result<String> {
 
     let ends_with_newline = content.ends_with('\n');
     let result = lines.join("\n");
-    Ok(if ends_with_newline { format!("{}\n", result) } else { result })
+    Ok(if ends_with_newline {
+        format!("{}\n", result)
+    } else {
+        result
+    })
 }
 
 /// Batch apply multiple deltas with optimized sorting and processing.
@@ -60,7 +64,11 @@ pub fn apply_deltas_batch(content: &str, deltas: &[Delta]) -> Result<String> {
 
     let ends_with_newline = content.ends_with('\n');
     let result = lines.join("\n");
-    Ok(if ends_with_newline { format!("{}\n", result) } else { result })
+    Ok(if ends_with_newline {
+        format!("{}\n", result)
+    } else {
+        result
+    })
 }
 
 /// Apply a single hunk to the lines vector in-place.
@@ -92,7 +100,8 @@ fn apply_single_hunk_to_lines(lines: &mut Vec<String>, hunk: &Hunk) -> Result<()
                 hunk_pos += *count as usize;
             }
             DiffOp::Insert {
-                lines: insert_lines, ..
+                lines: insert_lines,
+                ..
             } => {
                 new_lines.extend(insert_lines.iter().cloned());
             }

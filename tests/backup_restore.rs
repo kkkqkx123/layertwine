@@ -1,12 +1,12 @@
 //! Backup and restore E2E tests
 
-use stratum::api::{InitRequest, BackupRequest, RestoreRequest, CommitRequest, ApiService};
-use stratum::core::types::SnapshotId;
-use stratum::storage::repository::PartitionStore;
-use crate::common::fixture::{TestEnvironment, TestConfig};
+use crate::common::assertions::*;
+use crate::common::fixture::{TestConfig, TestEnvironment};
 use crate::common::helpers::*;
 use crate::common::output::*;
-use crate::common::assertions::*;
+use stratum::api::{ApiService, BackupRequest, CommitRequest, InitRequest, RestoreRequest};
+use stratum::core::types::SnapshotId;
+use stratum::storage::repository::PartitionStore;
 
 #[test]
 fn test_backup_and_restore() {
@@ -36,20 +36,32 @@ fn test_backup_and_restore() {
 
     // Verify current content
     print_info("Step 2: Verify current content");
-    let current_content = reconstruct_text(&env, &snapshot3)
-        .expect("Failed to reconstruct current content");
+    let current_content =
+        reconstruct_text(&env, &snapshot3).expect("Failed to reconstruct current content");
     print_file_content(&current_content, 5);
     assert_eq!(current_content, content3, "Current content mismatch");
 
     // Create backup
     print_info("Step 3: Create backup from snapshot");
-    let backup_response = env.api.backup(BackupRequest {
-        snapshot_id: snapshot3.to_hex(),
-        label: Some("Full backup before modifications".to_string()),
-    }).expect("Failed to create backup");
-    print_success(&format!("Backup created: {}", &backup_response.backup_id[..12]));
-    print_info(&format!("  Source snapshot: {}", &backup_response.source_snapshot_id[..12]));
-    print_info(&format!("  Label: {}", backup_response.label.as_ref().unwrap()));
+    let backup_response = env
+        .api
+        .backup(BackupRequest {
+            snapshot_id: snapshot3.to_hex(),
+            label: Some("Full backup before modifications".to_string()),
+        })
+        .expect("Failed to create backup");
+    print_success(&format!(
+        "Backup created: {}",
+        &backup_response.backup_id[..12]
+    ));
+    print_info(&format!(
+        "  Source snapshot: {}",
+        &backup_response.source_snapshot_id[..12]
+    ));
+    print_info(&format!(
+        "  Label: {}",
+        backup_response.label.as_ref().unwrap()
+    ));
 
     let backup_id = backup_response.backup_id.clone();
 
@@ -62,25 +74,40 @@ fn test_backup_and_restore() {
 
     // Verify content changed
     print_info("Step 5: Verify content changed");
-    let current_modified = reconstruct_text(&env, &modified_snapshot)
-        .expect("Failed to reconstruct modified content");
+    let current_modified =
+        reconstruct_text(&env, &modified_snapshot).expect("Failed to reconstruct modified content");
     print_file_content(&current_modified, 5);
-    assert_eq!(current_modified, modified_content, "Modified content mismatch");
-    assert_ne!(current_modified, content3, "Content should be different from backup");
+    assert_eq!(
+        current_modified, modified_content,
+        "Modified content mismatch"
+    );
+    assert_ne!(
+        current_modified, content3,
+        "Content should be different from backup"
+    );
 
     // Restore backup
     print_info("Step 6: Restore from backup");
-    let restore_response = env.api.restore(RestoreRequest {
-        backup_id: backup_id.clone(),
-    }).expect("Failed to restore backup");
-    print_success(&format!("Backup restored: {}", &restore_response.backup_id[..12]));
+    let restore_response = env
+        .api
+        .restore(RestoreRequest {
+            backup_id: backup_id.clone(),
+        })
+        .expect("Failed to restore backup");
+    print_success(&format!(
+        "Backup restored: {}",
+        &restore_response.backup_id[..12]
+    ));
     print_info(&format!("  File: {}", restore_response.file));
-    print_info(&format!("  Deltas restored: {}", restore_response.deltas_restored));
+    print_info(&format!(
+        "  Deltas restored: {}",
+        restore_response.deltas_restored
+    ));
 
     // Verify restoration
     print_info("Step 7: Verify restoration");
-    let restored_snapshot_id = SnapshotId::from_hex(&snapshot3.to_hex())
-        .expect("Invalid snapshot ID");
+    let restored_snapshot_id =
+        SnapshotId::from_hex(&snapshot3.to_hex()).expect("Invalid snapshot ID");
     let restored_content = reconstruct_text(&env, &restored_snapshot_id)
         .expect("Failed to reconstruct restored content");
 
@@ -101,8 +128,8 @@ fn test_backup_and_restore() {
 
     // Verify final content
     print_info("Step 10: Verify final content");
-    let final_reconstructed = reconstruct_text(&env, &final_snapshot)
-        .expect("Failed to reconstruct final content");
+    let final_reconstructed =
+        reconstruct_text(&env, &final_snapshot).expect("Failed to reconstruct final content");
     assert_eq!(final_reconstructed, final_content, "Final content mismatch");
     print_success("Final content verified");
 
@@ -130,10 +157,13 @@ fn test_multiple_backups() {
     let snapshot1 = apply_edit(&env, "multi_backup.txt", content1);
     commit_changes(&env, "Commit version 1", "user-1");
 
-    let backup1 = env.api.backup(BackupRequest {
-        snapshot_id: snapshot1.to_hex(),
-        label: Some("Backup of version 1".to_string()),
-    }).expect("Failed to create backup 1");
+    let backup1 = env
+        .api
+        .backup(BackupRequest {
+            snapshot_id: snapshot1.to_hex(),
+            label: Some("Backup of version 1".to_string()),
+        })
+        .expect("Failed to create backup 1");
     print_success(&format!("Backup 1 created: {}", &backup1.backup_id[..12]));
 
     // Create more content and second backup
@@ -141,10 +171,13 @@ fn test_multiple_backups() {
     let snapshot2 = apply_edit(&env, "multi_backup.txt", content2);
     commit_changes(&env, "Commit version 2", "user-1");
 
-    let backup2 = env.api.backup(BackupRequest {
-        snapshot_id: snapshot2.to_hex(),
-        label: Some("Backup of version 2".to_string()),
-    }).expect("Failed to create backup 2");
+    let backup2 = env
+        .api
+        .backup(BackupRequest {
+            snapshot_id: snapshot2.to_hex(),
+            label: Some("Backup of version 2".to_string()),
+        })
+        .expect("Failed to create backup 2");
     print_success(&format!("Backup 2 created: {}", &backup2.backup_id[..12]));
 
     // Create more content and third backup
@@ -152,18 +185,36 @@ fn test_multiple_backups() {
     let snapshot3 = apply_edit(&env, "multi_backup.txt", content3);
     commit_changes(&env, "Commit version 3", "user-1");
 
-    let backup3 = env.api.backup(BackupRequest {
-        snapshot_id: snapshot3.to_hex(),
-        label: Some("Backup of version 3".to_string()),
-    }).expect("Failed to create backup 3");
+    let backup3 = env
+        .api
+        .backup(BackupRequest {
+            snapshot_id: snapshot3.to_hex(),
+            label: Some("Backup of version 3".to_string()),
+        })
+        .expect("Failed to create backup 3");
     print_success(&format!("Backup 3 created: {}", &backup3.backup_id[..12]));
 
     // Verify all backups exist
     print_info("Step 2: Verify all backups exist");
     let backups = vec![
-        ("Backup 1", backup1.backup_id.clone(), backup1.source_snapshot_id.clone(), content1),
-        ("Backup 2", backup2.backup_id.clone(), backup2.source_snapshot_id.clone(), content2),
-        ("Backup 3", backup3.backup_id.clone(), backup3.source_snapshot_id.clone(), content3),
+        (
+            "Backup 1",
+            backup1.backup_id.clone(),
+            backup1.source_snapshot_id.clone(),
+            content1,
+        ),
+        (
+            "Backup 2",
+            backup2.backup_id.clone(),
+            backup2.source_snapshot_id.clone(),
+            content2,
+        ),
+        (
+            "Backup 3",
+            backup3.backup_id.clone(),
+            backup3.source_snapshot_id.clone(),
+            content3,
+        ),
     ];
 
     for (name, backup_id, _source_snapshot_id, expected_content) in &backups {
@@ -174,16 +225,24 @@ fn test_multiple_backups() {
     print_info("Step 3: Restore and verify each backup");
 
     for (name, backup_id, source_snapshot_id, expected_content) in &backups {
-        let restore_response = env.api.restore(RestoreRequest {
-            backup_id: backup_id.clone(),
-        }).expect(&format!("Failed to restore {}", name));
+        let restore_response = env
+            .api
+            .restore(RestoreRequest {
+                backup_id: backup_id.clone(),
+            })
+            .expect(&format!("Failed to restore {}", name));
 
-        print_info(&format!("  Restored {}: {} deltas", name, restore_response.deltas_restored));
+        print_info(&format!(
+            "  Restored {}: {} deltas",
+            name, restore_response.deltas_restored
+        ));
 
-        let restored_id = SnapshotId::from_hex(source_snapshot_id)
-            .expect("Invalid snapshot ID");
+        let restored_id = SnapshotId::from_hex(source_snapshot_id).expect("Invalid snapshot ID");
 
-        print_info(&format!("  Attempting to reconstruct snapshot: {}", &source_snapshot_id[..12]));
+        print_info(&format!(
+            "  Attempting to reconstruct snapshot: {}",
+            &source_snapshot_id[..12]
+        ));
 
         let restored_content = reconstruct_text(&env, &restored_id);
 
@@ -194,16 +253,19 @@ fn test_multiple_backups() {
 
         let restored_content = restored_content.unwrap();
 
-        assert_eq!(restored_content, **expected_content,
-            "{} content mismatch after restore", name);
+        assert_eq!(
+            restored_content, **expected_content,
+            "{} content mismatch after restore",
+            name
+        );
     }
 
     print_success("All backups verified successfully");
 
     // Verify final state
     print_info("Step 4: Verify final state");
-    let final_content = reconstruct_text(&env, &snapshot3)
-        .expect("Failed to reconstruct final content");
+    let final_content =
+        reconstruct_text(&env, &snapshot3).expect("Failed to reconstruct final content");
     print_file_content(&final_content, 5);
     assert_eq!(final_content, content3, "Final content should be version 3");
 
@@ -226,17 +288,19 @@ fn test_backup_empty_file() {
     print_success("Empty file created");
 
     // Verify empty
-    let current = reconstruct_text(&env, &snapshot)
-        .expect("Failed to reconstruct empty file");
+    let current = reconstruct_text(&env, &snapshot).expect("Failed to reconstruct empty file");
     assert!(current.is_empty(), "File should be empty");
     print_info("Empty file verified");
 
     // Create backup
     print_info("Step 2: Create backup of empty file");
-    let backup = env.api.backup(BackupRequest {
-        snapshot_id: snapshot.to_hex(),
-        label: Some("Empty file backup".to_string()),
-    }).expect("Failed to backup empty file");
+    let backup = env
+        .api
+        .backup(BackupRequest {
+            snapshot_id: snapshot.to_hex(),
+            label: Some("Empty file backup".to_string()),
+        })
+        .expect("Failed to backup empty file");
     print_success(&format!("Backup created: {}", &backup.backup_id[..12]));
 
     // Modify file
@@ -248,15 +312,20 @@ fn test_backup_empty_file() {
 
     // Restore backup
     print_info("Step 4: Restore backup");
-    let restore = env.api.restore(RestoreRequest {
-        backup_id: backup.backup_id.clone(),
-    }).expect("Failed to restore backup");
-    print_success(&format!("Backup restored: {} deltas", restore.deltas_restored));
+    let restore = env
+        .api
+        .restore(RestoreRequest {
+            backup_id: backup.backup_id.clone(),
+        })
+        .expect("Failed to restore backup");
+    print_success(&format!(
+        "Backup restored: {} deltas",
+        restore.deltas_restored
+    ));
 
     // Verify empty restored
     print_info("Step 5: Verify empty file restored");
-    let restored = reconstruct_text(&env, &snapshot)
-        .expect("Failed to reconstruct restored file");
+    let restored = reconstruct_text(&env, &snapshot).expect("Failed to reconstruct restored file");
     assert!(restored.is_empty(), "File should be empty after restore");
     print_success("Empty file successfully restored");
 
@@ -281,14 +350,20 @@ fn test_backup_large_file() {
 
     let snapshot = apply_edit(&env, "large.txt", &large_content);
     commit_changes(&env, "Create large file", "user-1");
-    print_success(&format!("Large file created ({} lines)", large_content.lines().count()));
+    print_success(&format!(
+        "Large file created ({} lines)",
+        large_content.lines().count()
+    ));
 
     // Create backup
     print_info("Step 2: Create backup of large file");
-    let backup = env.api.backup(BackupRequest {
-        snapshot_id: snapshot.to_hex(),
-        label: Some("Large file backup".to_string()),
-    }).expect("Failed to backup large file");
+    let backup = env
+        .api
+        .backup(BackupRequest {
+            snapshot_id: snapshot.to_hex(),
+            label: Some("Large file backup".to_string()),
+        })
+        .expect("Failed to backup large file");
     print_success(&format!("Backup created: {}", &backup.backup_id[..12]));
 
     // Modify large file
@@ -304,20 +379,28 @@ fn test_backup_large_file() {
 
     // Restore backup
     print_info("Step 4: Restore backup");
-    let restore = env.api.restore(RestoreRequest {
-        backup_id: backup.backup_id.clone(),
-    }).expect("Failed to restore backup");
-    print_success(&format!("Backup restored: {} deltas", restore.deltas_restored));
+    let restore = env
+        .api
+        .restore(RestoreRequest {
+            backup_id: backup.backup_id.clone(),
+        })
+        .expect("Failed to restore backup");
+    print_success(&format!(
+        "Backup restored: {} deltas",
+        restore.deltas_restored
+    ));
 
     // Verify restoration
     print_info("Step 5: Verify large file restoration");
-    let restored = reconstruct_text(&env, &snapshot)
-        .expect("Failed to reconstruct restored file");
+    let restored = reconstruct_text(&env, &snapshot).expect("Failed to reconstruct restored file");
 
     assert_eq!(restored.lines().count(), 100, "Should have 100 lines");
     assert_eq!(restored, large_content, "Large file content mismatch");
 
-    print_info(&format!("Successfully restored large file ({} lines)", restored.lines().count()));
+    print_info(&format!(
+        "Successfully restored large file ({} lines)",
+        restored.lines().count()
+    ));
 
     // Show preview
     print_file_content(&restored, 10);

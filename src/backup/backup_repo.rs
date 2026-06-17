@@ -87,9 +87,14 @@ impl BackupRepo {
 
         let (agent_id, source_type) = Self::extract_source_info_from_deltas(&deltas);
 
+        let backup_file = deltas
+            .last()
+            .map(|d| d.file.clone())
+            .unwrap_or_else(|| snapshot.file.clone());
+
         let backup = BackupSnapshot::with_options(
             snapshot_id,
-            snapshot.file,
+            backup_file,
             deltas,
             label,
             agent_id,
@@ -380,8 +385,13 @@ impl BackupRepo {
 
         // Step 4: Compute diff from base to merged result, create delta
         let diff = diff_to_line_diff(&backup_base_str, &merged_text);
+        let merge_file = backup
+            .deltas
+            .last()
+            .map(|d| d.file.clone())
+            .unwrap_or_else(|| backup.file.clone());
         let merge_delta = Delta::new(
-            backup.file.clone(),
+            merge_file,
             diff,
             crate::core::types::SourceType::Backup,
         );

@@ -1,8 +1,8 @@
 // 导出辅助模块
-use std::fs;
-use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BenchmarkResult {
@@ -74,7 +74,17 @@ impl BenchmarkCollector {
         self.current_group = Some(group_name.to_string());
     }
 
-    pub fn add_benchmark(&mut self, name: String, mean_ns: f64, std_dev_ns: f64, median_ns: f64, min_ns: f64, max_ns: f64, iterations: u64, sample_size: usize) {
+    pub fn add_benchmark(
+        &mut self,
+        name: String,
+        mean_ns: f64,
+        std_dev_ns: f64,
+        median_ns: f64,
+        min_ns: f64,
+        max_ns: f64,
+        iterations: u64,
+        sample_size: usize,
+    ) {
         self.current_benchmarks.push(BenchmarkResult {
             name,
             mean_ns,

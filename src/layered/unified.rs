@@ -110,8 +110,15 @@ where
         });
     }
 
+    let feature_deltas = storage
+        .get_deltas(&feature_snapshot.deltas)
+        .map_err(StratumError::Storage)?;
+    let merge_file = feature_deltas
+        .last()
+        .map(|d| d.file.clone())
+        .unwrap_or_else(|| unified_snapshot.file.clone());
     let merge_delta = Delta::new(
-        unified_snapshot.file.clone(),
+        merge_file,
         merge_diff,
         SourceType::Manual,
     );

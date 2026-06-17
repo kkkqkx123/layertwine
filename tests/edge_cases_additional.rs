@@ -1,10 +1,10 @@
 //! Additional E2E tests for edge cases and error handling
 
-use stratum::api::*;
-use crate::common::fixture::{TestEnvironment, TestConfig};
+use crate::common::assertions::*;
+use crate::common::fixture::{TestConfig, TestEnvironment};
 use crate::common::helpers::*;
 use crate::common::output::*;
-use crate::common::assertions::*;
+use stratum::api::*;
 
 #[test]
 fn test_large_file_handling() {
@@ -17,9 +17,7 @@ fn test_large_file_handling() {
     init_repository(&env);
 
     print_info("Step 2: Create large file (1000 lines)");
-    let large_content: String = (1..=1000)
-        .map(|i| format!("Line {}\n", i))
-        .collect();
+    let large_content: String = (1..=1000).map(|i| format!("Line {}\n", i)).collect();
 
     print_info(&format!("  File size: {} bytes", large_content.len()));
 
@@ -59,10 +57,16 @@ fn test_special_characters() {
 
     print_info("Step 3: Verify reconstruction");
     let reconstructed = reconstruct_text(&env, &snapshot);
-    assert!(reconstructed.is_some(), "Failed to reconstruct special characters");
+    assert!(
+        reconstructed.is_some(),
+        "Failed to reconstruct special characters"
+    );
 
     let content = reconstructed.unwrap();
-    assert!(content.contains("@#$%^&*()"), "Special chars should be preserved");
+    assert!(
+        content.contains("@#$%^&*()"),
+        "Special chars should be preserved"
+    );
     assert!(content.contains("你好世界"), "Unicode should be preserved");
     print_success("Special characters preserved correctly");
 
@@ -85,7 +89,10 @@ fn test_invalid_snapshot_id() {
         label: Some("Test backup".to_string()),
     });
 
-    assert!(backup_response.is_err(), "Backup with invalid snapshot ID should fail");
+    assert!(
+        backup_response.is_err(),
+        "Backup with invalid snapshot ID should fail"
+    );
     print_success("Correctly rejected invalid snapshot ID");
 
     print_info("Step 3: Try to restore with invalid backup ID");
@@ -93,7 +100,10 @@ fn test_invalid_snapshot_id() {
         backup_id: "invalid_backup_id_12345".to_string(),
     });
 
-    assert!(restore_response.is_err(), "Restore with invalid backup ID should fail");
+    assert!(
+        restore_response.is_err(),
+        "Restore with invalid backup ID should fail"
+    );
     print_success("Correctly rejected invalid backup ID");
 
     print_test_result(true, "test_invalid_snapshot_id", None);
@@ -116,7 +126,10 @@ fn test_nonexistent_branch_operations() {
         name: "nonexistent_branch".to_string(),
     });
 
-    assert!(switch_response.is_err(), "Switching to nonexistent branch should fail");
+    assert!(
+        switch_response.is_err(),
+        "Switching to nonexistent branch should fail"
+    );
     print_success("Correctly rejected nonexistent branch switch");
 
     print_info("Step 3: Try to merge nonexistent branch");
@@ -125,7 +138,10 @@ fn test_nonexistent_branch_operations() {
         message: Some("Try to merge".to_string()),
     });
 
-    assert!(merge_response.is_err(), "Merging nonexistent branch should fail");
+    assert!(
+        merge_response.is_err(),
+        "Merging nonexistent branch should fail"
+    );
     print_success("Correctly rejected nonexistent branch merge");
 
     print_test_result(true, "test_nonexistent_branch_operations", None);

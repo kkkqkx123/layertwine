@@ -762,7 +762,9 @@ fn test_rollback_to_multi_file_checkpoint() {
 
     let snap3 = dummy_snapshot_id(3);
     let snap4 = dummy_snapshot_id(4);
-    let cp1 = repo.commit(vec![snap3, snap4], "multi-file commit", "user").unwrap();
+    let cp1 = repo
+        .commit(vec![snap3, snap4], "multi-file commit", "user")
+        .unwrap();
 
     let snap5 = dummy_snapshot_id(5);
     repo.commit_single(snap5, "another commit", "user").unwrap();

@@ -140,8 +140,15 @@ where
         });
     }
 
+    let approval_deltas = storage
+        .get_deltas(&approval_snapshot.deltas)
+        .map_err(StratumError::Storage)?;
+    let merge_file = approval_deltas
+        .last()
+        .map(|d| d.file.clone())
+        .unwrap_or_else(|| baseline_snapshot.file.clone());
     let merge_delta = Delta::new(
-        baseline_snapshot.file.clone(),
+        merge_file,
         merge_diff,
         SourceType::Agent(agent_id.clone()),
     );

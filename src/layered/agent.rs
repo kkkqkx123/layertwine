@@ -161,8 +161,15 @@ where
         return Ok(approval_partition.current_snapshot);
     }
 
+    let agent_deltas = storage
+        .get_deltas(&agent_snapshot.deltas)
+        .map_err(StratumError::Storage)?;
+    let merge_file = agent_deltas
+        .last()
+        .map(|d| d.file.clone())
+        .unwrap_or_else(|| agent_snapshot.file.clone());
     let merge_delta = Delta::new(
-        agent_snapshot.file.clone(),
+        merge_file,
         merge_diff,
         SourceType::Agent(agent_id.clone()),
     );
