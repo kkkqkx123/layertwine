@@ -7,7 +7,7 @@ use crate::StorageResult;
 
 impl CheckpointStore for SqliteStorage {
     fn store_checkpoint(&self, checkpoint: &Checkpoint) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let parents_json = serde_json::to_vec(&checkpoint.parents)
             .map_err(|e| crate::StorageError::Serialization(e.to_string()))?;
         let snapshot_ids_json = serde_json::to_vec(&checkpoint.baseline_snapshots)
@@ -30,7 +30,7 @@ impl CheckpointStore for SqliteStorage {
     }
 
     fn get_checkpoint(&self, id: &CheckpointId) -> StorageResult<Checkpoint> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, parents, snapshot_ids, author, message, git_anchor, created_at FROM checkpoints WHERE id = ?1"
         )?;
@@ -69,14 +69,14 @@ impl CheckpointStore for SqliteStorage {
     }
 
     fn checkpoint_exists(&self, id: &CheckpointId) -> StorageResult<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare("SELECT COUNT(*) FROM checkpoints WHERE id = ?1")?;
         let count: i64 = stmt.query_row(rusqlite::params![&id.0.to_vec()], |row| row.get(0))?;
         Ok(count > 0)
     }
 
     fn list_checkpoints(&self) -> StorageResult<Vec<Checkpoint>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare("SELECT id FROM checkpoints ORDER BY created_at DESC")?;
         let ids: Vec<Vec<u8>> = stmt
             .query_map([], |row| row.get(0))
@@ -97,7 +97,7 @@ impl CheckpointStore for SqliteStorage {
     }
 
     fn delete_checkpoint(&self, id: &CheckpointId) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let affected = conn.execute(
             "DELETE FROM checkpoints WHERE id = ?1",
             rusqlite::params![&id.0.to_vec()],
@@ -114,7 +114,7 @@ impl CheckpointStore for SqliteStorage {
 
 impl BranchStore for SqliteStorage {
     fn store_branch(&self, branch: &Branch) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             "INSERT OR REPLACE INTO branches (name, head, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4)",
@@ -129,7 +129,7 @@ impl BranchStore for SqliteStorage {
     }
 
     fn get_branch(&self, name: &str) -> StorageResult<Branch> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn
             .prepare("SELECT name, head, created_at, updated_at FROM branches WHERE name = ?1")?;
 
@@ -152,7 +152,7 @@ impl BranchStore for SqliteStorage {
     }
 
     fn update_branch_head(&self, name: &str, head: &CheckpointId) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let now = chrono::Utc::now().timestamp_millis();
         conn.execute(
             "UPDATE branches SET head = ?1, updated_at = ?2 WHERE name = ?3",
@@ -162,7 +162,7 @@ impl BranchStore for SqliteStorage {
     }
 
     fn list_branches(&self) -> StorageResult<Vec<Branch>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt =
             conn.prepare("SELECT name, head, created_at, updated_at FROM branches ORDER BY name")?;
 
@@ -190,7 +190,7 @@ impl BranchStore for SqliteStorage {
     }
 
     fn delete_branch(&self, name: &str) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             "DELETE FROM branches WHERE name = ?1",
             rusqlite::params![name],

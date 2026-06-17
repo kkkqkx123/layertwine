@@ -237,9 +237,13 @@ where
 ///
 /// Executes the rollback operation based on the `RollbackTransition` type.
 /// This is the reverse counterpart to `execute_forward`.
-pub fn execute_rollback<S>(storage: &S, transition: RollbackTransition, _params: &[&str]) -> Result<SnapshotId>
+pub fn execute_rollback<S>(
+    storage: &S,
+    transition: RollbackTransition,
+    _params: &[&str],
+) -> Result<SnapshotId>
 where
-    S: SnapshotStore + PartitionStore + DeltaStore + FileNodeStore,
+    S: SnapshotStore + PartitionStore + DeltaStore + FileNodeStore + 'static,
 {
     match transition {
         RollbackTransition::StagedToManual => {
@@ -522,7 +526,7 @@ mod tests {
         storage.store_snapshot(&snapshot, b"").unwrap();
 
         let text = reconstruct_text(&storage, &snapshot).unwrap();
-        assert_eq!(text, "hello world");
+        assert_eq!(text, "hello world\n");
     }
 
     #[test]
@@ -651,17 +655,16 @@ mod tests {
         assert_ne!(staged_before.current_snapshot, initial_id);
 
         // Rollback staged → manual
-        let result = execute_rollback(
-            &storage,
-            RollbackTransition::StagedToManual,
-            &[],
-        );
+        let result = execute_rollback(&storage, RollbackTransition::StagedToManual, &[]);
         assert!(result.is_ok());
 
         let staged_after = storage.get_partition(&staged_pid).unwrap();
         // Staged should roll back to the manual partition's snapshot (not the initial)
         let manual_pid = crate::layered::manual::manual_partition_id();
         let manual_partition = storage.get_partition(&manual_pid).unwrap();
-        assert_eq!(staged_after.current_snapshot, manual_partition.current_snapshot);
+        assert_eq!(
+            staged_after.current_snapshot,
+            manual_partition.current_snapshot
+        );
     }
 }

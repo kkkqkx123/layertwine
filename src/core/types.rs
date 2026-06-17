@@ -129,9 +129,9 @@ impl PartitionType {
         match self {
             PartitionType::Manual => crate::core::types::LayerType::ManualEdit,
             PartitionType::Agent(_) => crate::core::types::LayerType::AgentEdit,
-            PartitionType::Approval(_) | PartitionType::Integrated(_) | PartitionType::Unified => {
-                crate::core::types::LayerType::Approval
-            }
+            PartitionType::Approval(_) => crate::core::types::LayerType::Approval,
+            PartitionType::Integrated(_) => crate::core::types::LayerType::Integrated,
+            PartitionType::Unified => crate::core::types::LayerType::Unified,
             PartitionType::Staged => crate::core::types::LayerType::Staged,
         }
     }
@@ -245,10 +245,10 @@ mod tests {
 
         assert_eq!(
             PartitionType::Integrated("test".to_string()).to_layer(),
-            LayerType::Approval
+            LayerType::Integrated
         );
 
-        assert_eq!(PartitionType::Unified.to_layer(), LayerType::Approval);
+        assert_eq!(PartitionType::Unified.to_layer(), LayerType::Unified);
 
         assert_eq!(PartitionType::Staged.to_layer(), LayerType::Staged);
     }

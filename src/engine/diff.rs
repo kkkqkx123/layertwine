@@ -4,13 +4,35 @@
 
 use crate::core::delta::Delta;
 use crate::core::file_node::FileNode;
-use crate::core::types::LineDiff;
-use crate::core::types::{DiffOp, Hunk, SourceType};
+use crate::core::types::{DiffOp, Hunk, LineDiff, SourceType};
 use similar::{ChangeTag, TextDiff};
 use std::path::PathBuf;
 
+// Performance optimizations
+use lazy_static::lazy_static;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+lazy_static! {
+    static ref DIFF_CACHE: Mutex<HashMap<u64, String>> = Mutex::new(HashMap::new());
+}
+
+fn compute_hash(old: &str, new: &str, context: usize) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    old.hash(&mut hasher);
+    new.hash(&mut hasher);
+    context.hash(&mut hasher);
+    hasher.finish()
+}
+
 fn strip_newline(s: &str) -> String {
-    s.trim_end_matches('\n').trim_end_matches('\r').to_string()
+    if s.ends_with('\n') || s.ends_with('\r') {
+        s.trim_end_matches(['\n', '\r']).to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 /// Calculates the line level difference between two texts, returns LineDiff
@@ -55,10 +77,11 @@ pub fn diff_to_line_diff(old: &str, new: &str) -> LineDiff {
                         });
                     }
                     similar::DiffTag::Insert => {
-                        let lines: Vec<String> = diff
-                            .iter_changes(op)
-                            .map(|c| strip_newline(c.value()))
-                            .collect();
+                        let changes: Vec<_> = diff.iter_changes(op).collect();
+                        let mut lines = Vec::with_capacity(changes.len());
+                        for c in changes {
+                            lines.push(strip_newline(c.value()));
+                        }
                         my_ops.push(DiffOp::Insert {
                             new_start: n_range.start as u32 + 1,
                             lines,
@@ -66,11 +89,13 @@ pub fn diff_to_line_diff(old: &str, new: &str) -> LineDiff {
                     }
                     similar::DiffTag::Replace => {
                         let old_cnt = (o_range.end - o_range.start) as u32;
-                        let lines: Vec<String> = diff
-                            .iter_changes(op)
-                            .filter(|c| c.tag() == ChangeTag::Insert)
-                            .map(|c| strip_newline(c.value()))
-                            .collect();
+                        let changes: Vec<_> = diff.iter_changes(op).collect();
+                        let mut lines = Vec::with_capacity(changes.len());
+                        for c in changes {
+                            if c.tag() == ChangeTag::Insert {
+                                lines.push(strip_newline(c.value()));
+                            }
+                        }
                         my_ops.push(DiffOp::Replace {
                             old_start: o_range.start as u32 + 1,
                             old_count: old_cnt,
@@ -202,8 +227,38 @@ fn collect_changes_from_diff<'a>(
 
 /// Unified diff output (with context preserved) for displaying the
 pub fn format_unified_diff(old: &str, new: &str, context: usize) -> String {
+    // Try cache for small files
+    let total_size = old.len() + new.len();
+    if total_size < 100000 {
+        let hash = compute_hash(old, new, context);
+        if let Some(cached) = DIFF_CACHE.lock().unwrap().get(&hash) {
+            return cached.clone();
+        }
+    }
+
     let diff = TextDiff::from_lines(old, new);
-    diff.unified_diff().context_radius(context).to_string()
+
+    // Use streaming for large files to reduce memory pressure
+    let result = if old.len() > 50000 || new.len() > 50000 {
+        // Stream processing for large files
+        let mut output = String::new();
+        for hunk in diff.unified_diff().context_radius(context).iter_hunks() {
+            output.push_str(&hunk.to_string());
+        }
+        output
+    } else {
+        // Direct generation for small files
+        diff.unified_diff().context_radius(context).to_string()
+    };
+
+    // Cache small file results
+    let total_size = old.len() + new.len();
+    if total_size < 100000 {
+        let hash = compute_hash(old, new, context);
+        DIFF_CACHE.lock().unwrap().insert(hash, result.clone());
+    }
+
+    result
 }
 
 #[cfg(test)]

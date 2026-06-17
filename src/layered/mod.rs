@@ -47,7 +47,11 @@ impl MergeResult {
         }
         let mut result = String::new();
         for (i, conflict) in self.conflicts.iter().enumerate() {
-            result.push_str(&format!("Conflict #{} (line {}):\n", i + 1, conflict.start_line));
+            result.push_str(&format!(
+                "Conflict #{} (line {}):\n",
+                i + 1,
+                conflict.start_line
+            ));
             result.push_str(&conflict.to_conflict_marker());
             result.push('\n');
         }
@@ -220,9 +224,7 @@ mod tests {
     use crate::core::file_node::FileNode;
     use crate::core::snapshot::Snapshot;
     use crate::core::types::{LayerType, SourceType};
-    use crate::storage::repository::{
-        DeltaStore, FileNodeStore, PartitionStore, SnapshotStore,
-    };
+    use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
     use crate::storage::SqliteStorage;
     use std::sync::Arc;
 
@@ -238,8 +240,7 @@ mod tests {
         storage: &SqliteStorage,
         content: &str,
     ) -> crate::core::types::SnapshotId {
-        let file_node =
-            FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
+        let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
         storage
             .store_file_node(&file_node, content.as_bytes())
             .unwrap();

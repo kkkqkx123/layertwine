@@ -6,7 +6,7 @@ use rusqlite::params;
 
 impl FileNodeStore for SqliteStorage {
     fn store_file_node(&self, file_node: &FileNode, content: &[u8]) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             "INSERT OR IGNORE INTO file_nodes (file_path, base_hash, content, created_at)
              VALUES (?1, ?2, ?3, ?4)",
@@ -21,7 +21,7 @@ impl FileNodeStore for SqliteStorage {
     }
 
     fn get_file_content(&self, file_path: &str, base_hash: &[u8; 32]) -> StorageResult<Vec<u8>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt =
             conn.prepare("SELECT content FROM file_nodes WHERE file_path = ?1 AND base_hash = ?2")?;
         let content: Vec<u8> =
@@ -30,7 +30,7 @@ impl FileNodeStore for SqliteStorage {
     }
 
     fn file_node_exists(&self, file_path: &str, base_hash: &[u8; 32]) -> StorageResult<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn
             .prepare("SELECT COUNT(*) FROM file_nodes WHERE file_path = ?1 AND base_hash = ?2")?;
         let count: i64 =

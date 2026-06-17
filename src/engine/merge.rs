@@ -26,7 +26,91 @@ pub fn apply_deltas(content: &str, deltas: &[Delta]) -> Result<String> {
         lines = apply_line_diff(&lines, &delta.diff)?;
     }
 
-    Ok(lines.join("\n"))
+    let ends_with_newline = content.ends_with('\n');
+    let result = lines.join("\n");
+    Ok(if ends_with_newline { format!("{}\n", result) } else { result })
+}
+
+/// Batch apply multiple deltas with optimized sorting and processing.
+///
+/// This function collects all hunks from all deltas, sorts them once, and applies them in order.
+/// This is more efficient than applying deltas sequentially when there are multiple deltas.
+pub fn apply_deltas_batch(content: &str, deltas: &[Delta]) -> Result<String> {
+    if deltas.is_empty() {
+        return Ok(content.to_string());
+    }
+
+    let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+
+    // Collect all hunks from all deltas with their delta index
+    let mut all_hunks: Vec<(usize, usize, &Hunk)> = Vec::new();
+    for (delta_idx, delta) in deltas.iter().enumerate() {
+        for (hunk_idx, hunk) in delta.diff.hunks.iter().enumerate() {
+            all_hunks.push((delta_idx, hunk_idx, hunk));
+        }
+    }
+
+    // Sort all hunks by their old_start position
+    all_hunks.sort_unstable_by_key(|(_, _, h)| h.old_start);
+
+    // Apply hunks in sorted order
+    for (_delta_idx, _hunk_idx, hunk) in &all_hunks {
+        apply_single_hunk_to_lines(&mut lines, hunk)?;
+    }
+
+    let ends_with_newline = content.ends_with('\n');
+    let result = lines.join("\n");
+    Ok(if ends_with_newline { format!("{}\n", result) } else { result })
+}
+
+/// Apply a single hunk to the lines vector in-place.
+fn apply_single_hunk_to_lines(lines: &mut Vec<String>, hunk: &Hunk) -> Result<()> {
+    let hunk_start = (hunk.old_start.saturating_sub(1)) as usize;
+    let hunk_end = hunk_start + hunk.old_len as usize;
+
+    if hunk_end > lines.len() {
+        return Err(StratumError::Engine(format!(
+            "Hunk out of range: old_start={}, old_len={}, total rows={}",
+            hunk.old_start,
+            hunk.old_len,
+            lines.len()
+        )));
+    }
+
+    // Replace the hunk range with the new content
+    let mut new_lines: Vec<String> = Vec::new();
+    let mut hunk_pos = hunk_start;
+
+    for op in &hunk.ops {
+        match op {
+            DiffOp::Equal { count } => {
+                let c = *count as usize;
+                new_lines.extend_from_slice(&lines[hunk_pos..hunk_pos + c]);
+                hunk_pos += c;
+            }
+            DiffOp::Delete { count, .. } => {
+                hunk_pos += *count as usize;
+            }
+            DiffOp::Insert {
+                lines: insert_lines, ..
+            } => {
+                new_lines.extend(insert_lines.iter().cloned());
+            }
+            DiffOp::Replace {
+                old_count,
+                lines: replace_lines,
+                ..
+            } => {
+                hunk_pos += *old_count as usize;
+                new_lines.extend(replace_lines.iter().cloned());
+            }
+        }
+    }
+
+    // Replace the hunk range with new content
+    lines.splice(hunk_start..hunk_end, new_lines);
+
+    Ok(())
 }
 
 /// Apply a single LineDiff to an array of rows.
@@ -34,11 +118,12 @@ fn apply_line_diff(lines: &[String], diff: &LineDiff) -> Result<Vec<String>> {
     let mut result: Vec<String> = Vec::with_capacity(lines.len());
     let mut old_pos = 0usize;
 
-    // Sort by old_start
-    let mut hunks = diff.hunks.clone();
-    hunks.sort_by_key(|h| h.old_start);
+    // Sort by old_start without cloning hunks
+    let mut hunk_indices: Vec<usize> = (0..diff.hunks.len()).collect();
+    hunk_indices.sort_unstable_by_key(|&i| diff.hunks[i].old_start);
 
-    for hunk in &hunks {
+    for hunk_idx in hunk_indices {
+        let hunk = &diff.hunks[hunk_idx];
         let hunk_start = (hunk.old_start.saturating_sub(1)) as usize;
         let hunk_end = hunk_start + hunk.old_len as usize;
 
@@ -146,6 +231,7 @@ pub fn merge_texts(base: &str, ours: &str, theirs: &str) -> (String, Vec<MergeCo
     let diff_ours = diff_to_line_diff(base, ours);
     let diff_theirs = diff_to_line_diff(base, theirs);
 
+    // Use Cow to avoid unnecessary cloning for unchanged lines
     let base_lines: Vec<&str> = base.lines().collect();
     let ours_lines: Vec<&str> = ours.lines().collect();
     let theirs_lines: Vec<&str> = theirs.lines().collect();
@@ -351,7 +437,7 @@ fn extract_changes_from_line_diff(
 fn append_unchanged(result: &mut Vec<String>, base_lines: &[&str], from: usize, to: usize) {
     if to > from {
         for line in &base_lines[from..to.min(base_lines.len())] {
-            result.push(line.to_string());
+            result.push((*line).to_string());
         }
     }
 }
@@ -375,7 +461,7 @@ mod tests {
     fn test_apply_empty_deltas() {
         let content = "hello\nworld\n";
         let result = apply_deltas(content, &[]).unwrap();
-        assert_eq!(result, "hello\nworld");
+        assert_eq!(result, "hello\nworld\n");
     }
 
     #[test]
@@ -401,7 +487,7 @@ mod tests {
             SourceType::Manual,
         );
         let result = apply_deltas(content, &[delta]).unwrap();
-        assert_eq!(result, "line1\nline2\nline3");
+        assert_eq!(result, "line1\nline2\nline3\n");
     }
 
     #[test]
@@ -424,7 +510,7 @@ mod tests {
             SourceType::Manual,
         );
         let result = apply_deltas(content, &[delta]).unwrap();
-        assert_eq!(result, "line1\nline3");
+        assert_eq!(result, "line1\nline3\n");
     }
 
     #[test]
@@ -449,7 +535,7 @@ mod tests {
             SourceType::Manual,
         );
         let result = apply_deltas(content, &[delta]).unwrap();
-        assert_eq!(result, "aaa\nxxx\nccc");
+        assert_eq!(result, "aaa\nxxx\nccc\n");
     }
 
     #[test]
@@ -495,7 +581,7 @@ mod tests {
             SourceType::Manual,
         );
         let result = apply_deltas(content, &[delta1, delta2]).unwrap();
-        assert_eq!(result, "a\nx\ny\nc");
+        assert_eq!(result, "a\nx\ny\nc\n");
     }
 
     #[test]

@@ -4,8 +4,7 @@
 //! A versioning core independent of Git.
 
 pub mod branch;
-#[allow(clippy::module_inception)]
-pub(crate) mod checkpoint;
+pub mod checkpoint;
 pub mod dag;
 pub mod repo;
 

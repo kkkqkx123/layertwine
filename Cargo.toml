@@ -10,7 +10,14 @@ default = ["cli"]
 cli = ["dep:clap"]
 http = ["dep:axum", "dep:tower", "dep:tower-http", "dep:http", "dep:tokio"]
 grpc = ["dep:tonic", "dep:prost", "dep:tokio"]
-api-full = ["cli", "http", "grpc"]
+
+# Combined modes
+cli-http = ["cli", "http"]
+cli-grpc = ["cli", "grpc"]
+http-grpc = ["http", "grpc"]
+
+# All transports
+all = ["cli", "http", "grpc"]
 
 [dependencies]
 rusqlite = { version = "0.39", features = ["bundled"] }
@@ -22,9 +29,11 @@ chrono = "0.4"
 uuid = { version = "1", features = ["std", "v5", "v7", "serde"] }
 similar = "3"
 git2 = "0.21"
+parking_lot = "0.12"
+lazy_static = "1.5"
 
 # Config
-toml = "0.9"
+toml = "1.1"
 
 # CLI transport
 clap = { version = "4", features = ["derive"], optional = true }
@@ -46,3 +55,29 @@ required-features = ["cli"]
 
 [dev-dependencies]
 tempfile = "3"
+criterion = "0.5"
+lazy_static = "1.5"
+
+[[bench]]
+name = "diff"
+harness = false
+
+[[bench]]
+name = "merge"
+harness = false
+
+[[bench]]
+name = "inverse"
+harness = false
+
+[[bench]]
+name = "core_types"
+harness = false
+
+[[bench]]
+name = "storage"
+harness = false
+
+[[bench]]
+name = "serialization"
+harness = false

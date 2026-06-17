@@ -243,14 +243,14 @@ mod tests {
         let diff = LineDiff::new(vec![hunk]);
         let delta = Delta::new(file.clone(), diff, SourceType::Manual);
 
-        // Apply insert → get line1\nline2\nline3
+        // Apply insert → get line1\nline2\nline3\n (preserves trailing newline)
         let new_content = crate::engine::merge::apply_deltas(content, &[delta.clone()]).unwrap();
-        assert_eq!(new_content, "line1\nline2\nline3");
+        assert_eq!(new_content, "line1\nline2\nline3\n");
 
         // Generate an inverse delta and apply it to the new content → go back to original
         let inv = inverse_delta(&delta, Some(content)).unwrap();
         let restored = crate::engine::merge::apply_deltas(&new_content, &[inv]).unwrap();
-        assert_eq!(restored, content.trim_end_matches('\n'));
+        assert_eq!(restored, content);
     }
 
     #[test]
@@ -324,11 +324,11 @@ mod tests {
         let delta = Delta::new(file, diff, SourceType::Manual);
 
         let new_content = crate::engine::merge::apply_deltas(content, &[delta.clone()]).unwrap();
-        assert_eq!(new_content, "new");
+        assert_eq!(new_content, "new\n");
 
         let inv = inverse_delta(&delta, Some(content)).unwrap();
         let restored = crate::engine::merge::apply_deltas(&new_content, &[inv]).unwrap();
-        assert_eq!(restored, "old");
+        assert_eq!(restored, content);
     }
 
     #[test]

@@ -80,7 +80,9 @@ pub fn get_feature_baseline<S: SnapshotStore + PartitionStore>(
         StratumError::NotFound(format!("integrated partition {} not found", feature_name))
     })?;
     let baseline_id = &part.history[0];
-    storage.get_snapshot(baseline_id).map_err(StratumError::Storage)
+    storage
+        .get_snapshot(baseline_id)
+        .map_err(StratumError::Storage)
 }
 
 // Forward migration operations -
@@ -105,11 +107,8 @@ where
         .get_snapshot(&approval_partition.current_snapshot)
         .map_err(StratumError::Storage)?;
 
-    let integrated_partition = ensure_integrated_partition(
-        storage,
-        feature_name,
-        approval_partition.current_snapshot,
-    )?;
+    let integrated_partition =
+        ensure_integrated_partition(storage, feature_name, approval_partition.current_snapshot)?;
 
     if integrated_partition.current_snapshot == approval_partition.current_snapshot {
         return Ok(MergeResult {
@@ -128,11 +127,8 @@ where
     let integrated_text =
         crate::layered::transition::reconstruct_text(storage, &integrated_snapshot)?;
 
-    let (merged_text, conflicts) = crate::engine::merge::merge_texts(
-        &baseline_text,
-        &approval_text,
-        &integrated_text,
-    );
+    let (merged_text, conflicts) =
+        crate::engine::merge::merge_texts(&baseline_text, &approval_text, &integrated_text);
 
     let has_conflicts = !conflicts.is_empty();
 

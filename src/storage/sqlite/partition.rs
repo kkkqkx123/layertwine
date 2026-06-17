@@ -7,7 +7,7 @@ use rusqlite::{params, Connection};
 
 impl PartitionStore for SqliteStorage {
     fn create_partition(&self, partition: &Partition) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let partition_type_str = format!("{:?}", partition.partition_type);
         let now = chrono::Utc::now().timestamp_millis();
 
@@ -46,12 +46,12 @@ impl PartitionStore for SqliteStorage {
         partition_id: &PartitionId,
         snapshot_id: &SnapshotId,
     ) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
-        Self::update_pointer_internal(&*conn, partition_id, snapshot_id)
+        let conn = self.conn.lock();
+        Self::update_pointer_internal(&conn, partition_id, snapshot_id)
     }
 
     fn get_partition(&self, id: &PartitionId) -> StorageResult<Partition> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, name, current_snapshot, partition_type, partition_data, created_at, updated_at
              FROM partitions WHERE id = ?1"
@@ -98,7 +98,7 @@ impl PartitionStore for SqliteStorage {
     }
 
     fn get_partition_by_name(&self, name: &str) -> StorageResult<Partition> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
 
         let mut stmt = conn.prepare(
             "SELECT id, name, current_snapshot, partition_type, partition_data, created_at, updated_at
@@ -146,7 +146,7 @@ impl PartitionStore for SqliteStorage {
     }
 
     fn list_partitions(&self) -> StorageResult<Vec<Partition>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, name, current_snapshot, partition_type, partition_data, created_at, updated_at
              FROM partitions ORDER BY name"

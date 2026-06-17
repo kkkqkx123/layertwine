@@ -12,7 +12,7 @@ use crate::layered::integrated;
 use crate::layered::staged;
 use crate::layered::unified;
 use crate::storage::repository::{
-    BranchStore, CheckpointStore, DagStore, DeltaStore, FileNodeStore, PartitionStore,
+    BranchStore, CheckpointStore, DeltaStore, FileNodeStore, MetadataStore, PartitionStore,
     SnapshotStore,
 };
 
@@ -37,7 +37,7 @@ where
         + FileNodeStore
         + PartitionStore
         + BranchStore
-        + DagStore
+        + MetadataStore
         + CheckpointStore,
 {
     // 1. Get current baseline
@@ -78,9 +78,7 @@ where
     // 8. Return staged snapshot (checkpoint commit would be the next step)
     let staged_partition = storage
         .get_partition(&staged::staged_partition_id())
-        .map_err(|_| {
-            crate::error::StratumError::NotFound("staged partition not found".into())
-        })?;
+        .map_err(|_| crate::error::StratumError::NotFound("staged partition not found".into()))?;
     Ok(staged_partition.current_snapshot)
 }
 
@@ -98,7 +96,7 @@ where
         + FileNodeStore
         + PartitionStore
         + BranchStore
-        + DagStore
+        + MetadataStore
         + CheckpointStore,
 {
     if agents.is_empty() {
@@ -146,21 +144,22 @@ where
     // 6. Return staged snapshot
     let staged_partition = storage
         .get_partition(&staged::staged_partition_id())
-        .map_err(|_| {
-            crate::error::StratumError::NotFound("staged partition not found".into())
-        })?;
+        .map_err(|_| crate::error::StratumError::NotFound("staged partition not found".into()))?;
     Ok(staged_partition.current_snapshot)
 }
 
 /// Development scenario 3: Merge multiple features
 ///
 /// Multiple features are merged into unified, then to staged.
-pub fn merge_multiple_features<S>(
-    storage: &S,
-    feature_names: &[String],
-) -> Result<SnapshotId>
+pub fn merge_multiple_features<S>(storage: &S, feature_names: &[String]) -> Result<SnapshotId>
 where
-    S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore + BranchStore + DagStore + CheckpointStore,
+    S: SnapshotStore
+        + DeltaStore
+        + FileNodeStore
+        + PartitionStore
+        + BranchStore
+        + MetadataStore
+        + CheckpointStore,
 {
     if feature_names.is_empty() {
         return Err(crate::error::StratumError::General(
@@ -183,9 +182,7 @@ where
     // 3. Return staged snapshot
     let staged_partition = storage
         .get_partition(&staged::staged_partition_id())
-        .map_err(|_| {
-            crate::error::StratumError::NotFound("staged partition not found".into())
-        })?;
+        .map_err(|_| crate::error::StratumError::NotFound("staged partition not found".into()))?;
     Ok(staged_partition.current_snapshot)
 }
 
@@ -231,7 +228,8 @@ mod tests {
             .store_file_node(&file_node, content.as_bytes())
             .unwrap();
         let empty_diff = crate::core::types::LineDiff::new(vec![]);
-        let delta = crate::core::delta::Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
+        let delta =
+            crate::core::delta::Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
         storage.store_delta(&delta).unwrap();
         let snapshot = crate::core::snapshot::Snapshot::new_initial(file_node, delta.id);
         storage.store_snapshot(&snapshot, b"").unwrap();
@@ -246,13 +244,14 @@ mod tests {
         staged::ensure_staged_partition(&storage, initial_id).unwrap();
 
         let agent_id = AgentInstanceId("test-agent".into());
-        
+
         // Ensure agent partition exists
         agent::ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
-        
+
         // Ensure approval partition exists
-        crate::layered::approval::ensure_approval_agent_partition(&storage, &agent_id, initial_id).unwrap();
-        
+        crate::layered::approval::ensure_approval_agent_partition(&storage, &agent_id, initial_id)
+            .unwrap();
+
         let feature_name = "test-feature";
 
         let result = develop_single_feature(&storage, feature_name, &agent_id, |base| {
@@ -274,28 +273,36 @@ mod tests {
 
         let agent_a = AgentInstanceId("agent-a".into());
         let agent_b = AgentInstanceId("agent-b".into());
-        
+
         // Ensure agent partitions exist
         agent::ensure_agent_partition(&storage, &agent_a, initial_id).unwrap();
         agent::ensure_agent_partition(&storage, &agent_b, initial_id).unwrap();
-        
+
         // Ensure approval partitions exist
-        crate::layered::approval::ensure_approval_agent_partition(&storage, &agent_a, initial_id).unwrap();
-        crate::layered::approval::ensure_approval_agent_partition(&storage, &agent_b, initial_id).unwrap();
-        
+        crate::layered::approval::ensure_approval_agent_partition(&storage, &agent_a, initial_id)
+            .unwrap();
+        crate::layered::approval::ensure_approval_agent_partition(&storage, &agent_b, initial_id)
+            .unwrap();
+
         let feature_name = "collab-feature";
 
         let agents: Vec<(AgentInstanceId, Box<dyn FnOnce(&str) -> Result<String>>)> = vec![
-            (agent_a.clone(), Box::new(|base| {
-                // Agent A modifies the first line
-                let lines: Vec<&str> = base.lines().collect();
-                Ok(format!("modified by A\n{}\n{}\n", lines[1], lines[2]))
-            })),
-            (agent_b.clone(), Box::new(|base| {
-                // Agent B modifies the last line
-                let lines: Vec<&str> = base.lines().collect();
-                Ok(format!("{}\n{}\nmodified by B\n", lines[0], lines[1]))
-            })),
+            (
+                agent_a.clone(),
+                Box::new(|base| {
+                    // Agent A modifies the first line
+                    let lines: Vec<&str> = base.lines().collect();
+                    Ok(format!("modified by A\n{}\n{}\n", lines[1], lines[2]))
+                }),
+            ),
+            (
+                agent_b.clone(),
+                Box::new(|base| {
+                    // Agent B modifies the last line
+                    let lines: Vec<&str> = base.lines().collect();
+                    Ok(format!("{}\n{}\nmodified by B\n", lines[0], lines[1]))
+                }),
+            ),
         ];
 
         let result = develop_feature_with_collaboration(&storage, feature_name, agents);

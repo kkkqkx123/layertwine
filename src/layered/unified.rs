@@ -52,10 +52,7 @@ pub fn ensure_unified_partition<S: PartitionStore>(
 ///   theirs     = feature.current_snapshot
 ///
 /// This avoids the brittle "all features share the same baseline" assumption.
-pub fn merge_feature_to_unified<S>(
-    storage: &S,
-    feature_name: &str,
-) -> Result<MergeResult>
+pub fn merge_feature_to_unified<S>(storage: &S, feature_name: &str) -> Result<MergeResult>
 where
     S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
 {
@@ -95,12 +92,9 @@ where
         .map_err(StratumError::Storage)?;
 
     // Reconstruct texts
-    let baseline_text =
-        crate::layered::transition::reconstruct_text(storage, &baseline_snapshot)?;
-    let unified_text =
-        crate::layered::transition::reconstruct_text(storage, &unified_snapshot)?;
-    let feature_text =
-        crate::layered::transition::reconstruct_text(storage, &feature_snapshot)?;
+    let baseline_text = crate::layered::transition::reconstruct_text(storage, &baseline_snapshot)?;
+    let unified_text = crate::layered::transition::reconstruct_text(storage, &unified_snapshot)?;
+    let feature_text = crate::layered::transition::reconstruct_text(storage, &feature_snapshot)?;
 
     // Three-way merge: baseline (base), unified (ours), feature (theirs)
     let (merged_text, conflicts) =
@@ -149,15 +143,14 @@ where
 /// Each feature is merged individually via `merge_feature_to_unified`.
 /// Unlike the old approach, this does NOT assume all features share the same baseline.
 /// Features are merged one at a time, each using its own baseline as merge base.
-pub fn merge_features_to_unified<S>(
-    storage: &S,
-    feature_names: &[String],
-) -> Result<MergeResult>
+pub fn merge_features_to_unified<S>(storage: &S, feature_names: &[String]) -> Result<MergeResult>
 where
     S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
 {
     if feature_names.is_empty() {
-        return Err(StratumError::General("at least one feature required".into()));
+        return Err(StratumError::General(
+            "at least one feature required".into(),
+        ));
     }
 
     let mut all_conflicts = Vec::new();
@@ -176,10 +169,7 @@ where
 }
 
 /// Alias for `merge_features_to_unified` — maintained for backward compatibility
-pub fn move_integrated_to_unified<S>(
-    storage: &S,
-    feature_names: &[String],
-) -> Result<SnapshotId>
+pub fn move_integrated_to_unified<S>(storage: &S, feature_names: &[String]) -> Result<SnapshotId>
 where
     S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
 {
@@ -229,8 +219,7 @@ mod tests {
             .store_file_node(&file_node, content.as_bytes())
             .unwrap();
 
-        let parent_text =
-            crate::layered::transition::reconstruct_text(storage, &parent).unwrap();
+        let parent_text = crate::layered::transition::reconstruct_text(storage, &parent).unwrap();
         let diff = diff_to_line_diff(&parent_text, content);
         let delta = Delta::new(file_node, diff, SourceType::Manual);
         storage.store_delta(&delta).unwrap();
@@ -350,15 +339,16 @@ mod tests {
         };
         storage.create_partition(&part_b).unwrap();
 
-        let result = merge_features_to_unified(
-            &storage,
-            &["feat-a".to_string(), "feat-b".to_string()],
-        )
-        .unwrap();
+        let result =
+            merge_features_to_unified(&storage, &["feat-a".to_string(), "feat-b".to_string()])
+                .unwrap();
         assert!(
             result.snapshot_id != initial_id,
             "should create new snapshot"
         );
-        assert!(!result.has_conflicts(), "non-overlapping edits should not conflict");
+        assert!(
+            !result.has_conflicts(),
+            "non-overlapping edits should not conflict"
+        );
     }
 }

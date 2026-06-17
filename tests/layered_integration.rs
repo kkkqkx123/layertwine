@@ -12,16 +12,12 @@ use std::sync::Arc;
 use stratum::core::delta::Delta;
 use stratum::core::file_node::FileNode;
 use stratum::core::snapshot::Snapshot;
-use stratum::core::types::{
-    AgentInstanceId, LineDiff, SnapshotId, SourceType,
-};
+use stratum::core::types::{AgentInstanceId, LineDiff, SnapshotId, SourceType};
 use stratum::layered::transition::reconstruct_text;
 use stratum::layered::transition::{
     execute_forward, execute_rollback, ForwardTransition, RollbackTransition,
 };
-use stratum::storage::repository::{
-    DeltaStore, FileNodeStore, PartitionStore, SnapshotStore,
-};
+use stratum::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
 use stratum::storage::SqliteStorage;
 
 // ---------------------------------------------------------------------------
@@ -137,14 +133,24 @@ fn test_full_agent_pipeline() {
     ensure_integrated(&storage, feature, initial_id);
 
     // Agent edits
-    stratum::layered::agent::apply_agent_edit(&storage, &agent_id, "test.txt", "base\nagent-change\n")
-        .unwrap();
+    stratum::layered::agent::apply_agent_edit(
+        &storage,
+        &agent_id,
+        "test.txt",
+        "base\nagent-change\n",
+    )
+    .unwrap();
 
     // Forward: Agent → Approval
     execute_forward(&storage, ForwardTransition::AgentToApproval, &["agent-1"]).unwrap();
 
     // Forward: Approval → Integrated
-    execute_forward(&storage, ForwardTransition::ApprovalToIntegrated, &["agent-1", feature]).unwrap();
+    execute_forward(
+        &storage,
+        ForwardTransition::ApprovalToIntegrated,
+        &["agent-1", feature],
+    )
+    .unwrap();
 
     // Forward: Integrated → Unified
     execute_forward(&storage, ForwardTransition::IntegratedToUnified, &[feature]).unwrap();
@@ -187,8 +193,12 @@ fn test_multi_agent_collaboration() {
     )
     .unwrap();
     execute_forward(&storage, ForwardTransition::AgentToApproval, &["agent-a"]).unwrap();
-    execute_forward(&storage, ForwardTransition::ApprovalToIntegrated, &["agent-a", feature])
-        .unwrap();
+    execute_forward(
+        &storage,
+        ForwardTransition::ApprovalToIntegrated,
+        &["agent-a", feature],
+    )
+    .unwrap();
 
     // Agent B: modify lineC
     stratum::layered::agent::apply_agent_edit(
@@ -199,8 +209,12 @@ fn test_multi_agent_collaboration() {
     )
     .unwrap();
     execute_forward(&storage, ForwardTransition::AgentToApproval, &["agent-b"]).unwrap();
-    execute_forward(&storage, ForwardTransition::ApprovalToIntegrated, &["agent-b", feature])
-        .unwrap();
+    execute_forward(
+        &storage,
+        ForwardTransition::ApprovalToIntegrated,
+        &["agent-b", feature],
+    )
+    .unwrap();
 
     // Merge feature → unified → staged
     execute_forward(&storage, ForwardTransition::IntegratedToUnified, &[feature]).unwrap();
@@ -208,8 +222,14 @@ fn test_multi_agent_collaboration() {
 
     let text = staged_text(&storage);
     // Both modifications should be present (different lines → no conflict)
-    assert!(text.contains("modified-by-A"), "should contain agent A's change");
-    assert!(text.contains("modified-by-B"), "should contain agent B's change");
+    assert!(
+        text.contains("modified-by-A"),
+        "should contain agent A's change"
+    );
+    assert!(
+        text.contains("modified-by-B"),
+        "should contain agent B's change"
+    );
     assert!(!text.contains("lineB"), "lineB should be replaced");
     assert!(!text.contains("lineC"), "lineC should be replaced");
 }
@@ -239,34 +259,35 @@ fn test_multi_feature_merge() {
     ensure_integrated(&storage, feat2, initial_id);
 
     // Feature 1: modify first line
-    stratum::layered::agent::apply_agent_edit(
+    stratum::layered::agent::apply_agent_edit(&storage, &agent1, "test.txt", "alpha\nline2\n")
+        .unwrap();
+    execute_forward(&storage, ForwardTransition::AgentToApproval, &["agent-1"]).unwrap();
+    execute_forward(
         &storage,
-        &agent1,
-        "test.txt",
-        "alpha\nline2\n",
+        ForwardTransition::ApprovalToIntegrated,
+        &["agent-1", feat1],
     )
     .unwrap();
-    execute_forward(&storage, ForwardTransition::AgentToApproval, &["agent-1"]).unwrap();
-    execute_forward(&storage, ForwardTransition::ApprovalToIntegrated, &["agent-1", feat1])
-        .unwrap();
 
     // Feature 2: modify second line (different from Feature 1)
-    stratum::layered::agent::apply_agent_edit(
+    stratum::layered::agent::apply_agent_edit(&storage, &agent2, "test.txt", "line1\nbeta\n")
+        .unwrap();
+    execute_forward(&storage, ForwardTransition::AgentToApproval, &["agent-2"]).unwrap();
+    execute_forward(
         &storage,
-        &agent2,
-        "test.txt",
-        "line1\nbeta\n",
+        ForwardTransition::ApprovalToIntegrated,
+        &["agent-2", feat2],
     )
     .unwrap();
-    execute_forward(&storage, ForwardTransition::AgentToApproval, &["agent-2"]).unwrap();
-    execute_forward(&storage, ForwardTransition::ApprovalToIntegrated, &["agent-2", feat2])
-        .unwrap();
 
     // Merge both features into unified — each modifies a different line → no conflict
     let names = &[feat1.to_string(), feat2.to_string()];
     let merge_result =
         stratum::layered::unified::merge_features_to_unified(&storage, names).unwrap();
-    assert!(!merge_result.has_conflicts(), "non-overlapping edits should not conflict");
+    assert!(
+        !merge_result.has_conflicts(),
+        "non-overlapping edits should not conflict"
+    );
 
     execute_forward(&storage, ForwardTransition::UnifiedToStaged, &[]).unwrap();
 
@@ -293,7 +314,8 @@ fn test_rollback_staged_to_manual() {
     ensure_manual(&storage, initial_id);
 
     // Apply manual edit and merge to staged
-    stratum::layered::manual::apply_manual_edit(&storage, "test.txt", "original\nedited\n").unwrap();
+    stratum::layered::manual::apply_manual_edit(&storage, "test.txt", "original\nedited\n")
+        .unwrap();
     execute_forward(&storage, ForwardTransition::ManualToStaged, &[]).unwrap();
 
     // Verify staged has the new content
@@ -307,7 +329,10 @@ fn test_rollback_staged_to_manual() {
     // After rollback, staged should point to the manual partition's snapshot.
     // The manual partition still has its "edited" snapshot, so staged will reflect that.
     let staged_after = staged_text(&storage);
-    assert!(staged_after.contains("edited"), "should still contain manual edits");
+    assert!(
+        staged_after.contains("edited"),
+        "should still contain manual edits"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -337,12 +362,8 @@ fn test_merge_conflict_detection() {
     )
     .unwrap();
     execute_forward(&storage, ForwardTransition::AgentToApproval, &["agent-a"]).unwrap();
-    let r1 = stratum::layered::integrated::merge_agent_to_feature(
-        &storage,
-        &agent_a,
-        feature,
-    )
-    .unwrap();
+    let r1 =
+        stratum::layered::integrated::merge_agent_to_feature(&storage, &agent_a, feature).unwrap();
     assert!(!r1.has_conflicts(), "first merge should succeed cleanly");
 
     // Agent B: modify same first line (different change)
@@ -354,12 +375,8 @@ fn test_merge_conflict_detection() {
     )
     .unwrap();
     execute_forward(&storage, ForwardTransition::AgentToApproval, &["agent-b"]).unwrap();
-    let r2 = stratum::layered::integrated::merge_agent_to_feature(
-        &storage,
-        &agent_b,
-        feature,
-    )
-    .unwrap();
+    let r2 =
+        stratum::layered::integrated::merge_agent_to_feature(&storage, &agent_b, feature).unwrap();
 
     // Both agents modified the same line → expect conflict
     assert!(
@@ -429,10 +446,7 @@ fn test_approval_integrated_unified_staged_chain() {
     let staged_sid = stratum::layered::staged::merge_unified_to_staged(&storage).unwrap();
 
     // Staged snapshot should be different from integrated snapshot
-    assert_ne!(
-        staged_sid, integrated_sid,
-        "staged snapshot must advance"
-    );
+    assert_ne!(staged_sid, integrated_sid, "staged snapshot must advance");
 
     let text = staged_text(&storage);
     assert_eq!(text, "start\nchained");
@@ -450,7 +464,8 @@ fn test_sequential_manual_edits() {
 
     // Multiple edits without forward in between
     let id1 =
-        stratum::layered::manual::apply_manual_edit(&storage, "test.txt", "line1\nmodified\n").unwrap();
+        stratum::layered::manual::apply_manual_edit(&storage, "test.txt", "line1\nmodified\n")
+            .unwrap();
     assert_ne!(id1, initial_id);
 
     let id2 = stratum::layered::manual::apply_manual_edit(
@@ -523,7 +538,9 @@ fn test_state_machine_integration() {
 
     // Verify via sm
     let staged_pid = stratum::layered::staged::staged_partition_id();
-    let part = sm.get_partition(&stratum::core::types::LayerType::Staged, &staged_pid).unwrap();
+    let part = sm
+        .get_partition(&stratum::core::types::LayerType::Staged, &staged_pid)
+        .unwrap();
     assert_eq!(part.current_snapshot, sid);
 
     // Sync layers

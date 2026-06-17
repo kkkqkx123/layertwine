@@ -1,5 +1,4 @@
 use crate::checkpoint::checkpoint::Checkpoint;
-use crate::checkpoint::dag::CheckpointDag;
 use crate::core::delta::Delta;
 use crate::core::file_node::FileNode;
 use crate::core::partition::Partition;
@@ -8,7 +7,7 @@ use crate::core::types::{
     CheckpointId, ContentId, DiffOp, Hunk, PartitionType, SnapshotId, SourceType,
 };
 use crate::storage::repository::{
-    BranchStore, CheckpointStore, DagStore, DeltaStore, FileNodeStore, PartitionStore,
+    BranchStore, CheckpointStore, DeltaStore, FileNodeStore, PartitionStore,
     SnapshotStore,
 };
 use crate::storage::sqlite::connection::SqliteStorage;
@@ -208,7 +207,7 @@ fn test_transaction_rollback() {
 
     assert!(result.is_err());
 
-    let conn = storage.conn.lock().unwrap();
+    let conn = storage.conn.lock();
     let count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM layers WHERE layer_type = ?1",
@@ -314,7 +313,7 @@ fn test_store_and_get_deltas_batch() {
 fn create_full_storage() -> SqliteStorage {
     let conn = Connection::open_in_memory().unwrap();
     crate::storage::migrations::initialize_full(&conn).unwrap();
-    let conn = std::sync::Arc::new(std::sync::Mutex::new(conn));
+    let conn = std::sync::Arc::new(parking_lot::ReentrantMutex::new(conn));
     SqliteStorage::new_with_connection_arc(&conn)
 }
 
@@ -432,32 +431,6 @@ fn test_branch_list_and_delete() {
     storage.delete_branch("develop").unwrap();
     let list = storage.list_branches().unwrap();
     assert_eq!(list.len(), 1);
-}
-
-#[test]
-fn test_dag_store_roundtrip() {
-    let storage = create_full_storage();
-    let mut dag = CheckpointDag::new();
-
-    let a = make_checkpoint_id(b"node-a");
-    let b = make_checkpoint_id(b"node-b");
-    dag.add_node(a);
-    dag.add_node(b);
-    dag.add_edge(a, b);
-
-    storage.store_dag(&dag).unwrap();
-
-    let loaded = storage.load_dag().unwrap();
-    assert!(loaded.has_node(&a));
-    assert!(loaded.has_node(&b));
-    assert!(loaded.is_ancestor(&a, &b));
-}
-
-#[test]
-fn test_dag_load_empty() {
-    let storage = create_full_storage();
-    let dag = storage.load_dag().unwrap();
-    assert!(dag.is_empty(), "should return empty DAG when no DAG stored");
 }
 
 #[test]

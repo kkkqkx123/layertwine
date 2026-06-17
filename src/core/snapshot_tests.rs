@@ -70,7 +70,12 @@ fn test_snapshot_merge() {
     let parent2 = Snapshot::new_initial(file.clone(), delta_id2);
 
     let merge_delta = DeltaId::from_content(b"merge delta");
-    let merged = Snapshot::merge(vec![&parent1, &parent2], merge_delta, "merge".to_string(), false);
+    let merged = Snapshot::merge(
+        vec![&parent1, &parent2],
+        merge_delta,
+        "merge".to_string(),
+        false,
+    );
 
     assert_eq!(merged.deltas.len(), 2);
     assert_eq!(merged.deltas[0], delta_id1);

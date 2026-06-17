@@ -1,12 +1,13 @@
 use crate::config::CompactOptions;
 use crate::config::CompactReport;
 use crate::StorageResult;
+use parking_lot::ReentrantMutex;
 use rusqlite::Connection;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 pub struct SqliteStorage {
-    pub conn: Arc<Mutex<Connection>>,
+    pub conn: Arc<ReentrantMutex<Connection>>,
 }
 
 impl Clone for SqliteStorage {
@@ -22,19 +23,20 @@ impl crate::storage::repository::AtomicOps for SqliteStorage {
     where
         F: FnOnce(&Self) -> StorageResult<T>,
     {
-        self.with_conn(|conn| {
-            conn.execute_batch("SAVEPOINT atomic_savepoint;")?;
-            match f(self) {
-                Ok(value) => {
-                    conn.execute_batch("RELEASE SAVEPOINT atomic_savepoint;")?;
-                    Ok(value)
-                }
-                Err(e) => {
-                    conn.execute_batch("ROLLBACK TO SAVEPOINT atomic_savepoint;")?;
-                    Err(e)
-                }
+        let conn = self.conn.lock();
+        conn.execute_batch("SAVEPOINT atomic_savepoint;")?;
+        match f(self) {
+            Ok(value) => {
+                conn.execute_batch("RELEASE SAVEPOINT atomic_savepoint;")?;
+                drop(conn);
+                Ok(value)
             }
-        })
+            Err(e) => {
+                conn.execute_batch("ROLLBACK TO SAVEPOINT atomic_savepoint;")?;
+                drop(conn);
+                Err(e)
+            }
+        }
     }
 }
 
@@ -43,7 +45,15 @@ impl SqliteStorage {
         let conn = Connection::open_in_memory()?;
         crate::storage::migrations::initialize_database(&conn)?;
         Ok(SqliteStorage {
-            conn: Arc::new(Mutex::new(conn)),
+            conn: Arc::new(ReentrantMutex::new(conn)),
+        })
+    }
+
+    pub fn new_full_in_memory() -> StorageResult<Self> {
+        let conn = Connection::open_in_memory()?;
+        crate::storage::migrations::initialize_full(&conn)?;
+        Ok(SqliteStorage {
+            conn: Arc::new(ReentrantMutex::new(conn)),
         })
     }
 
@@ -51,7 +61,7 @@ impl SqliteStorage {
         let conn = Connection::open(path)?;
         crate::storage::migrations::initialize_database(&conn)?;
         Ok(SqliteStorage {
-            conn: Arc::new(Mutex::new(conn)),
+            conn: Arc::new(ReentrantMutex::new(conn)),
         })
     }
 
@@ -59,11 +69,11 @@ impl SqliteStorage {
         let conn = Connection::open(path)?;
         crate::storage::migrations::initialize_full(&conn)?;
         Ok(SqliteStorage {
-            conn: Arc::new(Mutex::new(conn)),
+            conn: Arc::new(ReentrantMutex::new(conn)),
         })
     }
 
-    pub fn new_with_connection_arc(conn: &Arc<Mutex<Connection>>) -> Self {
+    pub fn new_with_connection_arc(conn: &Arc<ReentrantMutex<Connection>>) -> Self {
         SqliteStorage { conn: conn.clone() }
     }
 
@@ -77,7 +87,7 @@ impl SqliteStorage {
     where
         F: FnOnce(&Connection) -> StorageResult<T>,
     {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         f(&conn)
     }
 
@@ -85,7 +95,7 @@ impl SqliteStorage {
     where
         F: FnOnce(&Connection) -> StorageResult<T>,
     {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute_batch("BEGIN TRANSACTION;")?;
         match f(&conn) {
             Ok(result) => {

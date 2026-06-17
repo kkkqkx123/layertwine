@@ -15,6 +15,7 @@ pub struct BackupSnapshot {
     pub metadata: HashMap<String, String>,
     pub agent_id: Option<String>,
     pub source_type: Option<String>,
+    pub file_content: Vec<u8>,
 }
 
 impl BackupSnapshot {
@@ -23,6 +24,27 @@ impl BackupSnapshot {
         file: FileNode,
         deltas: Vec<Delta>,
         label: Option<String>,
+        file_content: Vec<u8>,
+    ) -> Self {
+        Self::with_options(
+            source_snapshot,
+            file,
+            deltas,
+            label,
+            None,
+            None,
+            file_content,
+        )
+    }
+
+    pub fn with_options(
+        source_snapshot: SnapshotId,
+        file: FileNode,
+        deltas: Vec<Delta>,
+        label: Option<String>,
+        agent_id: Option<String>,
+        source_type: Option<String>,
+        file_content: Vec<u8>,
     ) -> Self {
         let now = chrono::Utc::now().timestamp_millis();
         let mut bs = BackupSnapshot {
@@ -33,8 +55,9 @@ impl BackupSnapshot {
             label,
             backed_at: now,
             metadata: HashMap::new(),
-            agent_id: None,
-            source_type: None,
+            agent_id,
+            source_type,
+            file_content,
         };
         bs.id = bs.compute_id();
         bs

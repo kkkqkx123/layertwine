@@ -79,7 +79,7 @@ fn row_to_snapshot_lenient(row: &Row) -> Snapshot {
 
 impl SnapshotStore for SqliteStorage {
     fn store_snapshot(&self, snapshot: &Snapshot, _content: &[u8]) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let deltas_json = serde_json::to_vec(&snapshot.deltas)?;
         let parents_json = serde_json::to_vec(&snapshot.parents)?;
 
@@ -101,7 +101,7 @@ impl SnapshotStore for SqliteStorage {
     }
 
     fn get_snapshot(&self, id: &SnapshotId) -> StorageResult<Snapshot> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts FROM snapshots WHERE id = ?1"
         )?;
@@ -111,7 +111,7 @@ impl SnapshotStore for SqliteStorage {
     }
 
     fn find_snapshots_by_file(&self, file_path: &str) -> StorageResult<Vec<Snapshot>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts
              FROM snapshots WHERE file_path = ?1 ORDER BY created_at DESC",
@@ -131,7 +131,7 @@ impl SnapshotStore for SqliteStorage {
         &self,
         partition_type: &crate::core::types::PartitionType,
     ) -> StorageResult<Vec<Snapshot>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts
              FROM snapshots WHERE partition_type = ?1 ORDER BY created_at DESC",
@@ -149,9 +149,36 @@ impl SnapshotStore for SqliteStorage {
     }
 
     fn snapshot_exists(&self, id: &SnapshotId) -> StorageResult<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare("SELECT COUNT(*) FROM snapshots WHERE id = ?1")?;
         let count: i64 = stmt.query_row(params![&id.0.to_vec()], |row| row.get(0))?;
         Ok(count > 0)
+    }
+
+    fn store_snapshots_batch(&self, snapshots: &[(&Snapshot, &[u8])]) -> StorageResult<()> {
+        self.with_transaction(|conn| {
+            let mut stmt = conn.prepare_cached(
+                "INSERT OR IGNORE INTO snapshots (id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?;
+
+            for (snapshot, _content) in snapshots {
+                let deltas_json = serde_json::to_vec(&snapshot.deltas)?;
+                let parents_json = serde_json::to_vec(&snapshot.parents)?;
+
+                stmt.execute(params![
+                    &snapshot.id.0.to_vec(),
+                    snapshot.file.path_str(),
+                    &snapshot.file.base_hash.to_vec(),
+                    deltas_json,
+                    parents_json,
+                    snapshot.partition_type,
+                    snapshot.created_at,
+                    snapshot.has_conflicts as i32,
+                ])?;
+            }
+
+            Ok(())
+        })
     }
 }

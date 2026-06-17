@@ -2,16 +2,17 @@
 //!
 //! Manages the parent-child relationship of checkpoints, providing functions such as ancestor lookup, reachability determination, and common ancestor lookup.
 //! Reference architecture/05-Checkpoint warehouse and branch management.md §5.4
+//!
+//! Note: DAG is built dynamically from Checkpoint relationships and is not persisted to storage.
 
 use crate::core::types::CheckpointId;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// directed acyclic graph
 ///
 /// `nodes`: node → children (reverse index, for forward traversal)
 /// The parents relationship is maintained in the Checkpoint entity (traversed backwards)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CheckpointDag {
     /// node → children mapping (reverse indexing)
     nodes: HashMap<CheckpointId, HashSet<CheckpointId>>,

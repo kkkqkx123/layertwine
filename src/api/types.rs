@@ -350,16 +350,10 @@ pub struct GcResponse {
 
 // ── Compact (file maintenance) ──
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CompactRequest {
     /// If true, use full VACUUM instead of incremental (requires exclusive lock).
     pub vacuum_full: Option<bool>,
-}
-
-impl Default for CompactRequest {
-    fn default() -> Self {
-        CompactRequest { vacuum_full: None }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

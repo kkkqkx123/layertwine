@@ -16,7 +16,7 @@ use crate::core::types::{CheckpointId, PartitionId, PartitionType, SnapshotId, S
 use crate::engine::diff::diff_to_line_diff;
 use crate::error::{Result, StratumError};
 use crate::storage::repository::{
-    BranchStore, CheckpointStore, DagStore, DeltaStore, FileNodeStore, PartitionStore,
+    BranchStore, CheckpointStore, DeltaStore, FileNodeStore, MetadataStore, PartitionStore,
     SnapshotStore,
 };
 
@@ -77,7 +77,7 @@ pub fn ensure_staged_partition<S: PartitionStore>(
 }
 
 /// Merge the contents of the Unified partition into the staged
-/// 
+///
 /// This is the UNIQUE entry point for merging into staged from the approval pipeline.
 /// All content should flow through: approval_agent → integrated → unified → staged.
 ///
@@ -155,12 +155,12 @@ where
     let unified_pid = crate::layered::unified::unified_partition_id();
     let staged_pid = staged_partition_id();
 
-    let unified = storage.get_partition(&unified_pid).map_err(|_| {
-        StratumError::NotFound("unified partition not found".into())
-    })?;
-    let staged = storage.get_partition(&staged_pid).map_err(|_| {
-        StratumError::NotFound("staged partition not found".into())
-    })?;
+    let unified = storage
+        .get_partition(&unified_pid)
+        .map_err(|_| StratumError::NotFound("unified partition not found".into()))?;
+    let staged = storage
+        .get_partition(&staged_pid)
+        .map_err(|_| StratumError::NotFound("staged partition not found".into()))?;
 
     // Check if staged contains unified content
     if staged.current_snapshot == unified.current_snapshot {
@@ -170,7 +170,8 @@ where
         // TODO: Need to record conflict status during merge
         // For now, we assume if staged != unified, there might be pending changes
         Ok(ValidationResult::HasUnresolvedProblems(vec![
-            "Staged does not contain all unified content. Call merge_unified_to_staged first.".to_string(),
+            "Staged does not contain all unified content. Call merge_unified_to_staged first."
+                .to_string(),
         ]))
     }
 }
@@ -181,9 +182,10 @@ where
 /// 2. Get current branch head from BranchStore
 /// 3. Build a Checkpoint with the snapshot as baseline
 /// 4. Store the checkpoint via CheckpointStore
-/// 5. Store updated DAG via DagStore
-/// 6. Update branch head via BranchStore
-/// 7. Return the new CheckpointId
+/// 5. Update branch head via BranchStore
+/// 6. Return the new CheckpointId
+///
+/// Note: DAG is built dynamically from Checkpoint relationships and is not persisted.
 pub fn commit_staged_to_checkpoint<S>(
     storage: &S,
     branch_name: &str,
@@ -191,7 +193,7 @@ pub fn commit_staged_to_checkpoint<S>(
     author: &str,
 ) -> Result<CheckpointId>
 where
-    S: SnapshotStore + PartitionStore + CheckpointStore + BranchStore + DagStore,
+    S: SnapshotStore + PartitionStore + CheckpointStore + BranchStore + MetadataStore,
 {
     // 1. Get staged partition
     let staged_pid = staged_partition_id();
@@ -223,13 +225,7 @@ where
         .store_checkpoint(&cp)
         .map_err(StratumError::Storage)?;
 
-    // 5. Update DAG (load, add edge, store)
-    let mut dag = storage.load_dag().map_err(StratumError::Storage)?;
-    dag.add_node(cp_id);
-    dag.add_edge(branch_head, cp_id);
-    storage.store_dag(&dag).map_err(StratumError::Storage)?;
-
-    // 6. Update branch head
+    // 5. Update branch head
     storage
         .update_branch_head(branch_name, &cp_id)
         .map_err(StratumError::Storage)?;
@@ -375,7 +371,8 @@ mod tests {
         let initial_id = create_initial_snapshot(&storage, "base\n");
         ensure_staged_partition(&storage, initial_id).unwrap();
 
-        let cp_id = commit_staged_to_checkpoint(&storage, "main", "test commit", "test-author").unwrap();
+        let cp_id =
+            commit_staged_to_checkpoint(&storage, "main", "test commit", "test-author").unwrap();
 
         let checkpoint = storage.get_checkpoint(&cp_id).unwrap();
         assert_eq!(checkpoint.baseline_snapshots.len(), 1);
@@ -391,8 +388,10 @@ mod tests {
         let initial_id = create_initial_snapshot(&storage, "base\n");
         ensure_staged_partition(&storage, initial_id).unwrap();
 
-        let cp_id1 = commit_staged_to_checkpoint(&storage, "main", "first commit", "test-author").unwrap();
-        let cp_id2 = commit_staged_to_checkpoint(&storage, "main", "second commit", "test-author").unwrap();
+        let cp_id1 =
+            commit_staged_to_checkpoint(&storage, "main", "first commit", "test-author").unwrap();
+        let cp_id2 =
+            commit_staged_to_checkpoint(&storage, "main", "second commit", "test-author").unwrap();
 
         assert_ne!(
             cp_id1, cp_id2,
@@ -403,12 +402,6 @@ mod tests {
         assert_eq!(
             branch.head, cp_id2,
             "branch head should point to latest commit"
-        );
-
-        let dag = storage.load_dag().unwrap();
-        assert!(
-            dag.is_ancestor(&cp_id1, &cp_id2),
-            "first commit should be ancestor of second"
         );
     }
 

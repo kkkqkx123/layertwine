@@ -18,8 +18,8 @@ impl<
             + crate::storage::repository::FileNodeStore
             + crate::storage::repository::CheckpointStore
             + crate::storage::repository::BranchStore
-            + crate::storage::repository::DagStore
             + crate::storage::repository::LayerStore
+            + crate::storage::repository::MetadataStore
             + crate::storage::repository::AtomicOps,
     > crate::storage::repository::Repository for T
 {

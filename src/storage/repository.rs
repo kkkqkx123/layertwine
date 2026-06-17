@@ -1,6 +1,5 @@
 use crate::checkpoint::branch::Branch;
 use crate::checkpoint::checkpoint::Checkpoint;
-use crate::checkpoint::dag::CheckpointDag;
 use crate::core::delta::Delta;
 use crate::core::file_node::FileNode;
 use crate::core::layer::Layer;
@@ -15,6 +14,18 @@ use crate::StorageResult;
 pub trait SnapshotStore {
     /// Storage Snapshot
     fn store_snapshot(&self, snapshot: &Snapshot, content: &[u8]) -> StorageResult<()>;
+
+    /// Batch store snapshots with atomic guarantee
+    ///
+    /// Default implementation stores snapshots sequentially.
+    /// Implementations can override this for better performance using transactions.
+    fn store_snapshots_batch(&self, snapshots: &[(&Snapshot, &[u8])]) -> StorageResult<()> {
+        for (snapshot, content) in snapshots {
+            self.store_snapshot(snapshot, content)?;
+        }
+        Ok(())
+    }
+
     /// Getting a Snapshot
     fn get_snapshot(&self, id: &SnapshotId) -> StorageResult<Snapshot>;
     /// Query Snapshots by Path
@@ -102,8 +113,8 @@ pub trait Repository:
     + FileNodeStore
     + CheckpointStore
     + BranchStore
-    + DagStore
     + LayerStore
+    + MetadataStore
     + AtomicOps
 {
 }
@@ -136,12 +147,10 @@ pub trait BranchStore {
     fn delete_branch(&self, name: &str) -> StorageResult<()>;
 }
 
-/// DAG storage trait
-pub trait DagStore {
-    /// Store DAG
-    fn store_dag(&self, dag: &CheckpointDag) -> StorageResult<()>;
-    /// Load DAG
-    fn load_dag(&self) -> StorageResult<CheckpointDag>;
+/// Metadata storage trait
+///
+/// Used for storing repository-wide metadata such as current branch name.
+pub trait MetadataStore {
     /// Store arbitrary metadata key-value pair
     fn store_metadata(&self, key: &str, value: &str) -> StorageResult<()>;
     /// Load metadata value by key
@@ -149,5 +158,5 @@ pub trait DagStore {
 }
 
 /// Combined checkpoint persistence trait (for auto-persist in CheckpointRepo)
-pub trait CheckpointPersist: CheckpointStore + BranchStore + DagStore {}
-impl<T: CheckpointStore + BranchStore + DagStore> CheckpointPersist for T {}
+pub trait CheckpointPersist: CheckpointStore + BranchStore + MetadataStore + Send + Sync {}
+impl<T: CheckpointStore + BranchStore + MetadataStore + Send + Sync> CheckpointPersist for T {}

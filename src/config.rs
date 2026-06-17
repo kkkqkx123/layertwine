@@ -44,7 +44,7 @@ impl Default for MaintenanceConfig {
             freelist_threshold: 0.10,
             max_vacuum_pages: 1000,
             vacuum_full: false,
-            journal_size_limit: 67_108_864,   // 64 MB
+            journal_size_limit: 67_108_864, // 64 MB
             wal_autocheckpoint: 1000,
         }
     }

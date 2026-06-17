@@ -77,7 +77,12 @@ fn assert_git_file_content(repo: &git2::Repository, rel_path: &str, expected: &[
         .get_path(Path::new(rel_path))
         .unwrap_or_else(|_| panic!("file '{}' not found in git HEAD tree", rel_path));
     let blob = repo.find_blob(entry.id()).expect("not a blob");
-    assert_eq!(blob.content(), expected, "content mismatch for '{}'", rel_path);
+    assert_eq!(
+        blob.content(),
+        expected,
+        "content mismatch for '{}'",
+        rel_path
+    );
 }
 
 /// Commit a snapshot on the current branch.
@@ -136,8 +141,7 @@ impl GitSyncFixture {
         let git_path = dir.path().join("repo");
         std::fs::create_dir_all(&git_path).unwrap();
         let git_repo = init_git_repo(&git_path);
-        let (storage, mut checkpoint_repo, _root) =
-            create_stratum_state().expect("stratum state");
+        let (storage, mut checkpoint_repo, _root) = create_stratum_state().expect("stratum state");
         GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "HEAD")
             .expect("init_from_git");
         GitSyncFixture {
@@ -172,7 +176,13 @@ fn test_e2e_init_from_git_basic() {
         "git_anchor should be set after init_from_git"
     );
 
-    let expected_hash = repo.head().unwrap().peel_to_commit().unwrap().id().to_string();
+    let expected_hash = repo
+        .head()
+        .unwrap()
+        .peel_to_commit()
+        .unwrap()
+        .id()
+        .to_string();
     assert_eq!(
         cp.metadata.git_anchor.as_deref(),
         Some(expected_hash.as_str()),
@@ -209,7 +219,11 @@ fn test_e2e_init_from_git_multiple_files() {
     let repo = git2::Repository::init(&git_path).unwrap();
     let sig = git2::Signature::now("test", "test@test.com").unwrap();
 
-    for (name, content) in &[("a.txt", &b"AAA\n"[..]), ("b.txt", &b"BBB\n"[..]), ("c.txt", &b"CCC\n"[..])] {
+    for (name, content) in &[
+        ("a.txt", &b"AAA\n"[..]),
+        ("b.txt", &b"BBB\n"[..]),
+        ("c.txt", &b"CCC\n"[..]),
+    ] {
         std::fs::write(git_path.join(name), content).unwrap();
     }
     let mut index = repo.index().unwrap();
@@ -296,8 +310,7 @@ fn test_e2e_init_from_git_invalid_ref_fails() {
     init_git_repo(&git_path);
 
     let (storage, mut checkpoint_repo, _root) = create_stratum_state().unwrap();
-    let result =
-        GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "nonexistent");
+    let result = GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "nonexistent");
     assert!(result.is_err(), "should fail with invalid ref");
 }
 
@@ -391,9 +404,8 @@ fn test_e2e_roundtrip_sync() {
 #[test]
 fn test_e2e_compare_status_in_sync() {
     let fixture = GitSyncFixture::new();
-    let info =
-        GitBridge::compare_status(&fixture.git_repo_path, &fixture.checkpoint_repo, "main")
-            .expect("compare_status");
+    let info = GitBridge::compare_status(&fixture.git_repo_path, &fixture.checkpoint_repo, "main")
+        .expect("compare_status");
     assert_eq!(
         info.status,
         SyncStatus::InSync,
@@ -407,9 +419,8 @@ fn test_e2e_compare_status_ahead() {
     let snap_id = store_file(&fixture.storage, "new.txt", b"new\n").unwrap();
     commit_snapshot(&mut fixture.checkpoint_repo, snap_id, "ahead");
 
-    let info =
-        GitBridge::compare_status(&fixture.git_repo_path, &fixture.checkpoint_repo, "main")
-            .expect("compare_status");
+    let info = GitBridge::compare_status(&fixture.git_repo_path, &fixture.checkpoint_repo, "main")
+        .expect("compare_status");
     assert!(
         matches!(info.status, SyncStatus::Ahead { .. }),
         "expected Ahead status, got {:?}",
@@ -427,9 +438,8 @@ fn test_e2e_compare_status_behind() {
         "external git commit",
     );
 
-    let info =
-        GitBridge::compare_status(&fixture.git_repo_path, &fixture.checkpoint_repo, "main")
-            .expect("compare_status");
+    let info = GitBridge::compare_status(&fixture.git_repo_path, &fixture.checkpoint_repo, "main")
+        .expect("compare_status");
     assert!(
         matches!(info.status, SyncStatus::Behind { .. }),
         "expected Behind status, got {:?}",
@@ -486,11 +496,7 @@ fn test_e2e_compare_status_divergent() {
         .expect("find reset target");
     fixture
         .git_repo
-        .reset(
-            &reset_target,
-            git2::ResetType::Hard,
-            None,
-        )
+        .reset(&reset_target, git2::ResetType::Hard, None)
         .expect("git reset");
 
     // Step 3: make a divergent git commit from this older base
@@ -503,9 +509,8 @@ fn test_e2e_compare_status_divergent() {
 
     // Now: git HEAD is a sibling of the anchor (both derive from the same parent)
     // graph_ahead_behind should report divergence
-    let info =
-        GitBridge::compare_status(&fixture.git_repo_path, &fixture.checkpoint_repo, "main")
-            .expect("compare_status");
+    let info = GitBridge::compare_status(&fixture.git_repo_path, &fixture.checkpoint_repo, "main")
+        .expect("compare_status");
     assert!(
         matches!(info.status, SyncStatus::Divergent { .. }),
         "expected Divergent status after reset + divergent commit, got {:?}",
@@ -596,8 +601,12 @@ fn test_e2e_gc_protects_git_anchored_checkpoints() {
     );
 
     // After removing the branch, should still be protected by git_anchor alone
-    fixture.checkpoint_repo.branches.retain(|b| b.name != "main");
-    let protected_after = stratum::git_sync::collect_protected_checkpoints(&fixture.checkpoint_repo);
+    fixture
+        .checkpoint_repo
+        .branches
+        .retain(|b| b.name != "main");
+    let protected_after =
+        stratum::git_sync::collect_protected_checkpoints(&fixture.checkpoint_repo);
     assert!(
         protected_after.contains(&head_id),
         "checkpoint with git_anchor should still be protected even without a branch"

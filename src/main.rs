@@ -1,4 +1,16 @@
+#[cfg(any(feature = "http", feature = "grpc"))]
+#[tokio::main]
+async fn main() {
+    if let Err(e) = stratum::runtime::run_async().await {
+        eprintln!("error: {}", e);
+        std::process::exit(1);
+    }
+}
+
+#[cfg(all(not(feature = "http"), not(feature = "grpc")))]
 fn main() {
-    let exit_code = stratum::api::cli::run();
-    std::process::exit(exit_code);
+    if let Err(e) = stratum::runtime::run_sync() {
+        eprintln!("error: {}", e);
+        std::process::exit(1);
+    }
 }

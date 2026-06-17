@@ -50,7 +50,7 @@ fn row_to_delta(row: &Row) -> Result<Delta, rusqlite::Error> {
 
 impl DeltaStore for SqliteStorage {
     fn store_delta(&self, delta: &Delta) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let diff_json = serde_json::to_vec(&delta.diff)?;
         let source_data = match &delta.source {
             crate::core::types::SourceType::Agent(id) => Some(id.to_string()),
@@ -80,7 +80,7 @@ impl DeltaStore for SqliteStorage {
     }
 
     fn get_delta(&self, id: &DeltaId) -> StorageResult<Delta> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, file_path, file_hash, diff, source, source_data, timestamp FROM deltas WHERE id = ?1"
         )?;
@@ -106,7 +106,7 @@ impl DeltaStore for SqliteStorage {
     }
 
     fn delta_exists(&self, id: &DeltaId) -> StorageResult<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare("SELECT COUNT(*) FROM deltas WHERE id = ?1")?;
         let count: i64 = stmt.query_row(params![&id.0.to_vec()], |row| row.get(0))?;
         Ok(count > 0)

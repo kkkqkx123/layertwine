@@ -6,7 +6,9 @@
 use crate::core::partition::Partition;
 use crate::core::types::{AgentInstanceId, PartitionId, PartitionType, SnapshotId};
 use crate::error::{Result, StratumError};
+use crate::error::StorageError;
 use crate::storage::repository::PartitionStore;
+use rusqlite::params;
 
 /// ID of the Agent partition in the approval layer via UUIDv5
 pub fn approval_agent_partition_id(agent_id: &AgentInstanceId) -> PartitionId {
@@ -55,31 +57,67 @@ pub fn list_approval_partitions<S: PartitionStore>(storage: &S) -> Result<Vec<Pa
 /// but not yet approved (merged into integrated) or rejected (rolled back).
 pub fn list_pending_approvals<S: PartitionStore>(storage: &S) -> Result<Vec<Partition>> {
     let all = list_approval_partitions(storage)?;
-    Ok(all
-        .into_iter()
-        .filter(|p| p.history.len() > 1)
-        .collect())
+    Ok(all.into_iter().filter(|p| p.history.len() > 1).collect())
 }
 
 /// Reject an agent's approval submission by rolling back to the baseline snapshot.
 ///
 /// This undoes the agent's contribution by restoring the approval partition pointer
 /// to the first snapshot in its history (the base state before agent edits were merged).
-pub fn reject_approval<S: PartitionStore>(storage: &S, agent_id: &AgentInstanceId) -> Result<SnapshotId> {
+pub fn reject_approval<S: PartitionStore + 'static>(
+    storage: &S,
+    agent_id: &AgentInstanceId,
+) -> Result<SnapshotId> {
     let pid = approval_agent_partition_id(agent_id);
-    let partition = storage
-        .get_partition(&pid)
-        .map_err(|_| StratumError::NotFound(format!("approval partition for agent '{}' not found", agent_id)))?;
-
-    let base_snapshot = partition.history.first().ok_or_else(|| {
-        StratumError::StateMachine("approval partition has empty history".into())
+    let partition = storage.get_partition(&pid).map_err(|_| {
+        StratumError::NotFound(format!(
+            "approval partition for agent '{}' not found",
+            agent_id
+        ))
     })?;
 
-    storage
-        .update_pointer(&pid, base_snapshot)
-        .map_err(StratumError::Storage)?;
+    let base_snapshot = partition
+        .history
+        .first()
+        .ok_or_else(|| StratumError::StateMachine("approval partition has empty history".into()))?;
 
-    Ok(*base_snapshot)
+    // Try to use direct SQL update if storage is SqliteStorage
+    // We need to use Any for downcast since PartitionStore doesn't provide is_sqlite method
+    let any_storage: &dyn std::any::Any = storage;
+
+    if let Some(sql_storage) = any_storage.downcast_ref::<crate::storage::SqliteStorage>() {
+        // Direct SQL update that doesn't add to history and resets history to just baseline
+        let conn = sql_storage.conn.lock();
+
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE partitions SET current_snapshot = ?1, updated_at = ?2 WHERE id = ?3",
+            params![
+                &base_snapshot.0.to_vec(),
+                now,
+                &pid.as_bytes().to_vec()
+            ],
+        ).map_err(|e| StratumError::Storage(StorageError::Database(e)))?;
+
+        // Delete all history except the first (baseline)
+        conn.execute(
+            "DELETE FROM partition_history
+             WHERE partition_id = ?1 AND seq > (
+                 SELECT seq FROM partition_history
+                 WHERE partition_id = ?1 ORDER BY seq ASC LIMIT 1
+             )",
+            params![&pid.as_bytes().to_vec()],
+        ).map_err(|e| StratumError::Storage(StorageError::Database(e)))?;
+
+        Ok(*base_snapshot)
+    } else {
+        // Fall back to update_pointer for other storage implementations
+        storage
+            .update_pointer(&pid, base_snapshot)
+            .map_err(StratumError::Storage)?;
+
+        Ok(*base_snapshot)
+    }
 }
 
 #[cfg(test)]

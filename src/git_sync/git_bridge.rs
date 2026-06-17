@@ -6,6 +6,7 @@ use crate::core::file_node::FileNode;
 use crate::core::snapshot::Snapshot;
 use crate::core::types::LineDiff;
 use crate::core::types::{CheckpointId, SourceType};
+use crate::engine::diff::diff_to_line_diff;
 use crate::error::{Result, StratumError};
 use crate::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
 
@@ -494,18 +495,36 @@ mod tests {
         let _git_repo = init_git_repo(&git_path);
 
         let storage = SqliteStorage::new_in_memory().unwrap();
-        let content = b"test content for push";
-        let file_node = FileNode::new(PathBuf::from("pushed.txt"), content);
-        storage.store_file_node(&file_node, content).unwrap();
-        let diff = LineDiff::new(vec![]);
-        let delta = Delta::new(file_node.clone(), diff, SourceType::Manual);
-        storage.store_delta(&delta).unwrap();
-        let snapshot = Snapshot::new_initial(file_node, delta.id);
-        storage.store_snapshot(&snapshot, content).unwrap();
 
-        let mut checkpoint_repo = CheckpointRepo::new_single(snapshot.id);
+        // Create initial snapshot
+        let initial_content = b"initial content";
+        let file_node1 = FileNode::new(PathBuf::from("pushed.txt"), initial_content);
+        storage.store_file_node(&file_node1, initial_content).unwrap();
+        let diff1 = LineDiff::new(vec![]);
+        let delta1 = Delta::new(file_node1.clone(), diff1, SourceType::Manual);
+        storage.store_delta(&delta1).unwrap();
+        let snapshot1 = Snapshot::new_initial(file_node1, delta1.id);
+        storage.store_snapshot(&snapshot1, initial_content).unwrap();
+
+        let mut checkpoint_repo = CheckpointRepo::new_single(snapshot1.id);
+
+        // Create a new snapshot with different content
+        let modified_content = b"test content for push";
+        let file_node2 = FileNode::new(PathBuf::from("pushed.txt"), modified_content);
+        storage.store_file_node(&file_node2, modified_content).unwrap();
+        let diff2 = diff_to_line_diff("initial content", "test content for push");
+        let delta2 = Delta::new(file_node2.clone(), diff2, SourceType::Manual);
+        storage.store_delta(&delta2).unwrap();
+        let snapshot2 = Snapshot::from_parent(
+            &snapshot1,
+            delta2.id,
+            "manual_edit".to_string(),
+        );
+        storage.store_snapshot(&snapshot2, b"").unwrap();
+
+        // Commit the modified snapshot
         checkpoint_repo
-            .commit_single(snapshot.id, "test push", "test-user")
+            .commit_single(snapshot2.id, "test push", "test-user")
             .unwrap();
 
         let result = GitBridge::push_to_git(
@@ -669,19 +688,39 @@ mod tests {
         init_git_repo(&git_path);
 
         let storage = SqliteStorage::new_in_memory().unwrap();
-        let empty_content = b"empty test";
-        let file_node = FileNode::new(PathBuf::from("empty.txt"), empty_content);
-        storage.store_file_node(&file_node, empty_content).unwrap();
-        let diff = LineDiff::new(vec![]);
-        let delta = Delta::new(file_node.clone(), diff, SourceType::Manual);
-        storage.store_delta(&delta).unwrap();
-        let snapshot = Snapshot::new_initial(file_node, delta.id);
-        storage.store_snapshot(&snapshot, empty_content).unwrap();
 
-        let mut checkpoint_repo = CheckpointRepo::new_single(snapshot.id);
+        // Create initial snapshot
+        let initial_content = b"initial content";
+        let file_node1 = FileNode::new(PathBuf::from("empty.txt"), initial_content);
+        storage.store_file_node(&file_node1, initial_content).unwrap();
+        let diff1 = LineDiff::new(vec![]);
+        let delta1 = Delta::new(file_node1.clone(), diff1, SourceType::Manual);
+        storage.store_delta(&delta1).unwrap();
+        let snapshot1 = Snapshot::new_initial(file_node1, delta1.id);
+        storage.store_snapshot(&snapshot1, initial_content).unwrap();
+
+        let mut checkpoint_repo = CheckpointRepo::new_single(snapshot1.id);
+
+        // Create a new snapshot with different content
+        let modified_content = b"empty test";
+        let file_node2 = FileNode::new(PathBuf::from("empty.txt"), modified_content);
+        storage.store_file_node(&file_node2, modified_content).unwrap();
+        let diff2 = diff_to_line_diff("initial content", "empty test");
+        let delta2 = Delta::new(file_node2.clone(), diff2, SourceType::Manual);
+        storage.store_delta(&delta2).unwrap();
+        let snapshot2 = Snapshot::from_parent(
+            &snapshot1,
+            delta2.id,
+            "manual_edit".to_string(),
+        );
+        storage.store_snapshot(&snapshot2, b"").unwrap();
+
+        // Commit the modified snapshot
         checkpoint_repo
-            .commit_single(snapshot.id, "test", "user")
+            .commit_single(snapshot2.id, "test", "user")
             .unwrap();
+
+        // Clear baseline snapshots to create an empty checkpoint
         let head = checkpoint_repo.current_branch_head();
         let cp = checkpoint_repo.get_checkpoint_mut(&head).unwrap();
         cp.baseline_snapshots.clear();
@@ -762,7 +801,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn test_compare_status_ahead() {
         let dir = tempfile::tempdir().unwrap();
         let git_path = dir.path().join("git_repo");
@@ -770,23 +809,40 @@ mod tests {
         init_git_repo(&git_path);
 
         let storage = SqliteStorage::new_in_memory().unwrap();
-        let content = b"ahead test";
-        let file_node = FileNode::new(PathBuf::from("ahead.txt"), content);
-        storage.store_file_node(&file_node, content).unwrap();
-        let diff = LineDiff::new(vec![]);
-        let delta = Delta::new(file_node.clone(), diff, SourceType::Manual);
-        storage.store_delta(&delta).unwrap();
-        let snapshot = Snapshot::new_initial(file_node, delta.id);
-        storage.store_snapshot(&snapshot, content).unwrap();
 
-        let mut checkpoint_repo = CheckpointRepo::new_single(snapshot.id);
+        // Create initial snapshot
+        let initial_content = b"initial content";
+        let file_node1 = FileNode::new(PathBuf::from("ahead.txt"), initial_content);
+        storage.store_file_node(&file_node1, initial_content).unwrap();
+        let diff1 = LineDiff::new(vec![]);
+        let delta1 = Delta::new(file_node1.clone(), diff1, SourceType::Manual);
+        storage.store_delta(&delta1).unwrap();
+        let snapshot1 = Snapshot::new_initial(file_node1, delta1.id);
+        storage.store_snapshot(&snapshot1, initial_content).unwrap();
 
-        // Create a new commit without pushing to git
+        let mut checkpoint_repo = CheckpointRepo::new_single(snapshot1.id);
+
+        // Create a new snapshot with different content
+        let modified_content = b"ahead test";
+        let file_node2 = FileNode::new(PathBuf::from("ahead.txt"), modified_content);
+        storage.store_file_node(&file_node2, modified_content).unwrap();
+        let diff2 = diff_to_line_diff("initial content", "ahead test");
+        let delta2 = Delta::new(file_node2.clone(), diff2, SourceType::Manual);
+        storage.store_delta(&delta2).unwrap();
+        let snapshot2 = Snapshot::from_parent(
+            &snapshot1,
+            delta2.id,
+            "manual_edit".to_string(),
+        );
+        storage.store_snapshot(&snapshot2, b"").unwrap();
+
+        // Create a new commit with the modified snapshot
         checkpoint_repo
-            .commit_single(snapshot.id, "local change", "user")
+            .commit_single(snapshot2.id, "local change", "user")
             .unwrap();
 
         let info = GitBridge::compare_status(&git_path, &checkpoint_repo, "main").unwrap();
+
         match info.status {
             SyncStatus::Ahead {
                 unpushed_checkpoints,
