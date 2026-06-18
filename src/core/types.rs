@@ -72,6 +72,34 @@ pub enum SourceType {
     Backup,
 }
 
+/// Source identifier constants for snapshot source prefixes
+pub mod source {
+    pub const AGENT_PREFIX: &str = "agent://";
+    pub const GRAPH_PREFIX: &str = "graph://";
+    pub const FILE_PREFIX: &str = "file://";
+    pub const SYSTEM_PREFIX: &str = "system://";
+
+    /// Check if a source string matches a given wildcard pattern
+    /// Supports prefix matching (e.g., "agent://" matches "agent://loop-1/iteration-5")
+    /// and simple glob patterns (e.g., "file://src/**")
+    pub fn matches_glob(source: &str, pattern: &str) -> bool {
+        if pattern == source {
+            return true;
+        }
+        if pattern.ends_with('/') && source.starts_with(pattern) {
+            return true;
+        }
+        if pattern.ends_with("/**") {
+            let prefix = &pattern[..pattern.len() - 3];
+            return source.starts_with(prefix);
+        }
+        if let Some(stripped) = pattern.strip_suffix('*') {
+            return source.starts_with(stripped);
+        }
+        source.starts_with(pattern)
+    }
+}
+
 /// Layering type
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum LayerType {

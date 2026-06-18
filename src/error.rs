@@ -26,6 +26,18 @@ pub enum StratumError {
     #[error("Checkpoint error: {0}")]
     Checkpoint(String),
 
+    // Restore error.
+    #[error("Restore error: {0}")]
+    Restore(String),
+
+    // Transaction error.
+    #[error("Transaction error: {0}")]
+    Transaction(String),
+
+    // Integrity check error.
+    #[error("Integrity check failed: {0}")]
+    Integrity(String),
+
     // Git synchronization error -
     #[error("Git synchronization error: {0}")]
     GitSync(String),
@@ -60,6 +72,7 @@ impl StratumError {
         match self {
             StratumError::Cli { .. } => exit_codes::USAGE_ERROR,
             StratumError::NotFound(_) => exit_codes::GENERAL_ERROR,
+            StratumError::Transaction(_) => exit_codes::GENERAL_ERROR,
             _ => exit_codes::GENERAL_ERROR,
         }
     }
@@ -94,6 +107,21 @@ impl StratumError {
             }
             StratumError::Checkpoint(e) => {
                 format!("error: checkpoint operation failed\n  detail: {}", e)
+            }
+            StratumError::Restore(e) => {
+                format!("error: restore operation failed\n  detail: {}", e)
+            }
+            StratumError::Transaction(e) => {
+                format!(
+                    "error: transaction operation failed\n  detail: {}\n  hint: check for conflicts and retry",
+                    e
+                )
+            }
+            StratumError::Integrity(e) => {
+                format!(
+                    "error: integrity check failed\n  detail: {}\n  hint: data may be corrupted, consider restoring from backup",
+                    e
+                )
             }
             StratumError::GitSync(e) => {
                 format!("error: git sync failed\n  detail: {}", e)

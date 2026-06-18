@@ -1,4 +1,7 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tonic_build::compile_protos("src/api/rpc/proto/stratum.proto")?;
+    #[cfg(feature = "grpc")]
+    {
+        tonic_build::compile_protos("src/api/rpc/proto/stratum.proto")?;
+    }
     Ok(())
 }

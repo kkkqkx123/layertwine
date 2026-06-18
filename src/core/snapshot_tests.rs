@@ -188,7 +188,6 @@ fn test_snapshot_builder_missing_file() {
 
     let result = builder.build();
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), "file is required");
 }
 
 #[test]

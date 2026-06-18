@@ -1,5 +1,6 @@
 use crate::core::types::{CheckpointId, ContentId, SnapshotId};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Checkpoint Metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +42,45 @@ pub struct Checkpoint {
     pub metadata: CheckpointMetadata,
     /// Creation time (Unix milliseconds)
     pub created_at: i64,
+    /// Snapshot source mapping (snapshot ID -> source URI)
+    #[serde(default)]
+    pub snapshot_sources: HashMap<SnapshotId, String>,
+}
+
+/// Diff result between two checkpoints
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointDiff {
+    pub from_id: CheckpointId,
+    pub to_id: CheckpointId,
+    pub added: Vec<SnapshotId>,
+    pub removed: Vec<SnapshotId>,
+    pub modified: Vec<SnapshotId>,
+}
+
+impl CheckpointDiff {
+    pub fn new(
+        from_id: CheckpointId,
+        to_id: CheckpointId,
+        added: Vec<SnapshotId>,
+        removed: Vec<SnapshotId>,
+        modified: Vec<SnapshotId>,
+    ) -> Self {
+        CheckpointDiff {
+            from_id,
+            to_id,
+            added,
+            removed,
+            modified,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty() && self.modified.is_empty()
+    }
+
+    pub fn total_changes(&self) -> usize {
+        self.added.len() + self.removed.len() + self.modified.len()
+    }
 }
 
 impl Checkpoint {
@@ -56,6 +96,7 @@ impl Checkpoint {
             baseline_snapshots,
             metadata,
             created_at: chrono::Utc::now().timestamp_millis(),
+            snapshot_sources: HashMap::new(),
         };
         cp.id = cp.compute_id();
         cp

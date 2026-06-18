@@ -12,10 +12,16 @@ impl CheckpointStore for SqliteStorage {
             .map_err(|e| crate::StorageError::Serialization(e.to_string()))?;
         let snapshot_ids_json = serde_json::to_vec(&checkpoint.baseline_snapshots)
             .map_err(|e| crate::StorageError::Serialization(e.to_string()))?;
+        let snapshot_sources_json = if checkpoint.snapshot_sources.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&checkpoint.snapshot_sources)
+                .map_err(|e| crate::StorageError::Serialization(e.to_string()))?)
+        };
 
         conn.execute(
-            "INSERT OR IGNORE INTO checkpoints (id, parents, snapshot_ids, author, message, git_anchor, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT OR IGNORE INTO checkpoints (id, parents, snapshot_ids, author, message, git_anchor, created_at, snapshot_sources)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
                 &checkpoint.id.0.to_vec(),
                 parents_json,
@@ -24,6 +30,7 @@ impl CheckpointStore for SqliteStorage {
                 checkpoint.metadata.message,
                 checkpoint.metadata.git_anchor,
                 checkpoint.created_at,
+                snapshot_sources_json,
             ],
         )?;
         Ok(())
@@ -32,7 +39,7 @@ impl CheckpointStore for SqliteStorage {
     fn get_checkpoint(&self, id: &CheckpointId) -> StorageResult<Checkpoint> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, parents, snapshot_ids, author, message, git_anchor, created_at FROM checkpoints WHERE id = ?1"
+            "SELECT id, parents, snapshot_ids, author, message, git_anchor, created_at, snapshot_sources FROM checkpoints WHERE id = ?1"
         )?;
 
         let result = stmt.query_row(rusqlite::params![&id.0.to_vec()], |row| {
@@ -52,6 +59,11 @@ impl CheckpointStore for SqliteStorage {
             let message: String = row.get(4)?;
             let git_anchor: Option<String> = row.get(5)?;
             let created_at: i64 = row.get(6)?;
+            let snapshot_sources_json: Option<String> = row.get(7)?;
+            let snapshot_sources: std::collections::HashMap<SnapshotId, String> =
+                snapshot_sources_json
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
 
             Ok(Checkpoint {
                 id: ContentId(id_arr),
@@ -63,6 +75,7 @@ impl CheckpointStore for SqliteStorage {
                     git_anchor,
                 },
                 created_at,
+                snapshot_sources,
             })
         })?;
         Ok(result)

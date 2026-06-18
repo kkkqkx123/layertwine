@@ -1,5 +1,5 @@
 use crate::core::file_node::FileNode;
-use crate::core::snapshot::Snapshot;
+use crate::core::snapshot::{Snapshot, SnapshotCompression, SnapshotContent};
 use crate::core::types::{ContentId, SnapshotId};
 use crate::storage::repository::SnapshotStore;
 use crate::storage::sqlite::connection::SqliteStorage;
@@ -31,6 +31,28 @@ fn row_to_snapshot(row: &Row) -> Result<Snapshot, rusqlite::Error> {
     let parents: Vec<SnapshotId> = serde_json::from_slice(&parents_json)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
 
+    // Try to read new columns (may not exist in old databases)
+    let source: String = row.get(8).unwrap_or_default();
+    let content_type: String = row.get(9).unwrap_or_else(|_| "file".to_string());
+    let content_blob: Option<Vec<u8>> = row.get(10).ok();
+    let compression_str: String = row.get(11).unwrap_or_else(|_| "none".to_string());
+
+    let content = content_blob.map(|bytes| {
+        match content_type.as_str() {
+            "json" => SnapshotContent::JsonMetadata(
+                serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+            ),
+            "structured" => SnapshotContent::Structured(bytes),
+            _ => SnapshotContent::FileContent(bytes),
+        }
+    });
+
+    let compression = match compression_str.as_str() {
+        "gzip" => SnapshotCompression::Gzip,
+        "zstd" => SnapshotCompression::Zstd,
+        _ => SnapshotCompression::None,
+    };
+
     Ok(Snapshot {
         id,
         file: FileNode {
@@ -42,6 +64,9 @@ fn row_to_snapshot(row: &Row) -> Result<Snapshot, rusqlite::Error> {
         partition_type,
         created_at,
         has_conflicts,
+        content,
+        source,
+        compression,
     })
 }
 
@@ -74,6 +99,9 @@ fn row_to_snapshot_lenient(row: &Row) -> Snapshot {
         partition_type,
         created_at,
         has_conflicts,
+        content: None,
+        source: String::new(),
+        compression: SnapshotCompression::None,
     }
 }
 
@@ -83,9 +111,23 @@ impl SnapshotStore for SqliteStorage {
         let deltas_json = serde_json::to_vec(&snapshot.deltas)?;
         let parents_json = serde_json::to_vec(&snapshot.parents)?;
 
+        let (content_type, content_blob) = match &snapshot.content {
+            Some(sc) => (
+                sc.content_type().to_string(),
+                Some(sc.to_bytes()),
+            ),
+            None => ("file".to_string(), None),
+        };
+
+        let compression_str = match snapshot.compression {
+            SnapshotCompression::None => "none",
+            SnapshotCompression::Gzip => "gzip",
+            SnapshotCompression::Zstd => "zstd",
+        };
+
         conn.execute(
-            "INSERT OR IGNORE INTO snapshots (id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT OR IGNORE INTO snapshots (id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts, source, content_type, content, compression)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 &snapshot.id.0.to_vec(),
                 snapshot.file.path_str(),
@@ -95,6 +137,10 @@ impl SnapshotStore for SqliteStorage {
                 snapshot.partition_type,
                 snapshot.created_at,
                 snapshot.has_conflicts as i32,
+                snapshot.source,
+                content_type,
+                content_blob,
+                compression_str,
             ],
         )?;
         Ok(())
@@ -103,7 +149,7 @@ impl SnapshotStore for SqliteStorage {
     fn get_snapshot(&self, id: &SnapshotId) -> StorageResult<Snapshot> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts FROM snapshots WHERE id = ?1"
+            "SELECT id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts, source, content_type, content, compression FROM snapshots WHERE id = ?1"
         )?;
 
         let result = stmt.query_row(params![&id.0.to_vec()], row_to_snapshot)?;
@@ -113,7 +159,7 @@ impl SnapshotStore for SqliteStorage {
     fn find_snapshots_by_file(&self, file_path: &str) -> StorageResult<Vec<Snapshot>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts
+            "SELECT id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts, source, content_type, content, compression
              FROM snapshots WHERE file_path = ?1 ORDER BY created_at DESC",
         )?;
 
@@ -133,7 +179,7 @@ impl SnapshotStore for SqliteStorage {
     ) -> StorageResult<Vec<Snapshot>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts
+            "SELECT id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts, source, content_type, content, compression
              FROM snapshots WHERE partition_type = ?1 ORDER BY created_at DESC",
         )?;
 
@@ -158,13 +204,27 @@ impl SnapshotStore for SqliteStorage {
     fn store_snapshots_batch(&self, snapshots: &[(&Snapshot, &[u8])]) -> StorageResult<()> {
         self.with_transaction(|conn| {
             let mut stmt = conn.prepare_cached(
-                "INSERT OR IGNORE INTO snapshots (id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT OR IGNORE INTO snapshots (id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts, source, content_type, content, compression)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             )?;
 
             for (snapshot, _content) in snapshots {
                 let deltas_json = serde_json::to_vec(&snapshot.deltas)?;
                 let parents_json = serde_json::to_vec(&snapshot.parents)?;
+
+                let (content_type, content_blob) = match &snapshot.content {
+                    Some(sc) => (
+                        sc.content_type().to_string(),
+                        Some(sc.to_bytes()),
+                    ),
+                    None => ("file".to_string(), None),
+                };
+
+                let compression_str = match snapshot.compression {
+                    SnapshotCompression::None => "none",
+                    SnapshotCompression::Gzip => "gzip",
+                    SnapshotCompression::Zstd => "zstd",
+                };
 
                 stmt.execute(params![
                     &snapshot.id.0.to_vec(),
@@ -175,6 +235,10 @@ impl SnapshotStore for SqliteStorage {
                     snapshot.partition_type,
                     snapshot.created_at,
                     snapshot.has_conflicts as i32,
+                    snapshot.source,
+                    content_type,
+                    content_blob,
+                    compression_str,
                 ])?;
             }
 

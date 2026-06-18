@@ -32,7 +32,11 @@ CREATE TABLE IF NOT EXISTS snapshots (
     parents         BLOB NOT NULL,
     partition_type  TEXT NOT NULL,
     created_at      INTEGER NOT NULL,
-    has_conflicts   INTEGER NOT NULL DEFAULT 0
+    has_conflicts   INTEGER NOT NULL DEFAULT 0,
+    source          TEXT DEFAULT '',
+    content_type    TEXT DEFAULT 'file',
+    content         BLOB,
+    compression     TEXT DEFAULT 'none'
 );
 
 -- Partition Table
@@ -67,6 +71,7 @@ CREATE TABLE IF NOT EXISTS layers (
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_snapshots_file_created ON snapshots(file_path, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_snapshots_partition_created ON snapshots(partition_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_snapshots_source ON snapshots(source);
 CREATE INDEX IF NOT EXISTS idx_deltas_file ON deltas(file_path);
 CREATE INDEX IF NOT EXISTS idx_partition_history_snapshot ON partition_history(snapshot_id);
 ";
@@ -80,7 +85,8 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     author          TEXT NOT NULL,
     message         TEXT NOT NULL,
     git_anchor      TEXT,
-    created_at      INTEGER NOT NULL
+    created_at      INTEGER NOT NULL,
+    snapshot_sources TEXT
 );
 
 CREATE TABLE IF NOT EXISTS branches (
@@ -96,7 +102,23 @@ CREATE TABLE IF NOT EXISTS dag_store (
     updated_at      INTEGER NOT NULL
 );
 
+-- Time Index Table (for fast time-based checkpoint queries)
+CREATE TABLE IF NOT EXISTS time_index (
+    checkpoint_id   BLOB PRIMARY KEY,
+    created_at      INTEGER NOT NULL,
+    FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_checkpoints_created ON checkpoints(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_time_index_created_at ON time_index(created_at);
+
+-- Transaction Log Table (for WAL-based transaction tracking)
+CREATE TABLE IF NOT EXISTS transaction_log (
+    id              TEXT PRIMARY KEY,
+    state           TEXT NOT NULL,
+    checkpoints     TEXT,
+    created_at      INTEGER NOT NULL
+);
 ";
 
 /// Initialize the database and apply all migrations

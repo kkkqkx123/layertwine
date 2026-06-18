@@ -1,6 +1,7 @@
 use crate::checkpoint::branch::Branch;
 use crate::checkpoint::checkpoint::{Checkpoint, CheckpointMetadata};
 use crate::checkpoint::dag::CheckpointDag;
+use crate::checkpoint::time_index::TimeIndex;
 use crate::core::types::{CheckpointId, SnapshotId};
 use crate::error::{Result, StratumError};
 use crate::storage::repository::CheckpointPersist;
@@ -23,6 +24,8 @@ pub struct CheckpointRepo {
     pub(crate) checkpoints: HashMap<CheckpointId, Checkpoint>,
     /// Optional persistence backend — when set, mutations auto-persist
     pub(crate) storage: Option<Box<dyn CheckpointPersist>>,
+    /// Time index for fast time-based checkpoint queries
+    pub time_index: TimeIndex,
 }
 
 impl CheckpointRepo {
@@ -36,6 +39,8 @@ impl CheckpointRepo {
         dag.add_node(root_id);
 
         let mut checkpoints = HashMap::new();
+        let mut time_index = TimeIndex::new();
+        time_index.insert(&root);
         checkpoints.insert(root_id, root);
 
         let main_branch = Branch::new("main", root_id);
@@ -46,6 +51,7 @@ impl CheckpointRepo {
             checkpoint_dag: dag,
             checkpoints,
             storage: None,
+            time_index,
         }
     }
 
@@ -79,6 +85,8 @@ impl CheckpointRepo {
 
             storage.store_checkpoint(&root)?;
             let mut checkpoints = HashMap::new();
+            let mut time_index = TimeIndex::new();
+            time_index.insert(&root);
             checkpoints.insert(root_id, root);
 
             let mut checkpoint_dag = CheckpointDag::new();
@@ -104,6 +112,7 @@ impl CheckpointRepo {
                 checkpoint_dag,
                 checkpoints,
                 storage: Some(storage),
+                time_index,
             });
         }
 
@@ -115,12 +124,17 @@ impl CheckpointRepo {
             .position(|b| b.name == current_branch_name)
             .unwrap_or(0);
 
+        let time_index = TimeIndex::from_checkpoints(
+            &checkpoints.values().cloned().collect::<Vec<_>>(),
+        );
+
         Ok(CheckpointRepo {
             branches,
             current_branch,
             checkpoint_dag,
             checkpoints,
             storage: Some(storage),
+            time_index,
         })
     }
 
@@ -227,6 +241,11 @@ impl CheckpointRepo {
         self.checkpoint_dag.add_node(cp_id);
         self.checkpoint_dag.add_edge(current_head, cp_id);
         self.current_branch_mut().set_head(cp_id);
+
+        // Update time index
+        if let Some(new_cp) = self.checkpoints.get(&cp_id) {
+            self.time_index.insert(new_cp);
+        }
 
         // Auto-persist (DAG is not persisted)
         if let Some(storage) = &self.storage {
@@ -374,6 +393,11 @@ impl CheckpointRepo {
         self.checkpoint_dag.add_edge(source_head, cp_id);
         self.current_branch_mut().set_head(cp_id);
 
+        // Update time index
+        if let Some(merge_cp) = self.checkpoints.get(&cp_id) {
+            self.time_index.insert(merge_cp);
+        }
+
         // Auto-persist (DAG is not persisted)
         if let Some(storage) = &self.storage {
             if let Some(cp) = self.checkpoints.get(&cp_id) {
@@ -441,7 +465,9 @@ impl CheckpointRepo {
     /// Delete checkpoints
     /// Auto-persists the deletion (DAG is not persisted as it is rebuilt from checkpoints).
     pub fn remove_checkpoint(&mut self, id: &CheckpointId) -> Result<()> {
-        if self.checkpoints.remove(id).is_none() {
+        if let Some(cp) = self.checkpoints.remove(id) {
+            self.time_index.remove(&cp);
+        } else {
             return Err(StratumError::NotFound(format!(
                 "checkpoint {} not found",
                 id
