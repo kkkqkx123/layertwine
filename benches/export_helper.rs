@@ -1,8 +1,6 @@
 // 导出辅助模块
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BenchmarkResult {
@@ -26,6 +24,12 @@ pub struct BenchmarkGroup {
 pub struct BenchmarkReport {
     pub timestamp: String,
     pub groups: Vec<BenchmarkGroup>,
+}
+
+impl Default for BenchmarkReport {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BenchmarkReport {
@@ -53,6 +57,12 @@ pub struct BenchmarkCollector {
     pub current_benchmarks: Vec<BenchmarkResult>,
 }
 
+impl Default for BenchmarkCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BenchmarkCollector {
     pub fn new() -> Self {
         BenchmarkCollector {
@@ -74,6 +84,7 @@ impl BenchmarkCollector {
         self.current_group = Some(group_name.to_string());
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_benchmark(
         &mut self,
         name: String,

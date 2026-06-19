@@ -457,6 +457,7 @@ mod tests {
         store.create_partition(&partition).unwrap();
     }
 
+    #[allow(dead_code)]
     fn create_backup_snapshot_direct(
         backup_repo: &BackupRepo,
         source_snapshot: SnapshotId,

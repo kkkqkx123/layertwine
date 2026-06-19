@@ -236,18 +236,12 @@ impl Snapshot {
         if self.compression == SnapshotCompression::None {
             if let Some(ref content) = self.content {
                 let bytes = content.to_bytes();
-                #[cfg(feature = "zstd")]
-                {
-                    let compressed =
-                        zstd::encode_all(bytes.as_slice(), 3).map_err(|e| {
-                            StratumError::Serialization(format!("zstd compression failed: {}", e))
-                        })?;
-                    self.content = Some(SnapshotContent::Structured(compressed));
-                    self.compression = SnapshotCompression::Zstd;
-                    return Ok(());
-                }
-                // Fallback: no compression available, keep as-is
-                let _ = bytes;
+                let compressed = zstd::encode_all(bytes.as_slice(), 3).map_err(|e| {
+                    StratumError::Serialization(format!("zstd compression failed: {}", e))
+                })?;
+                self.content = Some(SnapshotContent::Structured(compressed));
+                self.compression = SnapshotCompression::Zstd;
+                return Ok(());
             }
         }
         Ok(())
@@ -257,16 +251,13 @@ impl Snapshot {
     pub fn decompress_content(&mut self) -> Result<()> {
         match self.compression {
             SnapshotCompression::Zstd => {
-                #[cfg(feature = "zstd")]
-                {
-                    if let Some(SnapshotContent::Structured(ref bytes)) = self.content {
-                        let decompressed = zstd::decode_all(bytes.as_slice()).map_err(|e| {
-                            StratumError::Serialization(format!("zstd decompression failed: {}", e))
-                        })?;
-                        self.content =
-                            Some(SnapshotContent::from_bytes(&self.source, decompressed)?);
-                        self.compression = SnapshotCompression::None;
-                    }
+                if let Some(SnapshotContent::Structured(ref bytes)) = self.content {
+                    let decompressed = zstd::decode_all(bytes.as_slice()).map_err(|e| {
+                        StratumError::Serialization(format!("zstd decompression failed: {}", e))
+                    })?;
+                    self.content =
+                        Some(SnapshotContent::from_bytes(&self.source, decompressed)?);
+                    self.compression = SnapshotCompression::None;
                 }
             }
             SnapshotCompression::Gzip => {

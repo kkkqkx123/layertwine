@@ -1,4 +1,5 @@
 //! Common utilities and fixtures for E2E tests
+#![allow(dead_code, unused_imports)]
 
 pub mod assertions;
 pub mod fixture;

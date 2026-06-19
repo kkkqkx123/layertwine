@@ -401,7 +401,7 @@ mod tests {
         //   root -> cp1 -> main_commit_2 -> merge
         //          -> feature_commit_1 -> merge
         // Max depth should be 3
-        let snap4 = dummy_snapshot_id(4);
+        let _snap4 = dummy_snapshot_id(4);
         repo.switch_branch("main").unwrap();
         let snap5 = dummy_snapshot_id(5);
         repo.commit_single(snap5, "main commit 2", "user").unwrap();
@@ -424,17 +424,17 @@ mod tests {
         let cp1 = repo
             .commit_single(dummy_snapshot_id(2), "main 1", "user")
             .unwrap();
-        let cp2 = repo
+        let _cp2 = repo
             .commit_single(dummy_snapshot_id(3), "main 2", "user")
             .unwrap();
-        let cp3 = repo
+        let _cp3 = repo
             .commit_single(dummy_snapshot_id(4), "main 3", "user")
             .unwrap();
 
         // Create feature branch from cp1
         repo.create_branch_from("feature", cp1).unwrap();
         repo.switch_branch("feature").unwrap();
-        let feature_cp1 = repo
+        let _feature_cp1 = repo
             .commit_single(dummy_snapshot_id(10), "feature 1", "user")
             .unwrap();
 

@@ -1,4 +1,5 @@
 //! Helper functions for E2E tests
+#![allow(dead_code, unused_imports, unused_variables)]
 
 use crate::common::fixture::TestEnvironment;
 use std::path::PathBuf;

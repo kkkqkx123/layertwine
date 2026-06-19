@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::backup::backup_repo::BackupRepo;
-use crate::checkpoint::checkpoint::Checkpoint;
+use crate::checkpoint::types::Checkpoint;
 use crate::checkpoint::repo::CheckpointRepo;
 use crate::config::{CompactOptions, StratumConfig};
 use crate::core::delta::Delta;
@@ -643,7 +643,7 @@ impl ApiService for ApiServiceImpl {
         Ok(LogResponse {
             checkpoints: checkpoints
                 .into_iter()
-                .map(|cp| checkpoint_to_info(cp))
+                .map(checkpoint_to_info)
                 .collect(),
             total,
         })
@@ -743,7 +743,7 @@ impl ApiService for ApiServiceImpl {
         let source_checkpoint = repo
             .checkpoints
             .get(&source_head)
-            .ok_or_else(|| ApiError::not_found(format!("source checkpoint not found")))?;
+            .ok_or_else(|| ApiError::not_found("source checkpoint not found".to_string()))?;
 
         // Use the baseline_snapshots from source branch's head checkpoint
         let snapshot_ids = source_checkpoint.baseline_snapshots.clone();

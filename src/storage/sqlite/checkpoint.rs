@@ -1,5 +1,5 @@
 use crate::checkpoint::branch::Branch;
-use crate::checkpoint::checkpoint::Checkpoint;
+use crate::checkpoint::types::Checkpoint;
 use crate::core::types::{CheckpointId, ContentId, SnapshotId};
 use crate::storage::repository::{BranchStore, CheckpointStore};
 use crate::storage::sqlite::connection::SqliteStorage;
@@ -69,7 +69,7 @@ impl CheckpointStore for SqliteStorage {
                 id: ContentId(id_arr),
                 parents,
                 baseline_snapshots,
-                metadata: crate::checkpoint::checkpoint::CheckpointMetadata {
+                metadata: crate::checkpoint::types::CheckpointMetadata {
                     author,
                     message,
                     git_anchor,

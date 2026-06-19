@@ -1,9 +1,9 @@
-//! Time Index Module
+//! Time Index Module (Phase 4.3)
 //!
 //! Time-based index for fast checkpoint lookup by creation time.
 //! Uses BTreeMap for O(log n) range queries and nearest-neighbor search.
 
-use crate::checkpoint::checkpoint::Checkpoint;
+use crate::checkpoint::types::Checkpoint;
 use crate::core::types::CheckpointId;
 use std::collections::BTreeMap;
 
@@ -127,7 +127,7 @@ impl TimeIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::checkpoint::checkpoint::{Checkpoint, CheckpointMetadata};
+    use crate::checkpoint::types::{Checkpoint, CheckpointMetadata};
     use crate::core::types::ContentId;
 
     fn make_checkpoint(timestamp: i64, seed: u8) -> Checkpoint {

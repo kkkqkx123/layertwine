@@ -89,8 +89,7 @@ pub mod source {
         if pattern.ends_with('/') && source.starts_with(pattern) {
             return true;
         }
-        if pattern.ends_with("/**") {
-            let prefix = &pattern[..pattern.len() - 3];
+        if let Some(prefix) = pattern.strip_suffix("/**") {
             return source.starts_with(prefix);
         }
         if let Some(stripped) = pattern.strip_suffix('*') {

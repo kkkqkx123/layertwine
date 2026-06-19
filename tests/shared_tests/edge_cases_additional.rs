@@ -1,6 +1,5 @@
 //! Additional E2E tests for edge cases and error handling
 
-use crate::common::assertions::*;
 use crate::common::fixture::{TestConfig, TestEnvironment};
 use crate::common::helpers::*;
 use crate::common::output::*;
@@ -178,12 +177,11 @@ fn test_many_small_files() {
     print_info("Step 3: Verify all files");
     let mut verified_count = 0;
     for (i, snapshot) in snapshots.iter().enumerate() {
-        let file_name = format!("file_{:03}.txt", i + 1);
-        let expected_content = format!("Content of file {}\n", i + 1);
+        let _file_name = format!("file_{:03}.txt", i + 1);
+        let _expected_content = format!("Content of file {}\n", i + 1);
 
         let reconstructed = reconstruct_text(&env, snapshot);
-        if reconstructed.is_some() {
-            let content = reconstructed.unwrap();
+        if let Some(content) = reconstructed {
             if content.contains(&format!("Content of file {}", i + 1)) {
                 verified_count += 1;
             }

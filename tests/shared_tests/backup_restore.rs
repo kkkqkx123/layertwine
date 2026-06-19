@@ -4,9 +4,8 @@ use crate::common::assertions::*;
 use crate::common::fixture::{TestConfig, TestEnvironment};
 use crate::common::helpers::*;
 use crate::common::output::*;
-use stratum::api::{ApiService, BackupRequest, CommitRequest, InitRequest, RestoreRequest};
+use stratum::api::{ApiService, BackupRequest, RestoreRequest};
 use stratum::core::types::SnapshotId;
-use stratum::storage::repository::PartitionStore;
 
 #[test]
 fn test_backup_and_restore() {
@@ -20,12 +19,12 @@ fn test_backup_and_restore() {
 
     // Create multiple edits
     let content1 = "Version 1\n";
-    let snapshot1 = apply_edit(&env, "backup_test.txt", content1);
+    let _snapshot1 = apply_edit(&env, "backup_test.txt", content1);
     commit_changes(&env, "Commit version 1", "user-1");
     print_success("Version 1 committed");
 
     let content2 = "Version 1\nVersion 2\n";
-    let snapshot2 = apply_edit(&env, "backup_test.txt", content2);
+    let _snapshot2 = apply_edit(&env, "backup_test.txt", content2);
     commit_changes(&env, "Commit version 2", "user-1");
     print_success("Version 2 committed");
 
@@ -217,7 +216,7 @@ fn test_multiple_backups() {
         ),
     ];
 
-    for (name, backup_id, _source_snapshot_id, expected_content) in &backups {
+    for (name, backup_id, _source_snapshot_id, _expected_content) in &backups {
         print_info(&format!("  {}: {}", name, &backup_id[..12]));
     }
 
@@ -230,7 +229,7 @@ fn test_multiple_backups() {
             .restore(RestoreRequest {
                 backup_id: backup_id.clone(),
             })
-            .expect(&format!("Failed to restore {}", name));
+            .unwrap_or_else(|_| panic!("Failed to restore {}", name));
 
         print_info(&format!(
             "  Restored {}: {} deltas",
@@ -306,7 +305,7 @@ fn test_backup_empty_file() {
     // Modify file
     print_info("Step 3: Modify file");
     let modified_content = "Now has content";
-    let modified_snapshot = apply_edit(&env, "empty.txt", modified_content);
+    let _modified_snapshot = apply_edit(&env, "empty.txt", modified_content);
     commit_changes(&env, "Add content", "user-1");
     print_success("File modified");
 
@@ -373,7 +372,7 @@ fn test_backup_large_file() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    let modified_snapshot = apply_edit(&env, "large.txt", &modified_content);
+    let _modified_snapshot = apply_edit(&env, "large.txt", &modified_content);
     commit_changes(&env, "Modify large file", "user-1");
     print_success("Large file modified");
 

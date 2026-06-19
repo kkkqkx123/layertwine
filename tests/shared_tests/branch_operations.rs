@@ -4,12 +4,8 @@ use crate::common::assertions::*;
 use crate::common::fixture::{TestConfig, TestEnvironment};
 use crate::common::helpers::*;
 use crate::common::output::*;
-use stratum::api::{
-    ApiService, BranchCreateRequest, BranchSwitchRequest, CommitRequest, InitRequest, LogRequest,
-    MergeRequest,
-};
+use stratum::api::{ApiService, BranchCreateRequest, BranchSwitchRequest, MergeRequest};
 use stratum::core::types::SnapshotId;
-use stratum::storage::repository::PartitionStore;
 
 #[test]
 fn test_create_and_switch_branch() {
@@ -77,7 +73,7 @@ fn test_create_and_switch_branch() {
     // Edit on feature branch
     print_info("Step 5: Make edits on feature branch");
     let feature_content = "Initial content\nFeature addition";
-    apply_edit(&env, "main.txt", &feature_content);
+    apply_edit(&env, "main.txt", feature_content);
     commit_changes(&env, "Add feature on feature branch", "user-1");
     print_success("Feature branch updated");
 
@@ -158,7 +154,7 @@ fn test_branch_isolation() {
         .expect("Failed to switch branch");
 
     let feature_content = "Main initial\nFeature edit";
-    apply_edit(&env, "file.txt", &feature_content);
+    apply_edit(&env, "file.txt", feature_content);
     commit_changes(&env, "Edit on feature", "user-1");
     print_success("Feature branch edited");
 
@@ -171,7 +167,7 @@ fn test_branch_isolation() {
         .expect("Failed to switch branch");
 
     let main_content = "Main initial\nMain edit";
-    apply_edit(&env, "file.txt", &main_content);
+    apply_edit(&env, "file.txt", main_content);
     commit_changes(&env, "Edit on main", "user-1");
     print_success("Main branch edited");
 
@@ -275,7 +271,7 @@ fn test_simple_branch_merge() {
     // Add feature
     print_info("Step 3: Add feature on feature branch");
     let feature_content = "Line 1\nLine 2\nLine 3 (feature)";
-    apply_edit(&env, "file.txt", &feature_content);
+    apply_edit(&env, "file.txt", feature_content);
     commit_changes(&env, "Add feature", "user-1");
     print_success("Feature added");
 
@@ -393,7 +389,7 @@ fn test_multiple_branches() {
             .branch_create(BranchCreateRequest {
                 name: branch_name.to_string(),
             })
-            .expect(&format!("Failed to create branch {}", branch_name));
+            .unwrap_or_else(|_| panic!("Failed to create branch {}", branch_name));
         print_success(&format!("Created branch: {}", branch_name));
     }
 
@@ -421,7 +417,7 @@ fn test_multiple_branches() {
             .branch_switch(BranchSwitchRequest {
                 name: branch_name.to_string(),
             })
-            .expect(&format!("Failed to switch to {}", branch_name));
+            .unwrap_or_else(|_| panic!("Failed to switch to {}", branch_name));
 
         let branch_content = format!("Base\nEdited on {}", branch_name);
         apply_edit(&env, "file.txt", &branch_content);
@@ -437,7 +433,7 @@ fn test_multiple_branches() {
             .branch_switch(BranchSwitchRequest {
                 name: branch_name.to_string(),
             })
-            .expect(&format!("Failed to switch to {}", branch_name));
+            .unwrap_or_else(|_| panic!("Failed to switch to {}", branch_name));
 
         let expected_content = format!("Base\nEdited on {}", branch_name);
 

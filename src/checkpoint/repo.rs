@@ -1,7 +1,8 @@
 use crate::checkpoint::branch::Branch;
-use crate::checkpoint::checkpoint::{Checkpoint, CheckpointMetadata};
+use crate::checkpoint::types::{Checkpoint, CheckpointMetadata};
 use crate::checkpoint::dag::CheckpointDag;
 use crate::checkpoint::time_index::TimeIndex;
+use crate::core::snapshot::Snapshot;
 use crate::core::types::{CheckpointId, SnapshotId};
 use crate::error::{Result, StratumError};
 use crate::storage::repository::CheckpointPersist;
@@ -22,6 +23,8 @@ pub struct CheckpointRepo {
     pub checkpoint_dag: CheckpointDag,
     /// All checkpoints (ID → Checkpoint)
     pub(crate) checkpoints: HashMap<CheckpointId, Checkpoint>,
+    /// All snapshots (ID → Snapshot) — in-memory cache
+    pub(crate) snapshots: HashMap<SnapshotId, Snapshot>,
     /// Optional persistence backend — when set, mutations auto-persist
     pub(crate) storage: Option<Box<dyn CheckpointPersist>>,
     /// Time index for fast time-based checkpoint queries
@@ -50,6 +53,7 @@ impl CheckpointRepo {
             current_branch: 0,
             checkpoint_dag: dag,
             checkpoints,
+            snapshots: HashMap::new(),
             storage: None,
             time_index,
         }
@@ -111,6 +115,7 @@ impl CheckpointRepo {
                 current_branch,
                 checkpoint_dag,
                 checkpoints,
+                snapshots: HashMap::new(),
                 storage: Some(storage),
                 time_index,
             });
@@ -128,11 +133,25 @@ impl CheckpointRepo {
             &checkpoints.values().cloned().collect::<Vec<_>>(),
         );
 
+        // Load snapshots referenced by all checkpoints from storage
+        let mut snapshots = HashMap::new();
+        let mut seen_snap_ids = HashSet::new();
+        for cp in checkpoints.values() {
+            for snap_id in &cp.baseline_snapshots {
+                if seen_snap_ids.insert(*snap_id) {
+                    if let Ok(snap) = storage.get_snapshot(snap_id) {
+                        snapshots.insert(*snap_id, snap);
+                    }
+                }
+            }
+        }
+
         Ok(CheckpointRepo {
             branches,
             current_branch,
             checkpoint_dag,
             checkpoints,
+            snapshots,
             storage: Some(storage),
             time_index,
         })
@@ -526,6 +545,79 @@ impl CheckpointRepo {
             )));
         }
 
+        Ok(result)
+    }
+
+    /// Get a snapshot by its ID from in-memory cache or storage backend
+    pub fn get_snapshot_by_id(&self, snap_id: &SnapshotId) -> Result<Snapshot> {
+        if let Some(snap) = self.snapshots.get(snap_id) {
+            return Ok(snap.clone());
+        }
+        if let Some(storage) = &self.storage {
+            return storage
+                .get_snapshot(snap_id)
+                .map_err(StratumError::from);
+        }
+        Err(StratumError::NotFound(format!(
+            "Snapshot {} not found",
+            snap_id
+        )))
+    }
+
+    /// Insert a snapshot into the in-memory cache.
+    ///
+    /// Snapshots must be cached (or stored in the storage backend) for
+    /// restore operations to resolve their content.
+    pub fn cache_snapshot(&mut self, snap: Snapshot) {
+        self.snapshots.insert(snap.id, snap);
+    }
+
+    /// Register a snapshot source mapping in the given checkpoint.
+    ///
+    /// The source string identifies the origin of the snapshot
+    /// (e.g. "file://src/main.rs", "agent://state").
+    pub fn set_snapshot_source(
+        &mut self,
+        cp_id: &CheckpointId,
+        snap_id: SnapshotId,
+        source: String,
+    ) -> Result<()> {
+        let cp = self.checkpoints.get_mut(cp_id).ok_or_else(|| {
+            StratumError::NotFound(format!("checkpoint {} not found", cp_id))
+        })?;
+        cp.snapshot_sources.insert(snap_id, source);
+        Ok(())
+    }
+
+    /// Get the full ancestry chain from root to the given checkpoint.
+    ///
+    /// Traverses parents via BFS and returns checkpoint IDs in topological
+    /// order (root first, target last). Used by restore operations for
+    /// delta reconstruction.
+    pub fn get_ancestry_chain(&self, cp_id: &CheckpointId) -> Result<Vec<CheckpointId>> {
+        let mut result = Vec::new();
+        let mut visited = HashSet::new();
+        let mut current = vec![*cp_id];
+        let mut next = Vec::new();
+
+        while !current.is_empty() {
+            for cid in current.drain(..) {
+                if !visited.insert(cid) {
+                    continue;
+                }
+                result.push(cid);
+                if let Ok(cp) = self.get_checkpoint(&cid) {
+                    for parent in &cp.parents {
+                        if !visited.contains(parent) {
+                            next.push(*parent);
+                        }
+                    }
+                }
+            }
+            std::mem::swap(&mut current, &mut next);
+        }
+
+        result.reverse();
         Ok(result)
     }
 }

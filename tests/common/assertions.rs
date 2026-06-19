@@ -1,4 +1,5 @@
 //! Custom assertions for E2E tests
+#![allow(dead_code, unused_imports, unused_variables)]
 
 use crate::common::fixture::TestEnvironment;
 use stratum::core::types::{ContentId, LayerType, SnapshotId};

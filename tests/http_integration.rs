@@ -6,14 +6,12 @@
 //!
 //! Each test mirrors a real business scenario from the user guide.
 
-use std::sync::Arc;
 
 use stratum::api::{
-    ApiService, ApiServiceImpl, ApproveRequest, BackupRequest, BranchCreateRequest,
+    ApiService, ApproveRequest, BackupRequest, BranchCreateRequest,
     BranchSwitchRequest, CommitRequest, EditRequest, GcRequest, InitRequest, LogRequest,
-    MergeRequest, RestoreRequest, ServiceConfig, ShowRequest,
+    MergeRequest, RestoreRequest, ShowRequest,
 };
-use stratum::core::types::AgentInstanceId;
 
 mod common;
 

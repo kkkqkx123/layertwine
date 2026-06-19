@@ -8,7 +8,7 @@
 //! 2. Support final validation before checkpoint submission
 //! 3. Provide checkpoint commit functionality
 
-use crate::checkpoint::checkpoint::{Checkpoint, CheckpointMetadata};
+use crate::checkpoint::types::{Checkpoint, CheckpointMetadata};
 use crate::core::delta::Delta;
 use crate::core::partition::Partition;
 use crate::core::snapshot::Snapshot;
@@ -263,7 +263,7 @@ mod tests {
     fn setup_storage() -> SqliteStorage {
         let storage = SqliteStorage::new_in_memory().unwrap();
         storage
-            .with_conn(|conn| crate::storage::migrations::initialize_full(conn))
+            .with_conn(crate::storage::migrations::initialize_full)
             .unwrap();
         storage
     }

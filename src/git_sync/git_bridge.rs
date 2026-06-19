@@ -6,9 +6,11 @@ use crate::core::file_node::FileNode;
 use crate::core::snapshot::Snapshot;
 use crate::core::types::LineDiff;
 use crate::core::types::{CheckpointId, SourceType};
-use crate::engine::diff::diff_to_line_diff;
 use crate::error::{Result, StratumError};
 use crate::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
+
+#[cfg(test)]
+use crate::engine::diff::diff_to_line_diff;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncStatus {

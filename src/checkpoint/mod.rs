@@ -9,17 +9,17 @@
 //! Phase 4.4: Checkpoint diff and integrity validation
 
 pub mod branch;
-pub mod checkpoint;
 pub mod dag;
 pub mod repo;
 pub mod restore;
 pub mod time_index;
 pub mod transaction;
+pub mod types;
 
 pub use branch::Branch;
-pub use checkpoint::{Checkpoint, CheckpointBuilder, CheckpointDiff, CheckpointMetadata};
 pub use dag::CheckpointDag;
 pub use repo::CheckpointRepo;
 pub use restore::{RestoreRequest, RestoreResponse};
 pub use time_index::TimeIndex;
 pub use transaction::{CheckpointTransaction, TransactionStatus};
+pub use types::{Checkpoint, CheckpointBuilder, CheckpointDiff, CheckpointMetadata};

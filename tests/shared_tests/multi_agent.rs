@@ -4,7 +4,7 @@ use crate::common::assertions::*;
 use crate::common::fixture::{TestConfig, TestEnvironment};
 use crate::common::helpers::*;
 use crate::common::output::*;
-use stratum::api::{ApiService, CommitRequest, InitRequest, LogRequest};
+use stratum::api::ApiService;
 use stratum::core::types::{AgentInstanceId, SnapshotId};
 use stratum::storage::repository::PartitionStore;
 
@@ -25,7 +25,7 @@ fn test_single_agent_workflow() {
     // Agent 1 edit
     print_info("Step 2: Agent-1 edits the file");
     let agent1_content = "Base content\nAgent-1 addition";
-    let agent1_snapshot = apply_agent_edit(&env, "agent-1", "shared.txt", &agent1_content);
+    let agent1_snapshot = apply_agent_edit(&env, "agent-1", "shared.txt", agent1_content);
     print_success(&format!(
         "Agent-1 edit applied, snapshot_id: {}",
         agent1_snapshot.to_hex()
@@ -195,7 +195,7 @@ fn test_two_agents_sequential() {
     // Agent 1 workflow
     print_info("Step 2: Agent-1 workflow");
     let agent1_content = "Base line\nAgent-1 addition";
-    apply_agent_edit(&env, "agent-1", "shared.txt", &agent1_content);
+    apply_agent_edit(&env, "agent-1", "shared.txt", agent1_content);
     submit_agent(&env, "agent-1");
     approve_agent(&env, "agent-1", "feature-1");
     print_success("Agent-1 workflow completed");
@@ -222,7 +222,7 @@ fn test_two_agents_sequential() {
     // Agent 2 workflow (builds on Agent-1's changes)
     print_info("Step 4: Agent-2 workflow (builds on Agent-1)");
     let agent2_content = "Base line\nAgent-1 addition\nAgent-2 addition";
-    apply_agent_edit(&env, "agent-2", "shared.txt", &agent2_content);
+    apply_agent_edit(&env, "agent-2", "shared.txt", agent2_content);
     submit_agent(&env, "agent-2");
     approve_agent(&env, "agent-2", "feature-2");
     print_success("Agent-2 workflow completed");
@@ -319,17 +319,17 @@ fn test_three_agents_parallel() {
     // Agent-1 edits line 2
     print_info("  Agent-1 edits line 2");
     let agent1_content = "Base line\nAgent-1 modified line 2\nLine 3";
-    apply_agent_edit(&env, "agent-1", "shared.txt", &agent1_content);
+    apply_agent_edit(&env, "agent-1", "shared.txt", agent1_content);
 
     // Agent-2 edits line 3
     print_info("  Agent-2 edits line 3");
     let agent2_content = "Base line\nLine 2\nAgent-2 modified line 3";
-    apply_agent_edit(&env, "agent-2", "shared.txt", &agent2_content);
+    apply_agent_edit(&env, "agent-2", "shared.txt", agent2_content);
 
     // Agent-3 adds new line
     print_info("  Agent-3 adds new line");
     let agent3_content = "Base line\nLine 2\nLine 3\nAgent-3 new line";
-    apply_agent_edit(&env, "agent-3", "shared.txt", &agent3_content);
+    apply_agent_edit(&env, "agent-3", "shared.txt", agent3_content);
 
     print_success("All three agents completed edits");
 
@@ -445,7 +445,7 @@ fn test_agent_rejection() {
     // Agent edit
     print_info("Step 2: Agent makes edit");
     let agent_content = "Base content\nAgent addition";
-    apply_agent_edit(&env, "agent-1", "shared.txt", &agent_content);
+    apply_agent_edit(&env, "agent-1", "shared.txt", agent_content);
     print_success("Agent edit applied");
 
     // Submit agent
@@ -501,7 +501,7 @@ fn test_agent_rejection() {
     }
 
     // After rejection, the partition should still exist but not be pending (history.len() == 1)
-    let has_agent1 = approval_partitions.iter().any(|p| {
+    let _has_agent1 = approval_partitions.iter().any(|p| {
         if let stratum::core::types::PartitionType::Approval(agent_id) = &p.partition_type {
             agent_id == &AgentInstanceId("agent-1".to_string())
         } else {

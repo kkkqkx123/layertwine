@@ -28,7 +28,7 @@ use stratum::storage::SqliteStorage;
 fn setup_storage() -> SqliteStorage {
     let storage = SqliteStorage::new_in_memory().expect("in-memory storage");
     storage
-        .with_conn(|conn| stratum::storage::migrations::initialize_full(conn))
+        .with_conn(stratum::storage::migrations::initialize_full)
         .expect("full schema init");
     storage
 }
@@ -511,7 +511,7 @@ fn test_state_machine_integration() {
 
     let storage = Arc::new(setup_storage());
     let sm = StateMachine::new(storage.clone());
-    let s: &SqliteStorage = &*storage; // deref Arc for non-Arc calls
+    let s: &SqliteStorage = &storage; // deref Arc for non-Arc calls
 
     // Create initial snapshot and partitions
     let initial_id = {

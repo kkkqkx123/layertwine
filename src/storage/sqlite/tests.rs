@@ -1,4 +1,4 @@
-use crate::checkpoint::checkpoint::Checkpoint;
+use crate::checkpoint::types::Checkpoint;
 use crate::core::delta::Delta;
 use crate::core::file_node::FileNode;
 use crate::core::partition::Partition;
@@ -331,7 +331,7 @@ fn test_checkpoint_store_roundtrip() {
     let cp = Checkpoint::new(
         vec![snap_id],
         vec![],
-        crate::checkpoint::checkpoint::CheckpointMetadata::new("author1", "msg1"),
+        crate::checkpoint::types::CheckpointMetadata::new("author1", "msg1"),
     );
 
     storage.store_checkpoint(&cp).unwrap();
@@ -350,12 +350,12 @@ fn test_checkpoint_list_and_delete() {
     let cp1 = Checkpoint::new(
         vec![make_snapshot_id(b"a")],
         vec![],
-        crate::checkpoint::checkpoint::CheckpointMetadata::new("author1", "first"),
+        crate::checkpoint::types::CheckpointMetadata::new("author1", "first"),
     );
     let cp2 = Checkpoint::new(
         vec![make_snapshot_id(b"b")],
         vec![cp1.id],
-        crate::checkpoint::checkpoint::CheckpointMetadata::new("author2", "second"),
+        crate::checkpoint::types::CheckpointMetadata::new("author2", "second"),
     );
 
     storage.store_checkpoint(&cp1).unwrap();

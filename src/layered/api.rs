@@ -286,7 +286,8 @@ mod tests {
 
         let feature_name = "collab-feature";
 
-        let agents: Vec<(AgentInstanceId, Box<dyn FnOnce(&str) -> Result<String>>)> = vec![
+        type AgentFn = Box<dyn FnOnce(&str) -> Result<String>>;
+        let agents: Vec<(AgentInstanceId, AgentFn)> = vec![
             (
                 agent_a.clone(),
                 Box::new(|base| {

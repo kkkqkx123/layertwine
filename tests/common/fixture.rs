@@ -1,4 +1,5 @@
 //! Fixture definitions and generation for E2E tests
+#![allow(dead_code, unused_imports, unused_variables)]
 
 use std::path::{Path, PathBuf};
 use stratum::api::{ApiService, ApiServiceImpl, ServiceConfig};

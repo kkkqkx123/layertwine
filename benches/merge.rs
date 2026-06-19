@@ -34,6 +34,7 @@ fn create_delta_from_texts(old: &str, new: &str) -> Delta {
     Delta::new(file_node, diff, SourceType::Manual)
 }
 
+#[allow(dead_code)]
 fn create_manual_delta(old_start: u32, insert_lines: Vec<String>) -> Delta {
     let file_node = FileNode::new(PathBuf::from("test.txt"), b"base content\n");
     let diff = LineDiff {

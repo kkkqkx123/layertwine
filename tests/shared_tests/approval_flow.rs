@@ -4,8 +4,7 @@ use crate::common::assertions::*;
 use crate::common::fixture::{TestConfig, TestEnvironment};
 use crate::common::helpers::*;
 use crate::common::output::*;
-use stratum::api::{ApiService, CommitRequest, InitRequest, LogRequest};
-use stratum::core::types::SnapshotId;
+use stratum::api::ApiService;
 use stratum::storage::repository::PartitionStore;
 
 #[test]
@@ -29,7 +28,7 @@ fn test_complete_approval_flow() {
     // Agent workflow: edit → submit → approve
     print_info("Step 3: Agent workflow - edit");
     let agent_content = "Base line\nAgent addition";
-    let agent_snapshot = apply_agent_edit(&env, "test-agent", "approval_test.txt", &agent_content);
+    let agent_snapshot = apply_agent_edit(&env, "test-agent", "approval_test.txt", agent_content);
     print_success(&format!(
         "Agent edit applied, snapshot_id: {}",
         agent_snapshot.to_hex()

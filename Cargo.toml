@@ -31,6 +31,7 @@ similar = "3"
 git2 = "0.21"
 parking_lot = "0.12"
 lazy_static = "1.5"
+zstd = "0.13"
 
 # Config
 toml = "1.1"

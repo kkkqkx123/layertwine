@@ -9,8 +9,11 @@
 //! - Log history and traversal
 
 use stratum::checkpoint::branch::Branch;
-use stratum::checkpoint::checkpoint::{Checkpoint, CheckpointBuilder, CheckpointMetadata};
+use stratum::checkpoint::types::{Checkpoint, CheckpointBuilder, CheckpointMetadata};
 use stratum::checkpoint::repo::CheckpointRepo;
+use stratum::checkpoint::restore::RestoreRequest;
+use stratum::core::file_node::FileNode;
+use stratum::core::snapshot::{Snapshot, SnapshotContent};
 use stratum::core::types::{CheckpointId, ContentId, SnapshotId};
 
 fn dummy_snapshot_id(n: u8) -> SnapshotId {
@@ -277,7 +280,7 @@ fn test_log_from_specific_checkpoint() {
     repo.commit_single(snap3, "third", "user").unwrap();
 
     let log = repo.log_from(&cp1, 10);
-    assert!(log.len() >= 1);
+    assert!(!log.is_empty());
     assert_eq!(log[0].id, cp1);
 }
 
@@ -412,7 +415,7 @@ fn test_dag_merge_base() {
     let mut repo = CheckpointRepo::new_single(snap1);
 
     let initial_log = repo.log(10);
-    let root_id = initial_log
+    let _root_id = initial_log
         .iter()
         .find(|cp| cp.parents.is_empty())
         .unwrap()
@@ -879,4 +882,139 @@ fn test_dag_built_after_load() {
     let head = loaded_repo.current_branch_head();
     assert!(loaded_repo.dag().has_node(&head));
     assert_eq!(loaded_repo.checkpoint_count(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// Test: Restore operations
+// ---------------------------------------------------------------------------
+
+/// Create a snapshot with content-addressed ID and cache it in the repo.
+fn make_cached_snapshot(seed: u8, source: &str) -> Snapshot {
+    let file = FileNode::new("dummy".into(), &[seed]);
+    Snapshot::new_with_content(
+        file,
+        SnapshotContent::FileContent(vec![seed]),
+        source.to_string(),
+        String::new(),
+        vec![],
+        vec![],
+    )
+}
+
+/// Build a repo whose root checkpoint carries multiple pre-cached snapshots.
+fn multi_snapshot_repo(specs: Vec<(u8, &str)>) -> CheckpointRepo {
+    let snaps: Vec<Snapshot> = specs
+        .iter()
+        .map(|&(s, src)| make_cached_snapshot(s, src))
+        .collect();
+    let ids: Vec<SnapshotId> = snaps.iter().map(|sn| sn.id).collect();
+    let mut repo = CheckpointRepo::new(ids);
+    let root_id = repo.current_branch_head();
+    for sn in &snaps {
+        let _ = repo.set_snapshot_source(&root_id, sn.id, sn.source.clone());
+    }
+    for sn in snaps {
+        repo.cache_snapshot(sn);
+    }
+    repo
+}
+
+#[test]
+fn test_restore_full_integration() {
+    let repo = multi_snapshot_repo(vec![
+        (1, "file://src/main.rs"),
+        (2, "agent://state"),
+    ]);
+
+    let head = repo.current_branch_head();
+    let resp = repo.restore_full(&head).unwrap();
+
+    assert_eq!(resp.snapshots.len(), 2);
+    assert!(!resp.ancestry.is_empty());
+    assert_eq!(*resp.ancestry.last().unwrap(), head);
+}
+
+#[test]
+fn test_restore_selective_integration() {
+    let repo = multi_snapshot_repo(vec![
+        (1, "file://src/main.rs"),
+        (2, "agent://state"),
+        (3, "graph://exec"),
+    ]);
+
+    let head = repo.current_branch_head();
+    let resp = repo.restore_selective(&head, vec!["agent://", "graph://"]).unwrap();
+
+    assert_eq!(resp.snapshots.len(), 2);
+    let sources: Vec<&str> = resp.snapshots.iter().map(|(_, _, s)| s.as_str()).collect();
+    assert!(sources.contains(&"agent://state"));
+    assert!(sources.contains(&"graph://exec"));
+}
+
+#[test]
+fn test_restore_dispatcher_integration() {
+    let repo = multi_snapshot_repo(vec![
+        (1, "file://src/a.rs"),
+        (2, "agent://state"),
+    ]);
+
+    let head = repo.current_branch_head();
+
+    // checkpoint_id only → full restore
+    let req = RestoreRequest {
+        checkpoint_id: Some(head),
+        source_filter: None,
+        time_range: None,
+    };
+    let resp = repo.restore(&req).unwrap();
+    assert_eq!(resp.snapshots.len(), 2);
+
+    // checkpoint_id + filter → selective
+    let req = RestoreRequest {
+        checkpoint_id: Some(head),
+        source_filter: Some(vec!["agent://".to_string()]),
+        time_range: None,
+    };
+    let resp = repo.restore(&req).unwrap();
+    assert_eq!(resp.snapshots.len(), 1);
+    assert_eq!(resp.snapshots[0].2, "agent://state");
+
+    // neither → error
+    let req = RestoreRequest {
+        checkpoint_id: None,
+        source_filter: None,
+        time_range: None,
+    };
+    assert!(repo.restore(&req).is_err());
+}
+
+#[test]
+fn test_diff_checkpoints_integration() {
+    let repo = multi_snapshot_repo(vec![
+        (1, "file://a.rs"),
+        (2, "file://b.rs"),
+    ]);
+
+    let snap = make_cached_snapshot(3, "file://c.rs");
+    let snap_id = snap.id;
+    let mut repo2 = repo;
+    repo2.cache_snapshot(snap);
+
+    let root_id = repo2.current_branch_head();
+    repo2.commit_single(snap_id, "add c", "test").unwrap();
+    let head = repo2.current_branch_head();
+    let _ = repo2.set_snapshot_source(&head, snap_id, "file://c.rs".to_string());
+
+    let diff = repo2.diff_checkpoints(&root_id, &head).unwrap();
+    // root had [a, b], head has [c] → a, b removed, c added
+    assert_eq!(diff.added.len(), 1);
+    assert_eq!(diff.removed.len(), 2);
+}
+
+#[test]
+fn test_validate_integrity_integration() {
+    let repo = multi_snapshot_repo(vec![(1, "file://src/main.rs")]);
+    let head = repo.current_branch_head();
+    let issues = repo.validate_integrity(&head).unwrap();
+    assert!(issues.is_empty(), "expected clean integrity, got: {:?}", issues);
 }

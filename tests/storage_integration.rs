@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use stratum::core::delta::Delta;
 use stratum::core::file_node::FileNode;
 use stratum::core::partition::Partition;
-use stratum::core::snapshot::Snapshot;
+use stratum::core::snapshot::{Snapshot, SnapshotCompression};
 use stratum::core::types::{
     AgentInstanceId, ContentId, DiffOp, Hunk, LayerType, LineDiff, PartitionType, SourceType,
 };
@@ -44,7 +44,7 @@ fn test_store_and_get_snapshot() -> StorageResult<()> {
     let snapshot_id = ContentId::from_content(b"snapshot1");
 
     let snapshot = Snapshot {
-        id: snapshot_id.clone(),
+        id: snapshot_id,
         file: FileNode {
             file_path: file_path.clone(),
             base_hash: file_hash,
@@ -54,6 +54,9 @@ fn test_store_and_get_snapshot() -> StorageResult<()> {
         partition_type: PartitionType::Manual.name(),
         created_at: chrono::Utc::now().timestamp_millis(),
         has_conflicts: false,
+        content: None,
+        source: String::new(),
+        compression: SnapshotCompression::None,
     };
 
     storage.store_snapshot(&snapshot, b"hello world")?;
@@ -74,7 +77,7 @@ fn test_snapshot_exists() -> StorageResult<()> {
 
     let snapshot_id = ContentId::from_content(b"snapshot1");
     let snapshot = Snapshot {
-        id: snapshot_id.clone(),
+        id: snapshot_id,
         file: FileNode {
             file_path: PathBuf::from("test.txt"),
             base_hash: ContentId::from_content(b"content").0,
@@ -84,6 +87,9 @@ fn test_snapshot_exists() -> StorageResult<()> {
         partition_type: PartitionType::Manual.name(),
         created_at: chrono::Utc::now().timestamp_millis(),
         has_conflicts: false,
+        content: None,
+        source: String::new(),
+        compression: SnapshotCompression::None,
     };
 
     assert!(!storage.snapshot_exists(&snapshot_id)?);
@@ -110,6 +116,9 @@ fn test_find_snapshots_by_file() -> StorageResult<()> {
         partition_type: PartitionType::Manual.name(),
         created_at: 1000,
         has_conflicts: false,
+        content: None,
+        source: String::new(),
+        compression: SnapshotCompression::None,
     };
 
     let snapshot2 = Snapshot {
@@ -123,6 +132,9 @@ fn test_find_snapshots_by_file() -> StorageResult<()> {
         partition_type: PartitionType::Agent(agent_id).name(),
         created_at: 2000,
         has_conflicts: false,
+        content: None,
+        source: String::new(),
+        compression: SnapshotCompression::None,
     };
 
     storage.store_snapshot(&snapshot1, b"version1")?;
@@ -152,6 +164,9 @@ fn test_find_snapshots_by_partition() -> StorageResult<()> {
         partition_type: PartitionType::Manual.name(),
         created_at: 1000,
         has_conflicts: false,
+        content: None,
+        source: String::new(),
+        compression: SnapshotCompression::None,
     };
 
     let snapshot2 = Snapshot {
@@ -165,6 +180,9 @@ fn test_find_snapshots_by_partition() -> StorageResult<()> {
         partition_type: PartitionType::Agent(agent_id.clone()).name(),
         created_at: 2000,
         has_conflicts: false,
+        content: None,
+        source: String::new(),
+        compression: SnapshotCompression::None,
     };
 
     storage.store_snapshot(&snapshot1, b"version1")?;
@@ -196,6 +214,9 @@ fn test_store_snapshots_batch_atomic() -> StorageResult<()> {
         partition_type: PartitionType::Manual.name(),
         created_at: 1000,
         has_conflicts: false,
+        content: None,
+        source: String::new(),
+        compression: SnapshotCompression::None,
     };
 
     let snapshot2 = Snapshot {
@@ -209,6 +230,9 @@ fn test_store_snapshots_batch_atomic() -> StorageResult<()> {
         partition_type: PartitionType::Agent(AgentInstanceId("test-agent".into())).name(),
         created_at: 2000,
         has_conflicts: false,
+        content: None,
+        source: String::new(),
+        compression: SnapshotCompression::None,
     };
 
     let snapshot3 = Snapshot {
@@ -222,6 +246,9 @@ fn test_store_snapshots_batch_atomic() -> StorageResult<()> {
         partition_type: PartitionType::Manual.name(),
         created_at: 3000,
         has_conflicts: false,
+        content: None,
+        source: String::new(),
+        compression: SnapshotCompression::None,
     };
 
     // Store snapshots in a batch with atomic guarantee
@@ -271,11 +298,14 @@ fn test_snapshot_with_deltas_and_parents() -> StorageResult<()> {
             file_path: PathBuf::from("test.txt"),
             base_hash: ContentId::from_content(b"content").0,
         },
-        deltas: vec![delta_id.clone()],
-        parents: vec![parent_id.clone()],
+        deltas: vec![delta_id],
+        parents: vec![parent_id],
         partition_type: PartitionType::Manual.name(),
         created_at: chrono::Utc::now().timestamp_millis(),
         has_conflicts: false,
+        content: None,
+        source: String::new(),
+        compression: SnapshotCompression::None,
     };
 
     storage.store_snapshot(&snapshot, b"content")?;
@@ -301,7 +331,7 @@ fn test_store_and_get_delta() -> StorageResult<()> {
     let file_hash = ContentId::from_content(b"hello world").0;
 
     let delta = Delta {
-        id: delta_id.clone(),
+        id: delta_id,
         file: FileNode {
             file_path: PathBuf::from("test.txt"),
             base_hash: file_hash,
@@ -341,7 +371,7 @@ fn test_delta_exists() -> StorageResult<()> {
 
     let delta_id = ContentId::from_content(b"delta1");
     let delta = Delta {
-        id: delta_id.clone(),
+        id: delta_id,
         file: FileNode {
             file_path: PathBuf::from("test.txt"),
             base_hash: ContentId::from_content(b"content").0,
@@ -366,7 +396,7 @@ fn test_get_deltas_batch() -> StorageResult<()> {
     let delta2_id = ContentId::from_content(b"delta2");
 
     let delta1 = Delta {
-        id: delta1_id.clone(),
+        id: delta1_id,
         file: FileNode {
             file_path: PathBuf::from("test1.txt"),
             base_hash: ContentId::from_content(b"content1").0,
@@ -377,7 +407,7 @@ fn test_get_deltas_batch() -> StorageResult<()> {
     };
 
     let delta2 = Delta {
-        id: delta2_id.clone(),
+        id: delta2_id,
         file: FileNode {
             file_path: PathBuf::from("test2.txt"),
             base_hash: ContentId::from_content(b"content2").0,
@@ -390,7 +420,7 @@ fn test_get_deltas_batch() -> StorageResult<()> {
     storage.store_delta(&delta1)?;
     storage.store_delta(&delta2)?;
 
-    let deltas = storage.get_deltas(&[delta1_id.clone(), delta2_id.clone()])?;
+    let deltas = storage.get_deltas(&[delta1_id, delta2_id])?;
     assert_eq!(deltas.len(), 2);
 
     let retrieved_ids: Vec<ContentId> = deltas.iter().map(|d| d.id).collect();
@@ -414,7 +444,7 @@ fn test_get_single_delta_batch() -> StorageResult<()> {
 
     let delta_id = ContentId::from_content(b"delta1");
     let delta = Delta {
-        id: delta_id.clone(),
+        id: delta_id,
         file: FileNode {
             file_path: PathBuf::from("test.txt"),
             base_hash: ContentId::from_content(b"content").0,
@@ -425,7 +455,7 @@ fn test_get_single_delta_batch() -> StorageResult<()> {
     };
 
     storage.store_delta(&delta)?;
-    let deltas = storage.get_deltas(&[delta_id.clone()])?;
+    let deltas = storage.get_deltas(&[delta_id])?;
 
     assert_eq!(deltas.len(), 1);
     assert_eq!(deltas[0].id, delta_id);
@@ -441,7 +471,7 @@ fn test_delta_with_agent_source() -> StorageResult<()> {
     let agent_instance_id = AgentInstanceId("agent-123".to_string());
 
     let delta = Delta {
-        id: delta_id.clone(),
+        id: delta_id,
         file: FileNode {
             file_path: PathBuf::from("test.txt"),
             base_hash: ContentId::from_content(b"content").0,
@@ -476,8 +506,8 @@ fn test_create_and_get_partition() -> StorageResult<()> {
     let partition = Partition {
         id: partition_id,
         name: "test_partition".to_string(),
-        current_snapshot: snapshot_id.clone(),
-        history: vec![snapshot_id.clone()],
+        current_snapshot: snapshot_id,
+        history: vec![snapshot_id],
         partition_type: PartitionType::Manual,
     };
 
@@ -529,8 +559,8 @@ fn test_update_partition_pointer() -> StorageResult<()> {
     let partition = Partition {
         id: partition_id,
         name: "test_partition".to_string(),
-        current_snapshot: snapshot1_id.clone(),
-        history: vec![snapshot1_id.clone()],
+        current_snapshot: snapshot1_id,
+        history: vec![snapshot1_id],
         partition_type: PartitionType::Manual,
     };
 
@@ -556,16 +586,16 @@ fn test_list_partitions() -> StorageResult<()> {
     let partition1 = Partition {
         id: uuid::Uuid::now_v7(),
         name: "partition_a".to_string(),
-        current_snapshot: snapshot_id.clone(),
-        history: vec![snapshot_id.clone()],
+        current_snapshot: snapshot_id,
+        history: vec![snapshot_id],
         partition_type: PartitionType::Manual,
     };
 
     let partition2 = Partition {
         id: uuid::Uuid::now_v7(),
         name: "partition_b".to_string(),
-        current_snapshot: snapshot_id.clone(),
-        history: vec![snapshot_id.clone()],
+        current_snapshot: snapshot_id,
+        history: vec![snapshot_id],
         partition_type: PartitionType::Agent(agent_id),
     };
 
@@ -592,7 +622,7 @@ fn test_partition_with_empty_history() -> StorageResult<()> {
     let partition = Partition {
         id: partition_id,
         name: "test_partition".to_string(),
-        current_snapshot: snapshot_id.clone(),
+        current_snapshot: snapshot_id,
         history: vec![],
         partition_type: PartitionType::Manual,
     };
@@ -695,7 +725,7 @@ fn test_atomic_ops_success() -> StorageResult<()> {
 
     storage.with_atomic(|storage| {
         let snapshot = Snapshot {
-            id: snapshot_id.clone(),
+            id: snapshot_id,
             file: FileNode {
                 file_path: PathBuf::from("test.txt"),
                 base_hash: ContentId::from_content(b"content").0,
@@ -705,6 +735,9 @@ fn test_atomic_ops_success() -> StorageResult<()> {
             partition_type: PartitionType::Manual.name(),
             created_at: chrono::Utc::now().timestamp_millis(),
             has_conflicts: false,
+        content: None,
+        source: String::new(),
+        compression: SnapshotCompression::None,
         };
 
         storage.store_snapshot(&snapshot, b"content")?;
@@ -726,7 +759,7 @@ fn test_atomic_ops_rollback_on_error() -> StorageResult<()> {
 
     let result = storage.with_atomic::<_, StorageResult<()>>(|storage| {
         let snapshot = Snapshot {
-            id: snapshot_id.clone(),
+            id: snapshot_id,
             file: FileNode {
                 file_path: PathBuf::from("test.txt"),
                 base_hash: ContentId::from_content(b"content").0,
@@ -736,12 +769,15 @@ fn test_atomic_ops_rollback_on_error() -> StorageResult<()> {
             partition_type: PartitionType::Manual.name(),
             created_at: chrono::Utc::now().timestamp_millis(),
             has_conflicts: false,
+        content: None,
+        source: String::new(),
+        compression: SnapshotCompression::None,
         };
 
         storage.store_snapshot(&snapshot, b"content")?;
 
         // Simulate an error
-        return Err(stratum::StorageError::NotFound("test error".to_string()));
+        Err(stratum::StorageError::NotFound("test error".to_string()))
     });
 
     // Should return the error
@@ -783,6 +819,9 @@ fn test_atomic_ops_rollback_on_error() -> StorageResult<()> {
 //             partition_type: PartitionType::Manual.name(),
 //             created_at: chrono::Utc::now().timestamp_millis(),
 //             has_conflicts: false,
+// content: None,
+// source: String::new(),
+// compression: SnapshotCompression::None,
 //         };
 //
 //         storage.store_snapshot(&snapshot, b"content")?;
@@ -814,6 +853,9 @@ fn test_atomic_ops_rollback_on_error() -> StorageResult<()> {
 //             partition_type: PartitionType::Manual.name(),
 //             created_at: chrono::Utc::now().timestamp_millis(),
 //             has_conflicts: false,
+// content: None,
+// source: String::new(),
+// compression: SnapshotCompression::None,
 //         };
 //
 //         storage.store_snapshot(&snapshot, b"content")?;
@@ -842,16 +884,17 @@ fn test_store_and_get_checkpoint() -> StorageResult<()> {
     let checkpoint_id = ContentId::from_content(b"checkpoint1");
     let parent_id = ContentId::from_content(b"parent");
 
-    let checkpoint = stratum::checkpoint::checkpoint::Checkpoint {
-        id: checkpoint_id.clone(),
+    let checkpoint = stratum::checkpoint::Checkpoint {
+        id: checkpoint_id,
         parents: vec![parent_id],
         baseline_snapshots: vec![ContentId::from_content(b"snapshot1")],
-        metadata: stratum::checkpoint::checkpoint::CheckpointMetadata {
+        metadata: stratum::checkpoint::CheckpointMetadata {
             author: "test_user".to_string(),
             message: "test commit".to_string(),
             git_anchor: Some("abc123".to_string()),
         },
         created_at: chrono::Utc::now().timestamp_millis(),
+        snapshot_sources: std::collections::HashMap::new(),
     };
 
     storage.store_checkpoint(&checkpoint)?;
@@ -872,16 +915,17 @@ fn test_checkpoint_exists() -> StorageResult<()> {
     let storage = SqliteStorage::new_full_in_memory()?;
 
     let checkpoint_id = ContentId::from_content(b"checkpoint1");
-    let checkpoint = stratum::checkpoint::checkpoint::Checkpoint {
-        id: checkpoint_id.clone(),
+    let checkpoint = stratum::checkpoint::Checkpoint {
+        id: checkpoint_id,
         parents: vec![],
         baseline_snapshots: vec![],
-        metadata: stratum::checkpoint::checkpoint::CheckpointMetadata {
+        metadata: stratum::checkpoint::CheckpointMetadata {
             author: "test_user".to_string(),
             message: "test".to_string(),
             git_anchor: None,
         },
         created_at: chrono::Utc::now().timestamp_millis(),
+        snapshot_sources: std::collections::HashMap::new(),
     };
 
     assert!(!storage.checkpoint_exists(&checkpoint_id)?);
@@ -895,28 +939,30 @@ fn test_checkpoint_exists() -> StorageResult<()> {
 fn test_list_checkpoints() -> StorageResult<()> {
     let storage = SqliteStorage::new_full_in_memory()?;
 
-    let checkpoint1 = stratum::checkpoint::checkpoint::Checkpoint {
+    let checkpoint1 = stratum::checkpoint::Checkpoint {
         id: ContentId::from_content(b"checkpoint1"),
         parents: vec![],
         baseline_snapshots: vec![],
-        metadata: stratum::checkpoint::checkpoint::CheckpointMetadata {
+        metadata: stratum::checkpoint::CheckpointMetadata {
             author: "user1".to_string(),
             message: "first".to_string(),
             git_anchor: None,
         },
         created_at: 1000,
+    snapshot_sources: std::collections::HashMap::new(),
     };
 
-    let checkpoint2 = stratum::checkpoint::checkpoint::Checkpoint {
+    let checkpoint2 = stratum::checkpoint::Checkpoint {
         id: ContentId::from_content(b"checkpoint2"),
         parents: vec![],
         baseline_snapshots: vec![],
-        metadata: stratum::checkpoint::checkpoint::CheckpointMetadata {
+        metadata: stratum::checkpoint::CheckpointMetadata {
             author: "user2".to_string(),
             message: "second".to_string(),
             git_anchor: None,
         },
         created_at: 2000,
+    snapshot_sources: std::collections::HashMap::new(),
     };
 
     storage.store_checkpoint(&checkpoint1)?;
@@ -936,16 +982,17 @@ fn test_delete_checkpoint() -> StorageResult<()> {
     let storage = SqliteStorage::new_full_in_memory()?;
 
     let checkpoint_id = ContentId::from_content(b"checkpoint1");
-    let checkpoint = stratum::checkpoint::checkpoint::Checkpoint {
-        id: checkpoint_id.clone(),
+    let checkpoint = stratum::checkpoint::Checkpoint {
+        id: checkpoint_id,
         parents: vec![],
         baseline_snapshots: vec![],
-        metadata: stratum::checkpoint::checkpoint::CheckpointMetadata {
+        metadata: stratum::checkpoint::CheckpointMetadata {
             author: "user".to_string(),
             message: "test".to_string(),
             git_anchor: None,
         },
         created_at: chrono::Utc::now().timestamp_millis(),
+        snapshot_sources: std::collections::HashMap::new(),
     };
 
     storage.store_checkpoint(&checkpoint)?;
@@ -969,7 +1016,7 @@ fn test_store_and_get_branch() -> StorageResult<()> {
 
     let branch = stratum::checkpoint::branch::Branch {
         name: "main".to_string(),
-        head: branch_id.clone(),
+        head: branch_id,
         created_at: chrono::Utc::now().timestamp_millis(),
         updated_at: chrono::Utc::now().timestamp_millis(),
     };
@@ -992,7 +1039,7 @@ fn test_update_branch_head() -> StorageResult<()> {
 
     let branch = stratum::checkpoint::branch::Branch {
         name: "main".to_string(),
-        head: old_head.clone(),
+        head: old_head,
         created_at: 1000,
         updated_at: 1000,
     };
@@ -1161,7 +1208,7 @@ fn test_clone_storage() -> StorageResult<()> {
 
     let snapshot_id = ContentId::from_content(b"snapshot1");
     let snapshot = Snapshot {
-        id: snapshot_id.clone(),
+        id: snapshot_id,
         file: FileNode {
             file_path: PathBuf::from("test.txt"),
             base_hash: ContentId::from_content(b"content").0,
@@ -1171,6 +1218,9 @@ fn test_clone_storage() -> StorageResult<()> {
         partition_type: PartitionType::Manual.name(),
         created_at: chrono::Utc::now().timestamp_millis(),
         has_conflicts: false,
+        content: None,
+        source: String::new(),
+        compression: SnapshotCompression::None,
     };
 
     storage.store_snapshot(&snapshot, b"content")?;
@@ -1189,7 +1239,7 @@ fn test_share_storage() -> StorageResult<()> {
 
     let snapshot_id = ContentId::from_content(b"snapshot1");
     let snapshot = Snapshot {
-        id: snapshot_id.clone(),
+        id: snapshot_id,
         file: FileNode {
             file_path: PathBuf::from("test.txt"),
             base_hash: ContentId::from_content(b"content").0,
@@ -1199,6 +1249,9 @@ fn test_share_storage() -> StorageResult<()> {
         partition_type: PartitionType::Manual.name(),
         created_at: chrono::Utc::now().timestamp_millis(),
         has_conflicts: false,
+        content: None,
+        source: String::new(),
+        compression: SnapshotCompression::None,
     };
 
     storage.store_snapshot(&snapshot, b"content")?;

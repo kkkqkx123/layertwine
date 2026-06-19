@@ -5,6 +5,8 @@ use crate::storage::sqlite::connection::SqliteStorage;
 use crate::StorageResult;
 use rusqlite::{params, Connection};
 
+type PartitionRow = (Vec<u8>, String, Vec<u8>, Option<String>);
+
 impl PartitionStore for SqliteStorage {
     fn create_partition(&self, partition: &Partition) -> StorageResult<()> {
         let conn = self.conn.lock();
@@ -152,7 +154,7 @@ impl PartitionStore for SqliteStorage {
              FROM partitions ORDER BY name"
         )?;
 
-        let rows: Vec<(Vec<u8>, String, Vec<u8>, Option<String>)> = stmt
+        let rows: Vec<PartitionRow> = stmt
             .query_map([], |row| {
                 let id_bytes: Vec<u8> = row.get(0)?;
                 let name: String = row.get(1)?;

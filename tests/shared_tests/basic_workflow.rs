@@ -250,7 +250,7 @@ fn test_file_content_evolution() {
     // V2: Add more lines
     print_info("Step 2: Add more lines");
     let v2_content = "Version 1\nVersion 2\nVersion 3";
-    let v2_snapshot = apply_edit(&env, "evolution.txt", &v2_content);
+    let v2_snapshot = apply_edit(&env, "evolution.txt", v2_content);
     commit_changes(&env, "Add versions 2 and 3", "user-1");
     print_success("Version 2 committed");
 
@@ -262,7 +262,7 @@ fn test_file_content_evolution() {
     // V3: Modify lines
     print_info("Step 3: Modify existing lines");
     let v3_content = "Modified Version 1\nModified Version 2\nModified Version 3";
-    let v3_snapshot = apply_edit(&env, "evolution.txt", &v3_content);
+    let v3_snapshot = apply_edit(&env, "evolution.txt", v3_content);
     commit_changes(&env, "Modify all lines", "user-1");
     print_success("Version 3 committed");
 
@@ -312,7 +312,7 @@ fn test_empty_to_content_flow() {
     // Add content
     print_info("Step 3: Add content to empty file");
     let content = "First line\nSecond line\nThird line";
-    let content_snapshot = apply_edit(&env, "empty.txt", &content);
+    let content_snapshot = apply_edit(&env, "empty.txt", content);
     commit_changes(&env, "Add content", "user-1");
     print_success("Content added");
 

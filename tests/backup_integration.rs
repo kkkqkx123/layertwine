@@ -355,7 +355,7 @@ fn test_backup_filter_by_time_range() {
         .backup_snapshot(&core, snap_id, Some("test".to_string()))
         .unwrap();
 
-    let backup = backup_repo.get_backup(&backup_id).unwrap();
+    let _backup = backup_repo.get_backup(&backup_id).unwrap();
 
     let now = chrono::Utc::now().timestamp_millis();
     let one_hour_ago = now - 3600 * 1000;
@@ -363,7 +363,7 @@ fn test_backup_filter_by_time_range() {
 
     let filtered = BackupFilter::new().with_time_range(one_hour_ago, one_hour_later);
     let result = backup_repo.query_backups(&filtered).unwrap();
-    assert!(result.len() >= 1);
+    assert!(!result.is_empty());
 }
 
 // ---------------------------------------------------------------------------

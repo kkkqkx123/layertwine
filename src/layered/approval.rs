@@ -212,7 +212,7 @@ mod tests {
         p.advance(merged_id);
         storage
             .update_pointer(&p.id, &merged_id)
-            .map_err(|e| StratumError::Storage(e))
+            .map_err(StratumError::Storage)
             .unwrap();
 
         // Verify partition now has 2 history entries

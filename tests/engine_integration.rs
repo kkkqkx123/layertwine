@@ -667,7 +667,7 @@ fn test_roundtrip_insert() {
     );
 
     // Apply delta
-    let applied = apply_deltas(old, &[delta.clone()]).unwrap();
+    let applied = apply_deltas(old, std::slice::from_ref(&delta)).unwrap();
     // apply_deltas strips trailing newlines, so we compare without them
     let applied_expected = new.trim_end_matches('\n');
     assert_eq!(applied, applied_expected);
@@ -693,7 +693,7 @@ fn test_roundtrip_delete() {
         SourceType::Manual,
     );
 
-    let applied = apply_deltas(old, &[delta.clone()]).unwrap();
+    let applied = apply_deltas(old, std::slice::from_ref(&delta)).unwrap();
     let applied_expected = new.trim_end_matches('\n');
     assert_eq!(applied, applied_expected);
 
@@ -716,7 +716,7 @@ fn test_roundtrip_replace() {
         SourceType::Manual,
     );
 
-    let applied = apply_deltas(old, &[delta.clone()]).unwrap();
+    let applied = apply_deltas(old, std::slice::from_ref(&delta)).unwrap();
     let applied_expected = new.trim_end_matches('\n');
     assert_eq!(applied, applied_expected);
 

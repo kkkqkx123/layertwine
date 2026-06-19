@@ -1,8 +1,7 @@
-use std::path::Path;
 use stratum::core::delta::Delta;
 use stratum::core::file_node::FileNode;
 use stratum::core::snapshot::Snapshot;
-use stratum::core::types::{ContentId, SourceType};
+use stratum::core::types::SourceType;
 use stratum::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
 use stratum::storage::sqlite::SqliteStorage;
 use tempfile::TempDir;

@@ -1,3 +1,4 @@
+#![cfg(feature = "grpc")]
 //! gRPC API integration tests
 //!
 //! These tests verify the gRPC API through the `StratumGrpc` handler layer,

@@ -1,4 +1,5 @@
 //! Formatted output utilities for E2E tests
+#![allow(dead_code, unused_imports, unused_variables)]
 
 use std::fmt;
 use stratum::api::StatusResponse;

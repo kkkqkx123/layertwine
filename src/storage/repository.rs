@@ -1,5 +1,5 @@
 use crate::checkpoint::branch::Branch;
-use crate::checkpoint::checkpoint::Checkpoint;
+use crate::checkpoint::types::Checkpoint;
 use crate::core::delta::Delta;
 use crate::core::file_node::FileNode;
 use crate::core::layer::Layer;
