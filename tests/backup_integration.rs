@@ -8,17 +8,17 @@
 //! - Backup integrity and isolation
 //! - Backup deletion and count
 
+use layertwine::backup::backup_repo::BackupRepo;
+use layertwine::backup::backup_snapshot::BackupFilter;
+use layertwine::core::delta::Delta;
+use layertwine::core::file_node::FileNode;
+use layertwine::core::snapshot::Snapshot;
+use layertwine::core::types::{BackupId, DeltaId, LineDiff, PartitionType, SnapshotId, SourceType};
+use layertwine::engine::diff::diff_to_line_diff;
+use layertwine::engine::merge::apply_deltas;
+use layertwine::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
+use layertwine::storage::SqliteStorage;
 use std::path::PathBuf;
-use stratum::backup::backup_repo::BackupRepo;
-use stratum::backup::backup_snapshot::BackupFilter;
-use stratum::core::delta::Delta;
-use stratum::core::file_node::FileNode;
-use stratum::core::snapshot::Snapshot;
-use stratum::core::types::{BackupId, DeltaId, LineDiff, PartitionType, SnapshotId, SourceType};
-use stratum::engine::diff::diff_to_line_diff;
-use stratum::engine::merge::apply_deltas;
-use stratum::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
-use stratum::storage::SqliteStorage;
 
 fn setup_core_repo() -> SqliteStorage {
     SqliteStorage::new_in_memory().unwrap()
@@ -63,7 +63,7 @@ fn create_edited_snapshot(
 }
 
 fn create_staged_partition(store: &SqliteStorage, snapshot_id: SnapshotId) {
-    use stratum::core::partition::Partition;
+    use layertwine::core::partition::Partition;
     let partition = Partition {
         id: uuid::Uuid::now_v7(),
         name: "staged".to_string(),
@@ -293,7 +293,7 @@ fn test_backup_integrity_check() {
     let backup_id = backup_repo.backup_snapshot(&core, snap_id, None).unwrap();
 
     let backup = backup_repo.get_backup(&backup_id).unwrap();
-    let mut recomputed = stratum::backup::backup_snapshot::BackupSnapshot::with_options(
+    let mut recomputed = layertwine::backup::backup_snapshot::BackupSnapshot::with_options(
         backup.source_snapshot,
         backup.file.clone(),
         backup.deltas.clone(),

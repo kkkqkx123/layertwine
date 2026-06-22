@@ -1,9 +1,9 @@
+use layertwine::core::delta::Delta;
+use layertwine::core::file_node::FileNode;
+use layertwine::core::snapshot::Snapshot;
+use layertwine::core::types::{ContentId, SourceType};
+use layertwine::engine::diff::diff_to_line_diff;
 use std::path::PathBuf;
-use stratum::core::delta::Delta;
-use stratum::core::file_node::FileNode;
-use stratum::core::snapshot::Snapshot;
-use stratum::core::types::{ContentId, SourceType};
-use stratum::engine::diff::diff_to_line_diff;
 
 fn generate_test_text(lines: usize) -> String {
     (0..lines).map(|i| format!("line {}\n", i)).collect()

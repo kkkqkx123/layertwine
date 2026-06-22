@@ -9,7 +9,7 @@ use crate::core::snapshot::Snapshot;
 use crate::core::types::{PartitionId, PartitionType, SnapshotId, SourceType};
 use crate::engine::diff::diff_to_line_diff;
 use crate::engine::merge::apply_deltas;
-use crate::error::{Result, StratumError};
+use crate::error::{LayertwineError, Result};
 use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
 use std::path::PathBuf;
 /// Get the partition ID of the manual_edit level
@@ -35,7 +35,7 @@ pub fn ensure_manual_partition<S: PartitionStore>(
             };
             storage
                 .create_partition(&partition)
-                .map_err(StratumError::Storage)?;
+                .map_err(LayertwineError::Storage)?;
             Ok(partition)
         }
     }
@@ -54,30 +54,30 @@ where
     // Get the current snapshot of the manual_edit partition
     let pid = manual_partition_id();
     let partition = storage.get_partition(&pid).map_err(|_| {
-        StratumError::NotFound(
+        LayertwineError::NotFound(
             "manual_edit partition not found, call ensure_manual_partition first".into(),
         )
     })?;
 
     let current_snapshot = storage
         .get_snapshot(&partition.current_snapshot)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     // Read old content
     let old_content = {
         let deltas = storage
             .get_deltas(&current_snapshot.deltas)
-            .map_err(StratumError::Storage)?;
+            .map_err(LayertwineError::Storage)?;
         let content_str = String::from_utf8_lossy(
             &storage
                 .get_file_content(
                     current_snapshot.file.path_str(),
                     &current_snapshot.file.base_hash,
                 )
-                .map_err(StratumError::Storage)?,
+                .map_err(LayertwineError::Storage)?,
         )
         .to_string();
-        apply_deltas(&content_str, &deltas).map_err(|e| StratumError::Engine(e.to_string()))?
+        apply_deltas(&content_str, &deltas).map_err(|e| LayertwineError::Engine(e.to_string()))?
     };
 
     // Calculate diff
@@ -91,8 +91,10 @@ where
     let delta = Delta::new(file_node.clone(), line_diff, SourceType::Manual);
     storage
         .store_file_node(&file_node, old_content.as_bytes())
-        .map_err(StratumError::Storage)?;
-    storage.store_delta(&delta).map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
+    storage
+        .store_delta(&delta)
+        .map_err(LayertwineError::Storage)?;
     // Creating a New Snapshot
     let new_snapshot = Snapshot::from_parent(
         &current_snapshot,
@@ -101,12 +103,12 @@ where
     );
     storage
         .store_snapshot(&new_snapshot, b"")
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     // Updating the partition pointer
     storage
         .update_pointer(&pid, &new_snapshot.id)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     Ok(new_snapshot.id)
 }
@@ -124,17 +126,17 @@ where
     // Get manual and staged partitions
     let manual_partition = storage
         .get_partition(&manual_pid)
-        .map_err(|_| StratumError::NotFound("manual_edit partition not found".into()))?;
+        .map_err(|_| LayertwineError::NotFound("manual_edit partition not found".into()))?;
     let staged_partition = storage
         .get_partition(&staged_pid)
-        .map_err(|_| StratumError::NotFound("staged partition not found".into()))?;
+        .map_err(|_| LayertwineError::NotFound("staged partition not found".into()))?;
 
     let manual_snapshot = storage
         .get_snapshot(&manual_partition.current_snapshot)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
     let staged_snapshot = storage
         .get_snapshot(&staged_partition.current_snapshot)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     // Reconstructing text content
     let manual_text = crate::layered::transition::reconstruct_text(storage, &manual_snapshot)?;
@@ -149,7 +151,7 @@ where
 
     let manual_deltas = storage
         .get_deltas(&manual_snapshot.deltas)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
     let merge_file = manual_deltas
         .last()
         .map(|d| d.file.clone())
@@ -157,7 +159,7 @@ where
     let merge_delta = Delta::new(merge_file, merge_diff, SourceType::Manual);
     storage
         .store_delta(&merge_delta)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     // Create merge snapshot (dual parent)
     let new_snapshot = Snapshot::merge(
@@ -168,12 +170,12 @@ where
     );
     storage
         .store_snapshot(&new_snapshot, b"")
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     // Update staged pointer
     storage
         .update_pointer(&staged_pid, &new_snapshot.id)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     Ok(new_snapshot.id)
 }
@@ -186,32 +188,12 @@ mod tests {
     use crate::core::snapshot::Snapshot;
     use crate::core::types::SourceType;
     use crate::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
-    use crate::storage::SqliteStorage;
-
-    fn setup_storage() -> SqliteStorage {
-        SqliteStorage::new_in_memory().unwrap()
-    }
-
-    fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {
-        let file_path = "test.txt";
-        let file_node = FileNode::new(std::path::PathBuf::from(file_path), content.as_bytes());
-        storage
-            .store_file_node(&file_node, content.as_bytes())
-            .unwrap();
-
-        let empty_diff = crate::core::types::LineDiff::new(vec![]);
-        let delta = Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
-        storage.store_delta(&delta).unwrap();
-
-        let snapshot = Snapshot::new_initial(file_node, delta.id);
-        storage.store_snapshot(&snapshot, b"").unwrap();
-        snapshot.id
-    }
+    use crate::test_utils::{create_initial_snapshot, setup_storage};
 
     #[test]
     fn test_apply_manual_edit() {
         let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "hello\nworld\n");
+        let initial_id = create_initial_snapshot(&storage, "hello\nworld\n", SourceType::Manual);
         ensure_manual_partition(&storage, initial_id).unwrap();
 
         let new_id = apply_manual_edit(&storage, "test.txt", "hello\nrust\n").unwrap();
@@ -226,7 +208,7 @@ mod tests {
     #[test]
     fn test_merge_manual_to_staged() {
         let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\ncontent\n");
+        let initial_id = create_initial_snapshot(&storage, "base\ncontent\n", SourceType::Manual);
 
         // Create manual and staged partitions that point to the same initial snapshot
         ensure_manual_partition(&storage, initial_id).unwrap();
@@ -250,7 +232,7 @@ mod tests {
     #[test]
     fn test_ensure_manual_partition_already_exists() {
         let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
         let p1 = ensure_manual_partition(&storage, initial_id).unwrap();
         let p2 = ensure_manual_partition(&storage, initial_id).unwrap();
         assert_eq!(p1.id, p2.id);
@@ -259,7 +241,7 @@ mod tests {
     #[test]
     fn test_apply_manual_edit_no_changes() {
         let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "same");
+        let initial_id = create_initial_snapshot(&storage, "same", SourceType::Manual);
         ensure_manual_partition(&storage, initial_id).unwrap();
 
         let result = apply_manual_edit(&storage, "test.txt", "same").unwrap();
@@ -283,7 +265,7 @@ mod tests {
     #[test]
     fn test_merge_manual_to_staged_no_changes() {
         let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
 
         ensure_manual_partition(&storage, initial_id).unwrap();
         crate::layered::staged::ensure_staged_partition(&storage, initial_id).unwrap();
@@ -299,7 +281,7 @@ mod tests {
     #[test]
     fn test_manual_sequential_edits() {
         let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "line1\nline2\n");
+        let initial_id = create_initial_snapshot(&storage, "line1\nline2\n", SourceType::Manual);
         ensure_manual_partition(&storage, initial_id).unwrap();
 
         // First edit: modify line2
@@ -329,7 +311,7 @@ mod tests {
     #[test]
     fn test_manual_edit_multiple_files() {
         let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "file1\n");
+        let initial_id = create_initial_snapshot(&storage, "file1\n", SourceType::Manual);
         ensure_manual_partition(&storage, initial_id).unwrap();
 
         // Override the stored file node for a different file path

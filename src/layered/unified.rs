@@ -11,7 +11,7 @@ use crate::core::partition::Partition;
 use crate::core::snapshot::Snapshot;
 use crate::core::types::{PartitionId, PartitionType, SnapshotId, SourceType};
 use crate::engine::diff::diff_to_line_diff;
-use crate::error::{Result, StratumError};
+use crate::error::{LayertwineError, Result};
 use crate::layered::MergeResult;
 use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
 
@@ -38,7 +38,7 @@ pub fn ensure_unified_partition<S: PartitionStore>(
             };
             storage
                 .create_partition(&partition)
-                .map_err(StratumError::Storage)?;
+                .map_err(LayertwineError::Storage)?;
             Ok(partition)
         }
     }
@@ -61,20 +61,20 @@ where
 
     // Get the feature (Integrated) partition and its baseline
     let feature_part = storage.get_partition(&integrated_pid).map_err(|_| {
-        StratumError::NotFound(format!("integrated partition '{}' not found", feature_name))
+        LayertwineError::NotFound(format!("integrated partition '{}' not found", feature_name))
     })?;
     let baseline_id = feature_part.history.first().ok_or_else(|| {
-        StratumError::StateMachine(format!(
+        LayertwineError::StateMachine(format!(
             "integrated partition '{}' has empty history",
             feature_name
         ))
     })?;
     let baseline_snapshot = storage
         .get_snapshot(baseline_id)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
     let feature_snapshot = storage
         .get_snapshot(&feature_part.current_snapshot)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     // Get or create Unified partition
     let unified_partition = ensure_unified_partition(storage, *baseline_id)?;
@@ -89,7 +89,7 @@ where
 
     let unified_snapshot = storage
         .get_snapshot(&unified_partition.current_snapshot)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     // Reconstruct texts
     let baseline_text = crate::layered::transition::reconstruct_text(storage, &baseline_snapshot)?;
@@ -112,19 +112,15 @@ where
 
     let feature_deltas = storage
         .get_deltas(&feature_snapshot.deltas)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
     let merge_file = feature_deltas
         .last()
         .map(|d| d.file.clone())
         .unwrap_or_else(|| unified_snapshot.file.clone());
-    let merge_delta = Delta::new(
-        merge_file,
-        merge_diff,
-        SourceType::Manual,
-    );
+    let merge_delta = Delta::new(merge_file, merge_diff, SourceType::Manual);
     storage
         .store_delta(&merge_delta)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     let new_snapshot = Snapshot::merge(
         vec![&unified_snapshot, &feature_snapshot],
@@ -134,10 +130,10 @@ where
     );
     storage
         .store_snapshot(&new_snapshot, b"")
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
     storage
         .update_pointer(&unified_pid, &new_snapshot.id)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     Ok(MergeResult {
         snapshot_id: new_snapshot.id,
@@ -155,7 +151,7 @@ where
     S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
 {
     if feature_names.is_empty() {
-        return Err(StratumError::General(
+        return Err(LayertwineError::General(
             "at least one feature required".into(),
         ));
     }
@@ -186,33 +182,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::delta::Delta;
     use crate::core::file_node::FileNode;
     use crate::core::types::SourceType;
     use crate::layered::integrated::integrated_partition_id;
     use crate::storage::repository::{FileNodeStore, SnapshotStore};
     use crate::storage::SqliteStorage;
-
-    fn setup_storage() -> SqliteStorage {
-        let storage = SqliteStorage::new_in_memory().unwrap();
-        storage
-            .with_conn(crate::storage::migrations::initialize_full)
-            .unwrap();
-        storage
-    }
-
-    fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {
-        let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
-        storage
-            .store_file_node(&file_node, content.as_bytes())
-            .unwrap();
-        let empty_diff = crate::core::types::LineDiff::new(vec![]);
-        let delta = Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
-        storage.store_delta(&delta).unwrap();
-        let snapshot = Snapshot::new_initial(file_node, delta.id);
-        storage.store_snapshot(&snapshot, b"").unwrap();
-        snapshot.id
-    }
+    use crate::test_utils::{create_initial_snapshot, setup_storage_full};
 
     fn create_snapshot_with_content(
         storage: &SqliteStorage,
@@ -245,8 +220,8 @@ mod tests {
 
     #[test]
     fn test_ensure_unified_partition() {
-        let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let storage = setup_storage_full();
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
 
         let p1 = ensure_unified_partition(&storage, initial_id).unwrap();
         let p2 = ensure_unified_partition(&storage, initial_id).unwrap();
@@ -255,8 +230,8 @@ mod tests {
 
     #[test]
     fn test_merge_feature_to_unified_no_changes() {
-        let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let storage = setup_storage_full();
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
 
         // Create feature partition at the same snapshot
         let feature_name = "test-feature";
@@ -278,8 +253,8 @@ mod tests {
 
     #[test]
     fn test_merge_feature_to_unified_with_changes() {
-        let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let storage = setup_storage_full();
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
 
         // Create feature partition with modified content
         let feature_name = "test-feature";
@@ -309,8 +284,9 @@ mod tests {
 
     #[test]
     fn test_merge_features_to_unified_multiple() {
-        let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\nline2\nline3\n");
+        let storage = setup_storage_full();
+        let initial_id =
+            create_initial_snapshot(&storage, "base\nline2\nline3\n", SourceType::Manual);
 
         // Feature A modifies the second line
         let feat_a_snap = create_snapshot_with_content(

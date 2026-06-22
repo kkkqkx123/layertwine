@@ -19,7 +19,7 @@
 ## 7.2 项目结构
 
 ```
-stratum/
+layertwine/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs                    # CLI 入口

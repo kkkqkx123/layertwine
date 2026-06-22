@@ -1,22 +1,22 @@
-//! Configuration module for Stratum, loaded from TOML files (TOML 1.0 / 1.1 via `toml` v0.8).
+//! Configuration module for Layertwine, loaded from TOML files (TOML 1.0 / 1.1 via `toml` v0.8).
 //!
 //! Config is resolved from hardcoded defaults, then layered with
 //! TOML files from multiple locations (low → high priority):
 //!
 //! 1. Hardcoded defaults (lowest)
-//! 2. `~/.config/stratum.toml` — user-global override
-//! 3. `<binary-dir>/stratum.toml` — per-installation override
-//! 4. `<db-dir>/stratum.toml` — per-repository override (highest)
+//! 2. `~/.config/layertwine.toml` — user-global override
+//! 3. `<binary-dir>/layertwine.toml` — per-installation override
+//! 4. `<db-dir>/layertwine.toml` — per-repository override (highest)
 //!
 //! Each layer only needs to specify the fields it wants to override;
 //! missing fields fall through to the layer below.
 //!
-//! See `.stratum/stratum.example.toml` for all available options.
+//! See `.layertwine/layertwine.example.toml` for all available options.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use crate::error::StratumError;
+use crate::error::LayertwineError;
 
 /// Recursively merge `overlay` into `base` at the `toml::Value` level.
 /// Table fields present in `overlay` overwrite those in `base`; sub-tables
@@ -73,9 +73,9 @@ impl AutoVacuumMode {
     }
 }
 
-/// Stratum top-level configuration.
+/// Layertwine top-level configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct StratumConfig {
+pub struct LayertwineConfig {
     /// Path to the SQLite database file.
     #[serde(default = "default_db_path")]
     pub db_path: String,
@@ -86,12 +86,12 @@ pub struct StratumConfig {
 }
 
 fn default_db_path() -> String {
-    ".stratum/stratum.db".to_string()
+    ".layertwine/layertwine.db".to_string()
 }
 
-impl Default for StratumConfig {
+impl Default for LayertwineConfig {
     fn default() -> Self {
-        StratumConfig {
+        LayertwineConfig {
             db_path: default_db_path(),
             maintenance: MaintenanceConfig::default(),
         }
@@ -141,43 +141,43 @@ fn default_wal_autocheckpoint() -> i32 {
     1000
 }
 
-impl StratumConfig {
+impl LayertwineConfig {
     /// Load configuration from a single TOML file.
     ///
     /// Returns `Ok(None)` if the file does not exist.
-    pub fn from_file(path: &Path) -> Result<Option<Self>, StratumError> {
+    pub fn from_file(path: &Path) -> Result<Option<Self>, LayertwineError> {
         if !path.exists() {
             return Ok(None);
         }
         let content = std::fs::read_to_string(path)
-            .map_err(|e| StratumError::General(format!("failed to read config: {}", e)))?;
-        let config: StratumConfig = toml::from_str(&content)
-            .map_err(|e| StratumError::General(format!("config parse error: {}", e)))?;
+            .map_err(|e| LayertwineError::General(format!("failed to read config: {}", e)))?;
+        let config: LayertwineConfig = toml::from_str(&content)
+            .map_err(|e| LayertwineError::General(format!("config parse error: {}", e)))?;
         Ok(Some(config))
     }
 
     /// Resolve the search paths in order (low → high priority).
     ///
-    /// - `~/.config/stratum.toml`
-    /// - `<binary-dir>/stratum.toml`
-    /// - `<db-dir>/stratum.toml`
+    /// - `~/.config/layertwine.toml`
+    /// - `<binary-dir>/layertwine.toml`
+    /// - `<db-dir>/layertwine.toml`
     pub fn config_paths(db_dir: &Path) -> Vec<PathBuf> {
         let mut paths: Vec<PathBuf> = Vec::new();
 
-        // 1. User-global: ~/.config/stratum.toml
+        // 1. User-global: ~/.config/layertwine.toml
         if let Some(home) = home_dir() {
-            paths.push(home.join(".config").join("stratum.toml"));
+            paths.push(home.join(".config").join("layertwine.toml"));
         }
 
         // 2. Next to the binary
         if let Ok(exe) = std::env::current_exe() {
             if let Some(exe_dir) = exe.parent() {
-                paths.push(exe_dir.join("stratum.toml"));
+                paths.push(exe_dir.join("layertwine.toml"));
             }
         }
 
         // 3. Database directory (highest local priority)
-        paths.push(db_dir.join("stratum.toml"));
+        paths.push(db_dir.join("layertwine.toml"));
 
         paths
     }
@@ -188,27 +188,28 @@ impl StratumConfig {
     /// - Lower-priority files only set fields they define; everything else
     ///   falls through to the layer below.
     /// - Files that don't exist are silently skipped.
-    pub fn load_with_priority(db_dir: &Path) -> Result<Self, StratumError> {
-        let defaults_str = toml::to_string(&StratumConfig::default())
-            .map_err(|e| StratumError::General(format!("serialize defaults: {}", e)))?;
+    pub fn load_with_priority(db_dir: &Path) -> Result<Self, LayertwineError> {
+        let defaults_str = toml::to_string(&LayertwineConfig::default())
+            .map_err(|e| LayertwineError::General(format!("serialize defaults: {}", e)))?;
         let mut base: toml::Value = toml::from_str(&defaults_str)
-            .map_err(|e| StratumError::General(format!("parse defaults: {}", e)))?;
+            .map_err(|e| LayertwineError::General(format!("parse defaults: {}", e)))?;
 
         for path in Self::config_paths(db_dir) {
             if !path.exists() {
                 continue;
             }
             let content = std::fs::read_to_string(&path)
-                .map_err(|e| StratumError::General(format!("read {}: {}", path.display(), e)))?;
-            let overlay: toml::Value = toml::from_str(&content)
-                .map_err(|e| StratumError::General(format!("parse {}: {}", path.display(), e)))?;
+                .map_err(|e| LayertwineError::General(format!("read {}: {}", path.display(), e)))?;
+            let overlay: toml::Value = toml::from_str(&content).map_err(|e| {
+                LayertwineError::General(format!("parse {}: {}", path.display(), e))
+            })?;
             merge_values(&mut base, overlay);
         }
 
         let out = toml::to_string_pretty(&base)
-            .map_err(|e| StratumError::General(format!("serialize merged config: {}", e)))?;
-        let config: StratumConfig = toml::from_str(&out)
-            .map_err(|e| StratumError::General(format!("deserialize merged config: {}", e)))?;
+            .map_err(|e| LayertwineError::General(format!("serialize merged config: {}", e)))?;
+        let config: LayertwineConfig = toml::from_str(&out)
+            .map_err(|e| LayertwineError::General(format!("deserialize merged config: {}", e)))?;
         Ok(config)
     }
 }

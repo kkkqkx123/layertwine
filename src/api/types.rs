@@ -125,7 +125,7 @@ pub struct InitRequest {
 impl Default for InitRequest {
     fn default() -> Self {
         InitRequest {
-            db_path: Some(".stratum/stratum.db".into()),
+            db_path: Some(".layertwine/layertwine.db".into()),
             git_repo: None,
             git_ref: None,
         }
@@ -192,6 +192,74 @@ pub struct BackupRequest {
 pub struct RestoreRequest {
     pub backup_id: String,
 }
+
+// ── Checkpoint restore types ──
+
+/// Full or selective checkpoint restore
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointRestoreRequest {
+    pub checkpoint_id: String,
+    /// Optional source filter (e.g. ["agent://", "file://src/**"])
+    pub source_filter: Option<Vec<String>>,
+}
+
+/// Time-based checkpoint restore
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointRestoreByTimeRequest {
+    pub target_time: i64,
+    /// Optional source filter
+    pub source_filter: Option<Vec<String>>,
+}
+
+/// Diff between two checkpoints
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointDiffRequest {
+    pub from_id: String,
+    pub to_id: String,
+}
+
+/// Rollback staged partition to a checkpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointRollbackRequest {
+    pub checkpoint_id: String,
+}
+
+/// Restored snapshot info within a checkpoint restore response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestoredSnapshotInfo {
+    pub snapshot_id: String,
+    pub source: String,
+    pub content_hex: String,
+    pub content_type: String,
+}
+
+/// Checkpoint restore response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointRestoreResponse {
+    pub checkpoint: CheckpointInfo,
+    pub snapshots: Vec<RestoredSnapshotInfo>,
+    pub ancestry: Vec<String>,
+}
+
+/// Checkpoint diff response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointDiffResponse {
+    pub from_id: String,
+    pub to_id: String,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    pub modified: Vec<String>,
+    pub total_changes: usize,
+}
+
+/// Checkpoint rollback response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointRollbackResponse {
+    pub checkpoint_id: String,
+    pub snapshot_ids: Vec<String>,
+}
+
+// ── Push/Pull types ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushRequest {

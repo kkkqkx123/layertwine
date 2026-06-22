@@ -3,11 +3,11 @@
 //! Restore operations: full restore, selective restore by source, time-based restore.
 //! Supports recovering Agent/Graph execution state alongside file content.
 
-use crate::checkpoint::types::{Checkpoint, CheckpointDiff};
 use crate::checkpoint::repo::CheckpointRepo;
+use crate::checkpoint::types::{Checkpoint, CheckpointDiff};
 use crate::core::snapshot::SnapshotContent;
 use crate::core::types::{source, CheckpointId, SnapshotId};
-use crate::error::{Result, StratumError};
+use crate::error::{LayertwineError, Result};
 use std::collections::HashSet;
 
 /// Restore request parameters
@@ -61,7 +61,7 @@ impl CheckpointRepo {
                 }
                 self.restore_full(cp_id)
             }
-            None => Err(StratumError::General(
+            None => Err(LayertwineError::General(
                 "RestoreRequest must specify either checkpoint_id or time_range".to_string(),
             )),
         }
@@ -135,7 +135,7 @@ impl CheckpointRepo {
     ) -> Result<RestoreResponse> {
         let candidates = self.time_index.query_range(start, end);
         if candidates.is_empty() {
-            return Err(StratumError::NotFound(format!(
+            return Err(LayertwineError::NotFound(format!(
                 "No checkpoint found in time range [{}, {}]",
                 start, end
             )));
@@ -163,12 +163,9 @@ impl CheckpointRepo {
         target_time: i64,
         source_filters: Option<&[&str]>,
     ) -> Result<RestoreResponse> {
-        let (_, cp_id) = self
-            .time_index
-            .find_nearest(target_time)
-            .ok_or_else(|| {
-                StratumError::NotFound("No checkpoint near target time".to_string())
-            })?;
+        let (_, cp_id) = self.time_index.find_nearest(target_time).ok_or_else(|| {
+            LayertwineError::NotFound("No checkpoint near target time".to_string())
+        })?;
 
         match source_filters {
             Some(filters) if !filters.is_empty() => {
@@ -204,12 +201,7 @@ impl CheckpointRepo {
                     .unwrap_or_else(|_| "unknown".to_string());
                 let size = self
                     .get_snapshot_by_id(snap_id)
-                    .map(|s| {
-                        s.content
-                            .as_ref()
-                            .map(|c| c.to_bytes().len())
-                            .unwrap_or(0)
-                    })
+                    .map(|s| s.content.as_ref().map(|c| c.to_bytes().len()).unwrap_or(0))
                     .unwrap_or(0);
                 Ok((*snap_id, source_str, content_type, size))
             })
@@ -310,9 +302,10 @@ impl CheckpointRepo {
             .iter()
             .map(|id| {
                 let snap = self.get_snapshot_by_id(id)?;
-                let content = snap.content.clone().unwrap_or_else(|| {
-                    SnapshotContent::FileContent(vec![])
-                });
+                let content = snap
+                    .content
+                    .clone()
+                    .unwrap_or_else(|| SnapshotContent::FileContent(vec![]));
                 let source = snap.source.clone();
                 Ok((*id, content, source))
             })
@@ -367,7 +360,9 @@ mod tests {
         // Set source mapping on the root checkpoint
         if let Some(root_cp) = repo.checkpoints.get_mut(&repo.current_branch_head()) {
             for snap in &snaps {
-                root_cp.snapshot_sources.insert(snap.id, snap.source.clone());
+                root_cp
+                    .snapshot_sources
+                    .insert(snap.id, snap.source.clone());
             }
         }
         // Cache snapshots
@@ -391,7 +386,9 @@ mod tests {
 
         // Set source on root
         if let Some(root_cp) = repo.checkpoints.get_mut(&repo.current_branch_head()) {
-            root_cp.snapshot_sources.insert(first_id, specs[0].1.to_string());
+            root_cp
+                .snapshot_sources
+                .insert(first_id, specs[0].1.to_string());
         }
 
         let mut cp_ids = vec![repo.current_branch_head()];
@@ -401,7 +398,9 @@ mod tests {
             let snap_id = snap.id;
             repo.cache_snapshot(snap);
 
-            let cp_id = repo.commit_single(snap_id, &format!("c{}", i), "test").unwrap();
+            let cp_id = repo
+                .commit_single(snap_id, &format!("c{}", i), "test")
+                .unwrap();
 
             // Set source on the new checkpoint
             if let Some(cp) = repo.checkpoints.get_mut(&cp_id) {
@@ -415,7 +414,8 @@ mod tests {
                 }
                 // Timestamp change doesn't affect checkpoint ID (created_at excluded from hash),
                 // but we must re-insert into TimeIndex
-                repo.time_index.insert(repo.checkpoints.get(&cp_id).unwrap());
+                repo.time_index
+                    .insert(repo.checkpoints.get(&cp_id).unwrap());
             }
 
             cp_ids.push(cp_id);
@@ -430,10 +430,7 @@ mod tests {
 
     #[test]
     fn test_restore_full_returns_all_snapshots_with_content() {
-        let repo = multi_snapshot_repo(vec![
-            (1, "file://src/main.rs"),
-            (2, "agent://state"),
-        ]);
+        let repo = multi_snapshot_repo(vec![(1, "file://src/main.rs"), (2, "agent://state")]);
 
         let head = repo.current_branch_head();
         let resp = repo.restore_full(&head).unwrap();
@@ -476,10 +473,7 @@ mod tests {
 
     #[test]
     fn test_restore_selective_no_match_returns_empty_snapshots() {
-        let repo = multi_snapshot_repo(vec![
-            (1, "file://src/main.rs"),
-            (2, "file://src/lib.rs"),
-        ]);
+        let repo = multi_snapshot_repo(vec![(1, "file://src/main.rs"), (2, "file://src/lib.rs")]);
 
         let head = repo.current_branch_head();
         let resp = repo.restore_selective(&head, vec!["agent://"]).unwrap();
@@ -630,10 +624,7 @@ mod tests {
     #[test]
     fn test_restore_dispatcher_time_range_empty_fails() {
         let stamps = Some(vec![0, 0, 500, 1000]);
-        let (repo, _) = linear_repo(
-            vec![(1, "v1"), (2, "v2"), (3, "v3"), (4, "v4")],
-            stamps,
-        );
+        let (repo, _) = linear_repo(vec![(1, "v1"), (2, "v2"), (3, "v3"), (4, "v4")], stamps);
 
         let req = RestoreRequest {
             checkpoint_id: None,
@@ -650,10 +641,7 @@ mod tests {
 
     #[test]
     fn test_restore_dispatcher_with_checkpoint_id_only() {
-        let repo = multi_snapshot_repo(vec![
-            (1, "file://src/main.rs"),
-            (2, "agent://state"),
-        ]);
+        let repo = multi_snapshot_repo(vec![(1, "file://src/main.rs"), (2, "agent://state")]);
 
         let head = repo.current_branch_head();
         let req = RestoreRequest {
@@ -667,10 +655,7 @@ mod tests {
 
     #[test]
     fn test_restore_dispatcher_with_checkpoint_id_and_filter() {
-        let repo = multi_snapshot_repo(vec![
-            (1, "file://src/main.rs"),
-            (2, "agent://state"),
-        ]);
+        let repo = multi_snapshot_repo(vec![(1, "file://src/main.rs"), (2, "agent://state")]);
 
         let head = repo.current_branch_head();
         let req = RestoreRequest {
@@ -725,10 +710,7 @@ mod tests {
     #[test]
     fn test_diff_checkpoints_added() {
         // Root has [snap1]; after commit, head has [snap2] (commit_single replaces baseline)
-        let (repo, cp_ids) = linear_repo(
-            vec![(1, "file://a.rs"), (2, "file://b.rs")],
-            None,
-        );
+        let (repo, cp_ids) = linear_repo(vec![(1, "file://a.rs"), (2, "file://b.rs")], None);
         let root_id = cp_ids[0];
         let head = cp_ids[1];
 
@@ -740,10 +722,7 @@ mod tests {
 
     #[test]
     fn test_diff_checkpoints_removed() {
-        let (repo, cp_ids) = linear_repo(
-            vec![(1, "file://a.rs"), (2, "file://b.rs")],
-            None,
-        );
+        let (repo, cp_ids) = linear_repo(vec![(1, "file://a.rs"), (2, "file://b.rs")], None);
         let root_id = cp_ids[0];
         let head = cp_ids[1];
 
@@ -775,10 +754,7 @@ mod tests {
 
     #[test]
     fn test_validate_integrity_all_snapshots_valid() {
-        let repo = multi_snapshot_repo(vec![
-            (1, "file://src/main.rs"),
-            (2, "agent://state"),
-        ]);
+        let repo = multi_snapshot_repo(vec![(1, "file://src/main.rs"), (2, "agent://state")]);
 
         let head = repo.current_branch_head();
         let issues = repo.validate_integrity(&head).unwrap();
@@ -791,7 +767,8 @@ mod tests {
         let snap_id = snap.id;
         let mut repo = CheckpointRepo::new_single(snap_id);
         if let Some(cp) = repo.checkpoints.get_mut(&repo.current_branch_head()) {
-            cp.snapshot_sources.insert(snap_id, "file://src/main.rs".to_string());
+            cp.snapshot_sources
+                .insert(snap_id, "file://src/main.rs".to_string());
         }
         // snapshot is NOT cached
 
@@ -807,10 +784,7 @@ mod tests {
 
     #[test]
     fn test_ancestry_chain_linear() {
-        let (repo, cp_ids) = linear_repo(
-            vec![(1, "v1"), (2, "v2"), (3, "v3")],
-            None,
-        );
+        let (repo, cp_ids) = linear_repo(vec![(1, "v1"), (2, "v2"), (3, "v3")], None);
 
         let head = cp_ids.last().copied().unwrap();
         let ancestry = repo.get_ancestry_chain(&head).unwrap();

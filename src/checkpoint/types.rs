@@ -113,16 +113,41 @@ impl Checkpoint {
 
     /// Content-based ID calculation (content addressing)
     ///
-    /// Excludes `created_at` and `git_anchor` from the hash:
+    /// Uses structured blake3 hashing instead of serde_json to avoid serialization overhead.
+    /// Fields are hashed in deterministic order:
+    /// - parents, baseline_snapshots (in order)
+    /// - metadata.author, metadata.message
+    /// - snapshot_sources (sorted by key)
+    ///
+    /// Excludes `created_at` and `metadata.git_anchor` from the hash:
     /// - `created_at` is a runtime timestamp, not content
     /// - `git_anchor` is post-hoc external metadata set after push,
     ///   not part of the checkpoint's intrinsic content identity
+    ///
+    /// NOTE: If new fields are added to Checkpoint, they must be explicitly
+    /// included here for content-addressing to remain correct.
     pub fn compute_id(&self) -> CheckpointId {
-        let mut clone = self.clone();
-        clone.created_at = 0;
-        clone.metadata.git_anchor = None;
-        let json = serde_json::to_vec(&clone).unwrap_or_default();
-        CheckpointId::from_content(&json)
+        let mut hasher = blake3::Hasher::new();
+
+        for parent in &self.parents {
+            hasher.update(parent.0.as_ref());
+        }
+
+        for snap in &self.baseline_snapshots {
+            hasher.update(snap.0.as_ref());
+        }
+
+        hasher.update(self.metadata.author.as_bytes());
+        hasher.update(self.metadata.message.as_bytes());
+
+        let mut sources: Vec<_> = self.snapshot_sources.iter().collect();
+        sources.sort_by_key(|(a, _)| a.0);
+        for (k, v) in &sources {
+            hasher.update(k.0.as_ref());
+            hasher.update(v.as_bytes());
+        }
+
+        ContentId(*hasher.finalize().as_bytes())
     }
 }
 

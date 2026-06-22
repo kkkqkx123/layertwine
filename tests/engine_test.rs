@@ -1,11 +1,11 @@
 //! Test for apply_deltas function to verify newline handling
 
+use layertwine::core::delta::Delta;
+use layertwine::core::file_node::FileNode;
+use layertwine::core::types::SourceType;
+use layertwine::core::types::{ContentId, DiffOp, Hunk, LineDiff};
+use layertwine::engine::merge::apply_deltas;
 use std::path::PathBuf;
-use stratum::core::delta::Delta;
-use stratum::core::file_node::FileNode;
-use stratum::core::types::SourceType;
-use stratum::core::types::{ContentId, DiffOp, Hunk, LineDiff};
-use stratum::engine::merge::apply_deltas;
 
 fn create_test_delta(diff: LineDiff) -> Delta {
     Delta {

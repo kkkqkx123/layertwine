@@ -24,7 +24,7 @@ echo "导出基准测试结果..."
 cat > benches/results/summary.md << 'EOF'
 # 基准测试结果汇总
 
-本目录包含 Stratum 项目的性能基准测试结果。
+本目录包含 Layertwine 项目的性能基准测试结果。
 
 ## 测试概述
 
@@ -111,7 +111,7 @@ print(f"基准测试结果已保存到: {output_file}")
 # 生成可读的报告
 report_file = "benches/results/benchmark_report.txt"
 with open(report_file, 'w') as f:
-    f.write("Stratum 项目基准测试结果报告\n")
+    f.write("Layertwine 项目基准测试结果报告\n")
     f.write("=" * 60 + "\n\n")
     f.write(f"生成时间: {os.popen('date').read().strip()}\n\n")
 

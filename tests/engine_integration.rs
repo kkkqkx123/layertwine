@@ -10,13 +10,13 @@
 
 use std::path::PathBuf;
 
-use stratum::core::delta::Delta;
-use stratum::core::file_node::FileNode;
-use stratum::core::snapshot::Snapshot;
-use stratum::core::types::{LineDiff, SourceType};
-use stratum::engine::diff::{diff_to_line_diff, format_unified_diff};
-use stratum::engine::inverse::{inverse_delta, inverse_snapshot};
-use stratum::engine::merge::{apply_deltas, merge_texts, MergeConflict};
+use layertwine::core::delta::Delta;
+use layertwine::core::file_node::FileNode;
+use layertwine::core::snapshot::Snapshot;
+use layertwine::core::types::{LineDiff, SourceType};
+use layertwine::engine::diff::{diff_to_line_diff, format_unified_diff};
+use layertwine::engine::inverse::{inverse_delta, inverse_snapshot};
+use layertwine::engine::merge::{apply_deltas, merge_texts, MergeConflict};
 
 // ---------------------------------------------------------------------------
 // Test: Diff calculation with various scenarios
@@ -34,7 +34,7 @@ fn test_diff_simple_replacement() {
     let has_replace = hunk
         .ops
         .iter()
-        .any(|op| matches!(op, stratum::core::types::DiffOp::Replace { .. }));
+        .any(|op| matches!(op, layertwine::core::types::DiffOp::Replace { .. }));
     assert!(has_replace, "should contain Replace operation");
 }
 
@@ -49,7 +49,7 @@ fn test_diff_insert_operation() {
     let has_insert = line_diff.hunks.iter().any(|h| {
         h.ops
             .iter()
-            .any(|op| matches!(op, stratum::core::types::DiffOp::Insert { .. }))
+            .any(|op| matches!(op, layertwine::core::types::DiffOp::Insert { .. }))
     });
     assert!(has_insert, "should contain Insert operation");
 }
@@ -65,7 +65,7 @@ fn test_diff_delete_operation() {
     let has_delete = line_diff.hunks.iter().any(|h| {
         h.ops
             .iter()
-            .any(|op| matches!(op, stratum::core::types::DiffOp::Delete { .. }))
+            .any(|op| matches!(op, layertwine::core::types::DiffOp::Delete { .. }))
     });
     assert!(has_delete, "should contain Delete operation");
 }
@@ -112,7 +112,7 @@ fn test_diff_content_to_empty() {
     let has_delete = line_diff.hunks.iter().any(|h| {
         h.ops
             .iter()
-            .any(|op| matches!(op, stratum::core::types::DiffOp::Delete { .. }))
+            .any(|op| matches!(op, layertwine::core::types::DiffOp::Delete { .. }))
     });
     assert!(has_delete, "should contain Delete operations");
 }
@@ -143,17 +143,17 @@ fn test_apply_deltas_empty() {
 fn test_apply_deltas_single_insert() {
     let content = "line1\nline3\n";
 
-    let hunk = stratum::core::types::Hunk {
+    let hunk = layertwine::core::types::Hunk {
         old_start: 2,
         old_len: 1,
         new_start: 2,
         new_len: 2,
         ops: vec![
-            stratum::core::types::DiffOp::Insert {
+            layertwine::core::types::DiffOp::Insert {
                 new_start: 2,
                 lines: vec!["line2".to_string()],
             },
-            stratum::core::types::DiffOp::Equal { count: 1 },
+            layertwine::core::types::DiffOp::Equal { count: 1 },
         ],
     };
 
@@ -172,12 +172,12 @@ fn test_apply_deltas_single_insert() {
 fn test_apply_deltas_single_delete() {
     let content = "line1\nline2\nline3\n";
 
-    let hunk = stratum::core::types::Hunk {
+    let hunk = layertwine::core::types::Hunk {
         old_start: 2,
         old_len: 1,
         new_start: 2,
         new_len: 0,
-        ops: vec![stratum::core::types::DiffOp::Delete {
+        ops: vec![layertwine::core::types::DiffOp::Delete {
             old_start: 2,
             count: 1,
         }],
@@ -198,12 +198,12 @@ fn test_apply_deltas_single_delete() {
 fn test_apply_deltas_single_replace() {
     let content = "aaa\nbbb\nccc\n";
 
-    let hunk = stratum::core::types::Hunk {
+    let hunk = layertwine::core::types::Hunk {
         old_start: 2,
         old_len: 1,
         new_start: 2,
         new_len: 1,
-        ops: vec![stratum::core::types::DiffOp::Replace {
+        ops: vec![layertwine::core::types::DiffOp::Replace {
             old_start: 2,
             old_count: 1,
             new_start: 2,
@@ -227,27 +227,27 @@ fn test_apply_deltas_chain() {
     let content = "a\nb\nc\n";
 
     // First delta: insert 'x' after 'a'
-    let hunk1 = stratum::core::types::Hunk {
+    let hunk1 = layertwine::core::types::Hunk {
         old_start: 2,
         old_len: 1,
         new_start: 2,
         new_len: 2,
         ops: vec![
-            stratum::core::types::DiffOp::Insert {
+            layertwine::core::types::DiffOp::Insert {
                 new_start: 2,
                 lines: vec!["x".to_string()],
             },
-            stratum::core::types::DiffOp::Equal { count: 1 },
+            layertwine::core::types::DiffOp::Equal { count: 1 },
         ],
     };
 
     // Second delta: replace line 3 (now 'b') with 'y'
-    let hunk2 = stratum::core::types::Hunk {
+    let hunk2 = layertwine::core::types::Hunk {
         old_start: 3,
         old_len: 1,
         new_start: 3,
         new_len: 1,
-        ops: vec![stratum::core::types::DiffOp::Replace {
+        ops: vec![layertwine::core::types::DiffOp::Replace {
             old_start: 3,
             old_count: 1,
             new_start: 3,
@@ -284,20 +284,20 @@ fn test_apply_deltas_empty_content() {
 fn test_apply_deltas_overlapping_hunks_error() {
     let content = "a\nb\nc\n";
 
-    let hunk1 = stratum::core::types::Hunk {
+    let hunk1 = layertwine::core::types::Hunk {
         old_start: 1,
         old_len: 1,
         new_start: 1,
         new_len: 1,
-        ops: vec![stratum::core::types::DiffOp::Equal { count: 1 }],
+        ops: vec![layertwine::core::types::DiffOp::Equal { count: 1 }],
     };
 
-    let hunk2 = stratum::core::types::Hunk {
+    let hunk2 = layertwine::core::types::Hunk {
         old_start: 1,
         old_len: 1,
         new_start: 1,
         new_len: 1,
-        ops: vec![stratum::core::types::DiffOp::Equal { count: 1 }],
+        ops: vec![layertwine::core::types::DiffOp::Equal { count: 1 }],
     };
 
     let diff = LineDiff::new(vec![hunk1, hunk2]);
@@ -315,12 +315,12 @@ fn test_apply_deltas_overlapping_hunks_error() {
 fn test_apply_deltas_out_of_range_error() {
     let content = "a\nb\n";
 
-    let hunk = stratum::core::types::Hunk {
+    let hunk = layertwine::core::types::Hunk {
         old_start: 10,
         old_len: 1,
         new_start: 10,
         new_len: 1,
-        ops: vec![stratum::core::types::DiffOp::Equal { count: 1 }],
+        ops: vec![layertwine::core::types::DiffOp::Equal { count: 1 }],
     };
 
     let diff = LineDiff::new(vec![hunk]);
@@ -468,14 +468,14 @@ fn test_conflict_marker_format() {
 
 #[test]
 fn test_inverse_insert_becomes_delete() {
-    let hunk = stratum::core::types::Hunk {
+    let hunk = layertwine::core::types::Hunk {
         old_start: 1,
         old_len: 1,
         new_start: 1,
         new_len: 2,
         ops: vec![
-            stratum::core::types::DiffOp::Equal { count: 1 },
-            stratum::core::types::DiffOp::Insert {
+            layertwine::core::types::DiffOp::Equal { count: 1 },
+            layertwine::core::types::DiffOp::Insert {
                 new_start: 2,
                 lines: vec!["new_line".to_string()],
             },
@@ -494,19 +494,19 @@ fn test_inverse_insert_becomes_delete() {
     let has_delete = inv.diff.hunks.iter().any(|h| {
         h.ops
             .iter()
-            .any(|op| matches!(op, stratum::core::types::DiffOp::Delete { .. }))
+            .any(|op| matches!(op, layertwine::core::types::DiffOp::Delete { .. }))
     });
     assert!(has_delete);
 }
 
 #[test]
 fn test_inverse_delete_requires_old_content() {
-    let hunk = stratum::core::types::Hunk {
+    let hunk = layertwine::core::types::Hunk {
         old_start: 1,
         old_len: 1,
         new_start: 1,
         new_len: 0,
-        ops: vec![stratum::core::types::DiffOp::Delete {
+        ops: vec![layertwine::core::types::DiffOp::Delete {
             old_start: 1,
             count: 1,
         }],
@@ -524,7 +524,7 @@ fn test_inverse_delete_requires_old_content() {
     let has_insert = inv.diff.hunks.iter().any(|h| {
         h.ops
             .iter()
-            .any(|op| matches!(op, stratum::core::types::DiffOp::Insert { .. }))
+            .any(|op| matches!(op, layertwine::core::types::DiffOp::Insert { .. }))
     });
     assert!(has_insert);
 
@@ -536,7 +536,7 @@ fn test_inverse_delete_requires_old_content() {
         .iter()
         .flat_map(|h| &h.ops)
         .filter_map(|op| {
-            if let stratum::core::types::DiffOp::Insert { lines, .. } = op {
+            if let layertwine::core::types::DiffOp::Insert { lines, .. } = op {
                 Some(lines.iter().map(|s| s.as_str()).collect::<Vec<_>>())
             } else {
                 None
@@ -549,12 +549,12 @@ fn test_inverse_delete_requires_old_content() {
 
 #[test]
 fn test_inverse_replace() {
-    let hunk = stratum::core::types::Hunk {
+    let hunk = layertwine::core::types::Hunk {
         old_start: 1,
         old_len: 1,
         new_start: 1,
         new_len: 1,
-        ops: vec![stratum::core::types::DiffOp::Replace {
+        ops: vec![layertwine::core::types::DiffOp::Replace {
             old_start: 1,
             old_count: 1,
             new_start: 1,
@@ -574,19 +574,19 @@ fn test_inverse_replace() {
     let has_replace = inv.diff.hunks.iter().any(|h| {
         h.ops
             .iter()
-            .any(|op| matches!(op, stratum::core::types::DiffOp::Replace { .. }))
+            .any(|op| matches!(op, layertwine::core::types::DiffOp::Replace { .. }))
     });
     assert!(has_replace);
 }
 
 #[test]
 fn test_inverse_preserves_equal() {
-    let hunk = stratum::core::types::Hunk {
+    let hunk = layertwine::core::types::Hunk {
         old_start: 1,
         old_len: 2,
         new_start: 1,
         new_len: 2,
-        ops: vec![stratum::core::types::DiffOp::Equal { count: 2 }],
+        ops: vec![layertwine::core::types::DiffOp::Equal { count: 2 }],
     };
 
     let diff = LineDiff::new(vec![hunk]);
@@ -601,7 +601,7 @@ fn test_inverse_preserves_equal() {
     let has_equal = inv.diff.hunks.iter().any(|h| {
         h.ops
             .iter()
-            .any(|op| matches!(op, stratum::core::types::DiffOp::Equal { .. }))
+            .any(|op| matches!(op, layertwine::core::types::DiffOp::Equal { .. }))
     });
     assert!(has_equal);
 }
@@ -841,18 +841,18 @@ fn test_inverse_delta_empty() {
 
 #[test]
 fn test_inverse_mixed_ops() {
-    let hunk = stratum::core::types::Hunk {
+    let hunk = layertwine::core::types::Hunk {
         old_start: 1,
         old_len: 3,
         new_start: 1,
         new_len: 4,
         ops: vec![
-            stratum::core::types::DiffOp::Equal { count: 1 },
-            stratum::core::types::DiffOp::Delete {
+            layertwine::core::types::DiffOp::Equal { count: 1 },
+            layertwine::core::types::DiffOp::Delete {
                 old_start: 2,
                 count: 1,
             },
-            stratum::core::types::DiffOp::Insert {
+            layertwine::core::types::DiffOp::Insert {
                 new_start: 3,
                 lines: vec!["inserted".to_string()],
             },
@@ -872,17 +872,17 @@ fn test_inverse_mixed_ops() {
     let has_delete = inv.diff.hunks.iter().any(|h| {
         h.ops
             .iter()
-            .any(|op| matches!(op, stratum::core::types::DiffOp::Delete { .. }))
+            .any(|op| matches!(op, layertwine::core::types::DiffOp::Delete { .. }))
     });
     let has_insert = inv.diff.hunks.iter().any(|h| {
         h.ops
             .iter()
-            .any(|op| matches!(op, stratum::core::types::DiffOp::Insert { .. }))
+            .any(|op| matches!(op, layertwine::core::types::DiffOp::Insert { .. }))
     });
     let has_equal = inv.diff.hunks.iter().any(|h| {
         h.ops
             .iter()
-            .any(|op| matches!(op, stratum::core::types::DiffOp::Equal { .. }))
+            .any(|op| matches!(op, layertwine::core::types::DiffOp::Equal { .. }))
     });
 
     assert!(has_delete);

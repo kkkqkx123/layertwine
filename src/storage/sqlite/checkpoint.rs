@@ -15,8 +15,10 @@ impl CheckpointStore for SqliteStorage {
         let snapshot_sources_json = if checkpoint.snapshot_sources.is_empty() {
             None
         } else {
-            Some(serde_json::to_string(&checkpoint.snapshot_sources)
-                .map_err(|e| crate::StorageError::Serialization(e.to_string()))?)
+            Some(
+                serde_json::to_string(&checkpoint.snapshot_sources)
+                    .map_err(|e| crate::StorageError::Serialization(e.to_string()))?,
+            )
         };
 
         conn.execute(

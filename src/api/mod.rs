@@ -1,4 +1,4 @@
-//! API module — unified access layer for Stratum operations
+//! API module — unified access layer for Layertwine operations
 //!
 //! Provides a single `ApiService` trait implemented by `ApiServiceImpl`,
 //! with transport-specific wrappers for HTTP and gRPC behind feature gates.

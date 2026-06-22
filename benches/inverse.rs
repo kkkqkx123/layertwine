@@ -1,9 +1,9 @@
+use layertwine::core::delta::Delta;
+use layertwine::core::file_node::FileNode;
+use layertwine::core::types::{DiffOp, Hunk, LineDiff, SourceType};
+use layertwine::engine::diff::diff_to_line_diff;
+use layertwine::engine::inverse::inverse_delta;
 use std::path::PathBuf;
-use stratum::core::delta::Delta;
-use stratum::core::file_node::FileNode;
-use stratum::core::types::{DiffOp, Hunk, LineDiff, SourceType};
-use stratum::engine::diff::diff_to_line_diff;
-use stratum::engine::inverse::inverse_delta;
 
 fn generate_test_text(lines: usize) -> String {
     (0..lines).map(|i| format!("line {}\n", i)).collect()

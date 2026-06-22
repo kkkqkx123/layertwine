@@ -1,6 +1,6 @@
 //! Diff Engine - Row-level diff calculation based on similar crate
 //!
-//! Convert the output of similar::TextDiff to a Delta representation within Stratum.
+//! Convert the output of similar::TextDiff to a Delta representation within Layertwine.
 
 use crate::core::delta::Delta;
 use crate::core::file_node::FileNode;

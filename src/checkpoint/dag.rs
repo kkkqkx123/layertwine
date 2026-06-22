@@ -62,9 +62,18 @@ impl CheckpointDag {
     }
 
     /// Check if adding an edge from parent to child would create a cycle
+    ///
+    /// Uses generation numbers to short-circuit: if child's generation >= parent's,
+    /// child cannot reach parent (generation strictly increases along any path).
     fn would_create_cycle(&self, parent: &CheckpointId, child: &CheckpointId) -> bool {
         if parent == child {
             return true;
+        }
+
+        let child_gen = self.generation.get(child).copied().unwrap_or(0);
+        let parent_gen = self.generation.get(parent).copied().unwrap_or(0);
+        if child_gen >= parent_gen {
+            return false;
         }
 
         let mut visited = HashSet::new();
@@ -127,10 +136,18 @@ impl CheckpointDag {
 
     /// Determine whether ancestor is an ancestor of descendant (reachability judgment)
     ///
-    /// Traverse the BFS forward from the ancestor's children.
+    /// Uses generation numbers to short-circuit: if ancestor's generation
+    /// is not strictly less than descendant's, it cannot be an ancestor.
+    /// Otherwise, traverses BFS forward from the ancestor's children.
     pub fn is_ancestor(&self, ancestor: &CheckpointId, descendant: &CheckpointId) -> bool {
         if ancestor == descendant {
             return true;
+        }
+
+        let anc_gen = self.generation.get(ancestor).copied().unwrap_or(0);
+        let desc_gen = self.generation.get(descendant).copied().unwrap_or(0);
+        if anc_gen >= desc_gen {
+            return false;
         }
 
         let mut visited = HashSet::new();

@@ -1,13 +1,13 @@
-//! gRPC transport layer for Stratum API
+//! gRPC transport layer for Layertwine API
 //!
 //! Provides a tonic-based gRPC server that wraps the ApiService trait.
 //! Enabled with `feature = "grpc"`.
 //!
 //! Proto schema is compiled at build time via `build.rs` using `tonic-build`.
-//! Generated code is included via `tonic::include_proto!("stratum")`.
+//! Generated code is included via `tonic::include_proto!("layertwine")`.
 
-pub mod stratum_proto {
-    tonic::include_proto!("stratum");
+pub mod layertwine_proto {
+    tonic::include_proto!("layertwine");
 }
 
 use std::net::SocketAddr;
@@ -17,15 +17,15 @@ use tonic::{Request, Response, Status};
 
 use crate::api::service::ApiService;
 use crate::api::types::*;
-use crate::error::StratumError;
-use stratum_proto::stratum_server::{Stratum, StratumServer};
+use crate::error::LayertwineError;
+use layertwine_proto::layertwine_server::{Layertwine, LayertwineServer};
 
 /// gRPC service implementation wrapping ApiService
-pub struct StratumGrpc {
+pub struct LayertwineGrpc {
     service: Arc<dyn ApiService>,
 }
 
-impl StratumGrpc {
+impl LayertwineGrpc {
     pub fn new(service: Arc<dyn ApiService>) -> Self {
         Self { service }
     }
@@ -42,11 +42,11 @@ fn to_status(e: ApiError) -> Status {
 }
 
 #[tonic::async_trait]
-impl Stratum for StratumGrpc {
+impl Layertwine for LayertwineGrpc {
     async fn init(
         &self,
-        request: Request<stratum_proto::InitRequest>,
-    ) -> Result<Response<stratum_proto::InitResponse>, Status> {
+        request: Request<layertwine_proto::InitRequest>,
+    ) -> Result<Response<layertwine_proto::InitResponse>, Status> {
         let req = request.into_inner();
         let api_req = InitRequest {
             db_path: req.db_path,
@@ -58,7 +58,7 @@ impl Stratum for StratumGrpc {
             .await
             .map_err(|e| Status::internal(format!("join error: {}", e)))?
             .map_err(to_status)?;
-        Ok(Response::new(stratum_proto::InitResponse {
+        Ok(Response::new(layertwine_proto::InitResponse {
             db_path: result.db_path,
             manual_partition_id: result.manual_partition_id,
             staged_partition_id: result.staged_partition_id,
@@ -68,8 +68,8 @@ impl Stratum for StratumGrpc {
 
     async fn status(
         &self,
-        _request: Request<stratum_proto::Empty>,
-    ) -> Result<Response<stratum_proto::StatusResponse>, Status> {
+        _request: Request<layertwine_proto::Empty>,
+    ) -> Result<Response<layertwine_proto::StatusResponse>, Status> {
         let service = self.service.clone();
         let result = tokio::task::spawn_blocking(move || service.status())
             .await
@@ -78,20 +78,22 @@ impl Stratum for StratumGrpc {
         let partitions = result
             .partitions
             .into_iter()
-            .map(|p| stratum_proto::PartitionInfo {
+            .map(|p| layertwine_proto::PartitionInfo {
                 layer: p.layer,
                 name: p.name,
                 current_snapshot: p.current_snapshot,
                 history_len: p.history_len as u32,
             })
             .collect();
-        Ok(Response::new(stratum_proto::StatusResponse { partitions }))
+        Ok(Response::new(layertwine_proto::StatusResponse {
+            partitions,
+        }))
     }
 
     async fn edit(
         &self,
-        request: Request<stratum_proto::EditRequest>,
-    ) -> Result<Response<stratum_proto::EditResponse>, Status> {
+        request: Request<layertwine_proto::EditRequest>,
+    ) -> Result<Response<layertwine_proto::EditResponse>, Status> {
         let req = request.into_inner();
         let api_req = EditRequest {
             file: req.file,
@@ -102,7 +104,7 @@ impl Stratum for StratumGrpc {
             .await
             .map_err(|e| Status::internal(format!("join error: {}", e)))?
             .map_err(to_status)?;
-        Ok(Response::new(stratum_proto::EditResponse {
+        Ok(Response::new(layertwine_proto::EditResponse {
             snapshot_id: result.snapshot_id,
             staged_snapshot_id: result.staged_snapshot_id,
         }))
@@ -110,8 +112,8 @@ impl Stratum for StratumGrpc {
 
     async fn agent_edit(
         &self,
-        request: Request<stratum_proto::AgentEditRequest>,
-    ) -> Result<Response<stratum_proto::EditResponse>, Status> {
+        request: Request<layertwine_proto::AgentEditRequest>,
+    ) -> Result<Response<layertwine_proto::EditResponse>, Status> {
         let req = request.into_inner();
         let api_req = AgentEditRequest {
             agent_id: req.agent_id,
@@ -123,7 +125,7 @@ impl Stratum for StratumGrpc {
             .await
             .map_err(|e| Status::internal(format!("join error: {}", e)))?
             .map_err(to_status)?;
-        Ok(Response::new(stratum_proto::EditResponse {
+        Ok(Response::new(layertwine_proto::EditResponse {
             snapshot_id: result.snapshot_id,
             staged_snapshot_id: result.staged_snapshot_id,
         }))
@@ -131,8 +133,8 @@ impl Stratum for StratumGrpc {
 
     async fn agent_submit(
         &self,
-        request: Request<stratum_proto::AgentSubmitRequest>,
-    ) -> Result<Response<stratum_proto::SubmitResponse>, Status> {
+        request: Request<layertwine_proto::AgentSubmitRequest>,
+    ) -> Result<Response<layertwine_proto::SubmitResponse>, Status> {
         let req = request.into_inner();
         let api_req = AgentSubmitRequest {
             agent_id: req.agent_id,
@@ -142,15 +144,15 @@ impl Stratum for StratumGrpc {
             .await
             .map_err(|e| Status::internal(format!("join error: {}", e)))?
             .map_err(to_status)?;
-        Ok(Response::new(stratum_proto::SubmitResponse {
+        Ok(Response::new(layertwine_proto::SubmitResponse {
             snapshot_id: result.snapshot_id,
         }))
     }
 
     async fn approve(
         &self,
-        request: Request<stratum_proto::ApproveRequest>,
-    ) -> Result<Response<stratum_proto::ApproveResponse>, Status> {
+        request: Request<layertwine_proto::ApproveRequest>,
+    ) -> Result<Response<layertwine_proto::ApproveResponse>, Status> {
         let req = request.into_inner();
         let api_req = ApproveRequest {
             agent_id: req.agent_id,
@@ -160,7 +162,7 @@ impl Stratum for StratumGrpc {
             .await
             .map_err(|e| Status::internal(format!("join error: {}", e)))?
             .map_err(to_status)?;
-        Ok(Response::new(stratum_proto::ApproveResponse {
+        Ok(Response::new(layertwine_proto::ApproveResponse {
             integrated_snapshot_id: result.integrated_snapshot_id,
             staged_snapshot_id: result.staged_snapshot_id,
         }))
@@ -168,8 +170,8 @@ impl Stratum for StratumGrpc {
 
     async fn commit(
         &self,
-        request: Request<stratum_proto::CommitRequest>,
-    ) -> Result<Response<stratum_proto::CommitResponse>, Status> {
+        request: Request<layertwine_proto::CommitRequest>,
+    ) -> Result<Response<layertwine_proto::CommitResponse>, Status> {
         let req = request.into_inner();
         let api_req = CommitRequest {
             message: req.message,
@@ -180,7 +182,7 @@ impl Stratum for StratumGrpc {
             .await
             .map_err(|e| Status::internal(format!("join error: {}", e)))?
             .map_err(to_status)?;
-        Ok(Response::new(stratum_proto::CommitResponse {
+        Ok(Response::new(layertwine_proto::CommitResponse {
             checkpoint_id: result.checkpoint_id,
             message: result.message,
         }))
@@ -188,8 +190,8 @@ impl Stratum for StratumGrpc {
 
     async fn log(
         &self,
-        request: Request<stratum_proto::LogRequest>,
-    ) -> Result<Response<stratum_proto::LogResponse>, Status> {
+        request: Request<layertwine_proto::LogRequest>,
+    ) -> Result<Response<layertwine_proto::LogResponse>, Status> {
         let req = request.into_inner();
         let api_req = LogRequest {
             count: req.count.map(|c| c as usize),
@@ -202,7 +204,7 @@ impl Stratum for StratumGrpc {
         let checkpoints = result
             .checkpoints
             .into_iter()
-            .map(|cp| stratum_proto::CheckpointInfo {
+            .map(|cp| layertwine_proto::CheckpointInfo {
                 id: cp.id,
                 author: cp.author,
                 message: cp.message,
@@ -212,7 +214,7 @@ impl Stratum for StratumGrpc {
                 git_anchor: cp.git_anchor,
             })
             .collect();
-        Ok(Response::new(stratum_proto::LogResponse {
+        Ok(Response::new(layertwine_proto::LogResponse {
             checkpoints,
             total: result.total as u32,
         }))
@@ -220,8 +222,8 @@ impl Stratum for StratumGrpc {
 
     async fn branch_create(
         &self,
-        request: Request<stratum_proto::BranchCreateRequest>,
-    ) -> Result<Response<stratum_proto::BranchCreateResponse>, Status> {
+        request: Request<layertwine_proto::BranchCreateRequest>,
+    ) -> Result<Response<layertwine_proto::BranchCreateResponse>, Status> {
         let req = request.into_inner();
         let api_req = BranchCreateRequest { name: req.name };
         let service = self.service.clone();
@@ -229,7 +231,7 @@ impl Stratum for StratumGrpc {
             .await
             .map_err(|e| Status::internal(format!("join error: {}", e)))?
             .map_err(to_status)?;
-        Ok(Response::new(stratum_proto::BranchCreateResponse {
+        Ok(Response::new(layertwine_proto::BranchCreateResponse {
             name: result.name,
             head: result.head,
         }))
@@ -237,8 +239,8 @@ impl Stratum for StratumGrpc {
 
     async fn branch_switch(
         &self,
-        request: Request<stratum_proto::BranchSwitchRequest>,
-    ) -> Result<Response<stratum_proto::BranchSwitchResponse>, Status> {
+        request: Request<layertwine_proto::BranchSwitchRequest>,
+    ) -> Result<Response<layertwine_proto::BranchSwitchResponse>, Status> {
         let req = request.into_inner();
         let api_req = BranchSwitchRequest { name: req.name };
         let service = self.service.clone();
@@ -246,7 +248,7 @@ impl Stratum for StratumGrpc {
             .await
             .map_err(|e| Status::internal(format!("join error: {}", e)))?
             .map_err(to_status)?;
-        Ok(Response::new(stratum_proto::BranchSwitchResponse {
+        Ok(Response::new(layertwine_proto::BranchSwitchResponse {
             name: result.name,
             checkpoint_id: result.checkpoint_id,
         }))
@@ -254,8 +256,8 @@ impl Stratum for StratumGrpc {
 
     async fn branch_list(
         &self,
-        _request: Request<stratum_proto::Empty>,
-    ) -> Result<Response<stratum_proto::BranchListResponse>, Status> {
+        _request: Request<layertwine_proto::Empty>,
+    ) -> Result<Response<layertwine_proto::BranchListResponse>, Status> {
         let service = self.service.clone();
         let result = tokio::task::spawn_blocking(move || service.branch_list())
             .await
@@ -264,14 +266,14 @@ impl Stratum for StratumGrpc {
         let branches = result
             .branches
             .into_iter()
-            .map(|b| stratum_proto::BranchInfo {
+            .map(|b| layertwine_proto::BranchInfo {
                 name: b.name,
                 head: b.head,
                 updated_at: b.updated_at,
                 is_current: b.is_current,
             })
             .collect();
-        Ok(Response::new(stratum_proto::BranchListResponse {
+        Ok(Response::new(layertwine_proto::BranchListResponse {
             branches,
             current: result.current,
         }))
@@ -279,8 +281,8 @@ impl Stratum for StratumGrpc {
 
     async fn merge(
         &self,
-        request: Request<stratum_proto::MergeRequest>,
-    ) -> Result<Response<stratum_proto::MergeResponse>, Status> {
+        request: Request<layertwine_proto::MergeRequest>,
+    ) -> Result<Response<layertwine_proto::MergeResponse>, Status> {
         let req = request.into_inner();
         let api_req = MergeRequest {
             branch: req.branch,
@@ -291,7 +293,7 @@ impl Stratum for StratumGrpc {
             .await
             .map_err(|e| Status::internal(format!("join error: {}", e)))?
             .map_err(to_status)?;
-        Ok(Response::new(stratum_proto::MergeResponse {
+        Ok(Response::new(layertwine_proto::MergeResponse {
             checkpoint_id: result.checkpoint_id,
             source_branch: result.source_branch,
             target_branch: result.target_branch,
@@ -300,8 +302,8 @@ impl Stratum for StratumGrpc {
 
     async fn backup(
         &self,
-        request: Request<stratum_proto::BackupRequest>,
-    ) -> Result<Response<stratum_proto::BackupResponse>, Status> {
+        request: Request<layertwine_proto::BackupRequest>,
+    ) -> Result<Response<layertwine_proto::BackupResponse>, Status> {
         let req = request.into_inner();
         let api_req = BackupRequest {
             snapshot_id: req.snapshot_id,
@@ -312,7 +314,7 @@ impl Stratum for StratumGrpc {
             .await
             .map_err(|e| Status::internal(format!("join error: {}", e)))?
             .map_err(to_status)?;
-        Ok(Response::new(stratum_proto::BackupResponse {
+        Ok(Response::new(layertwine_proto::BackupResponse {
             backup_id: result.backup_id,
             source_snapshot_id: result.source_snapshot_id,
             label: result.label,
@@ -321,8 +323,8 @@ impl Stratum for StratumGrpc {
 
     async fn restore(
         &self,
-        request: Request<stratum_proto::RestoreRequest>,
-    ) -> Result<Response<stratum_proto::RestoreResponse>, Status> {
+        request: Request<layertwine_proto::RestoreRequest>,
+    ) -> Result<Response<layertwine_proto::RestoreResponse>, Status> {
         let req = request.into_inner();
         let api_req = RestoreRequest {
             backup_id: req.backup_id,
@@ -332,7 +334,7 @@ impl Stratum for StratumGrpc {
             .await
             .map_err(|e| Status::internal(format!("join error: {}", e)))?
             .map_err(to_status)?;
-        Ok(Response::new(stratum_proto::RestoreResponse {
+        Ok(Response::new(layertwine_proto::RestoreResponse {
             backup_id: result.backup_id,
             file: result.file,
             deltas_restored: result.deltas_restored as u32,
@@ -341,14 +343,14 @@ impl Stratum for StratumGrpc {
 
     async fn gc(
         &self,
-        _request: Request<stratum_proto::Empty>,
-    ) -> Result<Response<stratum_proto::GcResponse>, Status> {
+        _request: Request<layertwine_proto::Empty>,
+    ) -> Result<Response<layertwine_proto::GcResponse>, Status> {
         let service = self.service.clone();
         let result = tokio::task::spawn_blocking(move || service.gc(GcRequest {}))
             .await
             .map_err(|e| Status::internal(format!("join error: {}", e)))?
             .map_err(to_status)?;
-        Ok(Response::new(stratum_proto::GcResponse {
+        Ok(Response::new(layertwine_proto::GcResponse {
             removed_checkpoints: result.removed_checkpoints as u32,
             removed_snapshots: result.removed_snapshots as u32,
             freed_bytes: result.freed_bytes,
@@ -358,8 +360,8 @@ impl Stratum for StratumGrpc {
 
     async fn push(
         &self,
-        request: Request<stratum_proto::PushRequest>,
-    ) -> Result<Response<stratum_proto::PushResponse>, Status> {
+        request: Request<layertwine_proto::PushRequest>,
+    ) -> Result<Response<layertwine_proto::PushResponse>, Status> {
         let req = request.into_inner();
         let api_req = PushRequest {
             remote: req.remote,
@@ -371,7 +373,7 @@ impl Stratum for StratumGrpc {
             .await
             .map_err(|e| Status::internal(format!("join error: {}", e)))?
             .map_err(to_status)?;
-        Ok(Response::new(stratum_proto::PushResponse {
+        Ok(Response::new(layertwine_proto::PushResponse {
             remote: result.remote,
             git_commit_hash: result.git_commit_hash,
         }))
@@ -379,8 +381,8 @@ impl Stratum for StratumGrpc {
 
     async fn pull(
         &self,
-        request: Request<stratum_proto::PullRequest>,
-    ) -> Result<Response<stratum_proto::PullResponse>, Status> {
+        request: Request<layertwine_proto::PullRequest>,
+    ) -> Result<Response<layertwine_proto::PullResponse>, Status> {
         let req = request.into_inner();
         let api_req = PullRequest {
             remote: req.remote,
@@ -392,9 +394,299 @@ impl Stratum for StratumGrpc {
             .await
             .map_err(|e| Status::internal(format!("join error: {}", e)))?
             .map_err(to_status)?;
-        Ok(Response::new(stratum_proto::PullResponse {
+        Ok(Response::new(layertwine_proto::PullResponse {
             remote: result.remote,
             git_ref: result.git_ref,
+        }))
+    }
+
+    async fn compact(
+        &self,
+        request: Request<layertwine_proto::CompactRequest>,
+    ) -> Result<Response<layertwine_proto::CompactResponse>, Status> {
+        let req = request.into_inner();
+        let api_req = CompactRequest {
+            vacuum_full: req.vacuum_full,
+        };
+        let service = self.service.clone();
+        let result = tokio::task::spawn_blocking(move || service.compact(api_req))
+            .await
+            .map_err(|e| Status::internal(format!("join error: {}", e)))?
+            .map_err(to_status)?;
+        Ok(Response::new(layertwine_proto::CompactResponse {
+            wal_checkpointed: result.wal_checkpointed,
+            freelist_before: result.freelist_before,
+            total_pages: result.total_pages,
+            freelist_after: result.freelist_after,
+            vacuum_performed: result.vacuum_performed,
+            message: result.message,
+        }))
+    }
+
+    async fn show(
+        &self,
+        request: Request<layertwine_proto::ShowRequest>,
+    ) -> Result<Response<layertwine_proto::ShowResponse>, Status> {
+        let req = request.into_inner();
+        let api_req = ShowRequest {
+            show_what: req.show_what,
+            target_id: req.target_id,
+        };
+        let service = self.service.clone();
+        let result = tokio::task::spawn_blocking(move || service.show(api_req))
+            .await
+            .map_err(|e| Status::internal(format!("join error: {}", e)))?
+            .map_err(to_status)?;
+        let diffs = result
+            .diffs
+            .into_iter()
+            .map(|d| layertwine_proto::FileDiff {
+                file_path: d.file_path,
+                unified_diff: d.unified_diff,
+                inserts: d.inserts as u32,
+                deletes: d.deletes as u32,
+            })
+            .collect();
+        Ok(Response::new(layertwine_proto::ShowResponse {
+            target: result.target,
+            diffs,
+        }))
+    }
+
+    async fn checkpoint_restore(
+        &self,
+        request: Request<layertwine_proto::CheckpointRestoreRequest>,
+    ) -> Result<Response<layertwine_proto::CheckpointRestoreResponse>, Status> {
+        let req = request.into_inner();
+        let api_req = CheckpointRestoreRequest {
+            checkpoint_id: req.checkpoint_id,
+            source_filter: if req.source_filter.is_empty() {
+                None
+            } else {
+                Some(req.source_filter)
+            },
+        };
+        let service = self.service.clone();
+        let result = tokio::task::spawn_blocking(move || service.checkpoint_restore(api_req))
+            .await
+            .map_err(|e| Status::internal(format!("join error: {}", e)))?
+            .map_err(to_status)?;
+        let snapshots = result
+            .snapshots
+            .into_iter()
+            .map(|s| layertwine_proto::RestoredSnapshotInfo {
+                snapshot_id: s.snapshot_id,
+                source: s.source,
+                content_hex: s.content_hex,
+                content_type: s.content_type,
+            })
+            .collect();
+        Ok(Response::new(layertwine_proto::CheckpointRestoreResponse {
+            checkpoint: Some(layertwine_proto::CheckpointInfo {
+                id: result.checkpoint.id,
+                author: result.checkpoint.author,
+                message: result.checkpoint.message,
+                parents: result.checkpoint.parents,
+                snapshots: result.checkpoint.snapshots,
+                created_at: result.checkpoint.created_at,
+                git_anchor: result.checkpoint.git_anchor,
+            }),
+            snapshots,
+            ancestry: result.ancestry,
+        }))
+    }
+
+    async fn checkpoint_restore_by_time(
+        &self,
+        request: Request<layertwine_proto::CheckpointRestoreByTimeRequest>,
+    ) -> Result<Response<layertwine_proto::CheckpointRestoreResponse>, Status> {
+        let req = request.into_inner();
+        let api_req = CheckpointRestoreByTimeRequest {
+            target_time: req.target_time,
+            source_filter: if req.source_filter.is_empty() {
+                None
+            } else {
+                Some(req.source_filter)
+            },
+        };
+        let service = self.service.clone();
+        let result =
+            tokio::task::spawn_blocking(move || service.checkpoint_restore_by_time(api_req))
+                .await
+                .map_err(|e| Status::internal(format!("join error: {}", e)))?
+                .map_err(to_status)?;
+        let snapshots = result
+            .snapshots
+            .into_iter()
+            .map(|s| layertwine_proto::RestoredSnapshotInfo {
+                snapshot_id: s.snapshot_id,
+                source: s.source,
+                content_hex: s.content_hex,
+                content_type: s.content_type,
+            })
+            .collect();
+        Ok(Response::new(layertwine_proto::CheckpointRestoreResponse {
+            checkpoint: Some(layertwine_proto::CheckpointInfo {
+                id: result.checkpoint.id,
+                author: result.checkpoint.author,
+                message: result.checkpoint.message,
+                parents: result.checkpoint.parents,
+                snapshots: result.checkpoint.snapshots,
+                created_at: result.checkpoint.created_at,
+                git_anchor: result.checkpoint.git_anchor,
+            }),
+            snapshots,
+            ancestry: result.ancestry,
+        }))
+    }
+
+    async fn checkpoint_diff(
+        &self,
+        request: Request<layertwine_proto::CheckpointDiffRequest>,
+    ) -> Result<Response<layertwine_proto::CheckpointDiffResponse>, Status> {
+        let req = request.into_inner();
+        let api_req = CheckpointDiffRequest {
+            from_id: req.from_id,
+            to_id: req.to_id,
+        };
+        let service = self.service.clone();
+        let result = tokio::task::spawn_blocking(move || service.checkpoint_diff(api_req))
+            .await
+            .map_err(|e| Status::internal(format!("join error: {}", e)))?
+            .map_err(to_status)?;
+        Ok(Response::new(layertwine_proto::CheckpointDiffResponse {
+            from_id: result.from_id,
+            to_id: result.to_id,
+            added: result.added,
+            removed: result.removed,
+            modified: result.modified,
+            total_changes: result.total_changes as u32,
+        }))
+    }
+
+    async fn checkpoint_rollback(
+        &self,
+        request: Request<layertwine_proto::CheckpointRollbackRequest>,
+    ) -> Result<Response<layertwine_proto::CheckpointRollbackResponse>, Status> {
+        let req = request.into_inner();
+        let api_req = CheckpointRollbackRequest {
+            checkpoint_id: req.checkpoint_id,
+        };
+        let service = self.service.clone();
+        let result = tokio::task::spawn_blocking(move || service.checkpoint_rollback(api_req))
+            .await
+            .map_err(|e| Status::internal(format!("join error: {}", e)))?
+            .map_err(to_status)?;
+        Ok(Response::new(
+            layertwine_proto::CheckpointRollbackResponse {
+                checkpoint_id: result.checkpoint_id,
+                snapshot_ids: result.snapshot_ids,
+            },
+        ))
+    }
+
+    async fn list_pending_approvals(
+        &self,
+        _request: Request<layertwine_proto::Empty>,
+    ) -> Result<Response<layertwine_proto::ListPendingApprovalsResponse>, Status> {
+        let service = self.service.clone();
+        let result = tokio::task::spawn_blocking(move || service.list_pending_approvals())
+            .await
+            .map_err(|e| Status::internal(format!("join error: {}", e)))?
+            .map_err(to_status)?;
+        let approvals = result
+            .approvals
+            .into_iter()
+            .map(|a| layertwine_proto::ApprovalInfo {
+                agent_id: a.agent_id,
+                partition_name: a.partition_name,
+                current_snapshot: a.current_snapshot,
+                history_len: a.history_len as u32,
+            })
+            .collect();
+        Ok(Response::new(
+            layertwine_proto::ListPendingApprovalsResponse {
+                approvals,
+                total: result.total as u32,
+            },
+        ))
+    }
+
+    async fn approve_agent(
+        &self,
+        request: Request<layertwine_proto::ApproveAgentRequest>,
+    ) -> Result<Response<layertwine_proto::ApproveAgentResponse>, Status> {
+        let req = request.into_inner();
+        let api_req = ApproveAgentRequest {
+            agent_id: req.agent_id,
+            integrated_name: req.integrated_name,
+        };
+        let service = self.service.clone();
+        let result = tokio::task::spawn_blocking(move || service.approve_agent(api_req))
+            .await
+            .map_err(|e| Status::internal(format!("join error: {}", e)))?
+            .map_err(to_status)?;
+        Ok(Response::new(layertwine_proto::ApproveAgentResponse {
+            agent_id: result.agent_id,
+            integrated_snapshot_id: result.integrated_snapshot_id,
+        }))
+    }
+
+    async fn reject_agent(
+        &self,
+        request: Request<layertwine_proto::RejectAgentRequest>,
+    ) -> Result<Response<layertwine_proto::RejectAgentResponse>, Status> {
+        let req = request.into_inner();
+        let api_req = RejectAgentRequest {
+            agent_id: req.agent_id,
+        };
+        let service = self.service.clone();
+        let result = tokio::task::spawn_blocking(move || service.reject_agent(api_req))
+            .await
+            .map_err(|e| Status::internal(format!("join error: {}", e)))?
+            .map_err(to_status)?;
+        Ok(Response::new(layertwine_proto::RejectAgentResponse {
+            agent_id: result.agent_id,
+            baseline_snapshot_id: result.baseline_snapshot_id,
+        }))
+    }
+
+    async fn merge_to_unified(
+        &self,
+        request: Request<layertwine_proto::MergeToUnifiedRequest>,
+    ) -> Result<Response<layertwine_proto::MergeToUnifiedResponse>, Status> {
+        let req = request.into_inner();
+        let api_req = MergeToUnifiedRequest {
+            integration_names: if req.integration_names.is_empty() {
+                None
+            } else {
+                Some(req.integration_names)
+            },
+        };
+        let service = self.service.clone();
+        let result = tokio::task::spawn_blocking(move || service.merge_to_unified(api_req))
+            .await
+            .map_err(|e| Status::internal(format!("join error: {}", e)))?
+            .map_err(to_status)?;
+        Ok(Response::new(layertwine_proto::MergeToUnifiedResponse {
+            unified_snapshot_id: result.unified_snapshot_id,
+            merged_count: result.merged_count as u32,
+        }))
+    }
+
+    async fn merge_to_staged(
+        &self,
+        request: Request<layertwine_proto::MergeToStagedRequest>,
+    ) -> Result<Response<layertwine_proto::MergeToStagedResponse>, Status> {
+        let _req = request.into_inner();
+        let api_req = MergeToStagedRequest {};
+        let service = self.service.clone();
+        let result = tokio::task::spawn_blocking(move || service.merge_to_staged(api_req))
+            .await
+            .map_err(|e| Status::internal(format!("join error: {}", e)))?
+            .map_err(to_status)?;
+        Ok(Response::new(layertwine_proto::MergeToStagedResponse {
+            staged_snapshot_id: result.staged_snapshot_id,
         }))
     }
 }
@@ -404,8 +696,8 @@ impl Stratum for StratumGrpc {
 /// ```no_run
 /// use std::sync::Arc;
 /// use std::net::SocketAddr;
-/// use stratum::api::service::{ApiService, ApiServiceImpl, ServiceConfig};
-/// use stratum::api::rpc;
+/// use layertwine::api::service::{ApiService, ApiServiceImpl, ServiceConfig};
+/// use layertwine::api::rpc;
 ///
 /// # async fn example() {
 /// let service = ApiServiceImpl::open(ServiceConfig::default()).unwrap();
@@ -413,14 +705,14 @@ impl Stratum for StratumGrpc {
 /// rpc::serve(Arc::new(service), addr).await.unwrap();
 /// # }
 /// ```
-pub async fn serve(service: Arc<dyn ApiService>, addr: SocketAddr) -> Result<(), StratumError> {
-    let grpc = StratumGrpc::new(service);
+pub async fn serve(service: Arc<dyn ApiService>, addr: SocketAddr) -> Result<(), LayertwineError> {
+    let grpc = LayertwineGrpc::new(service);
 
     tonic::transport::Server::builder()
-        .add_service(StratumServer::new(grpc))
+        .add_service(LayertwineServer::new(grpc))
         .serve(addr)
         .await
-        .map_err(|e| StratumError::General(format!("gRPC server error: {}", e)))
+        .map_err(|e| LayertwineError::General(format!("gRPC server error: {}", e)))
 }
 
 #[cfg(test)]
@@ -534,12 +826,12 @@ mod tests {
         assert_eq!(status.code(), tonic::Code::PermissionDenied);
     }
 
-    // ── StratumGrpc construction test ──
+    // ── LayertwineGrpc construction test ──
 
     #[test]
-    fn test_stratum_grpc_new() {
+    fn test_layertwine_grpc_new() {
         let service = Arc::new(SuccessMockService);
-        let _grpc = StratumGrpc::new(service);
+        let _grpc = LayertwineGrpc::new(service);
     }
 
     // ── RPC handler delegation tests ──
@@ -547,9 +839,9 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_init_delegates_to_service() {
         let svc = Arc::new(SuccessMockService);
-        let grpc = StratumGrpc::new(svc);
-        let req = Request::new(stratum_proto::InitRequest {
-            db_path: Some(".stratum/test.db".into()),
+        let grpc = LayertwineGrpc::new(svc);
+        let req = Request::new(layertwine_proto::InitRequest {
+            db_path: Some(".layertwine/test.db".into()),
             git_repo: None,
             git_ref: None,
         });
@@ -562,10 +854,8 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_status_delegates_to_service() {
         let svc = Arc::new(SuccessMockService);
-        let grpc = StratumGrpc::new(svc);
-        let result = grpc
-            .status(Request::new(stratum_proto::Empty {}))
-            .await;
+        let grpc = LayertwineGrpc::new(svc);
+        let result = grpc.status(Request::new(layertwine_proto::Empty {})).await;
         assert!(result.is_ok());
         let resp = result.unwrap().into_inner();
         assert_eq!(resp.partitions.len(), 1);
@@ -575,8 +865,8 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_edit_delegates_to_service() {
         let svc = Arc::new(SuccessMockService);
-        let grpc = StratumGrpc::new(svc);
-        let req = Request::new(stratum_proto::EditRequest {
+        let grpc = LayertwineGrpc::new(svc);
+        let req = Request::new(layertwine_proto::EditRequest {
             file: "test.txt".into(),
             content: Some("hello".into()),
         });
@@ -590,8 +880,8 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_agent_edit_delegates_to_service() {
         let svc = Arc::new(SuccessMockService);
-        let grpc = StratumGrpc::new(svc);
-        let req = Request::new(stratum_proto::AgentEditRequest {
+        let grpc = LayertwineGrpc::new(svc);
+        let req = Request::new(layertwine_proto::AgentEditRequest {
             agent_id: "agent-01".into(),
             file: "test.txt".into(),
             content: Some("hello".into()),
@@ -606,8 +896,8 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_agent_submit_delegates_to_service() {
         let svc = Arc::new(SuccessMockService);
-        let grpc = StratumGrpc::new(svc);
-        let req = Request::new(stratum_proto::AgentSubmitRequest {
+        let grpc = LayertwineGrpc::new(svc);
+        let req = Request::new(layertwine_proto::AgentSubmitRequest {
             agent_id: "agent-01".into(),
         });
         let result = grpc.agent_submit(req).await;
@@ -619,8 +909,8 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_approve_delegates_to_service() {
         let svc = Arc::new(SuccessMockService);
-        let grpc = StratumGrpc::new(svc);
-        let req = Request::new(stratum_proto::ApproveRequest {
+        let grpc = LayertwineGrpc::new(svc);
+        let req = Request::new(layertwine_proto::ApproveRequest {
             agent_id: "agent-01".into(),
         });
         let result = grpc.approve(req).await;
@@ -633,8 +923,8 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_commit_delegates_to_service() {
         let svc = Arc::new(SuccessMockService);
-        let grpc = StratumGrpc::new(svc);
-        let req = Request::new(stratum_proto::CommitRequest {
+        let grpc = LayertwineGrpc::new(svc);
+        let req = Request::new(layertwine_proto::CommitRequest {
             message: "test commit".into(),
             author: Some("user".into()),
         });
@@ -648,8 +938,8 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_log_delegates_to_service() {
         let svc = Arc::new(SuccessMockService);
-        let grpc = StratumGrpc::new(svc);
-        let req = Request::new(stratum_proto::LogRequest { count: Some(10) });
+        let grpc = LayertwineGrpc::new(svc);
+        let req = Request::new(layertwine_proto::LogRequest { count: Some(10) });
         let result = grpc.log(req).await;
         assert!(result.is_ok());
         let resp = result.unwrap().into_inner();
@@ -660,8 +950,8 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_branch_create_delegates_to_service() {
         let svc = Arc::new(SuccessMockService);
-        let grpc = StratumGrpc::new(svc);
-        let req = Request::new(stratum_proto::BranchCreateRequest {
+        let grpc = LayertwineGrpc::new(svc);
+        let req = Request::new(layertwine_proto::BranchCreateRequest {
             name: "feature".into(),
         });
         let result = grpc.branch_create(req).await;
@@ -674,8 +964,8 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_branch_switch_delegates_to_service() {
         let svc = Arc::new(SuccessMockService);
-        let grpc = StratumGrpc::new(svc);
-        let req = Request::new(stratum_proto::BranchSwitchRequest {
+        let grpc = LayertwineGrpc::new(svc);
+        let req = Request::new(layertwine_proto::BranchSwitchRequest {
             name: "feature".into(),
         });
         let result = grpc.branch_switch(req).await;
@@ -687,22 +977,22 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_branch_list_delegates_to_service() {
         let svc = Arc::new(SuccessMockService);
-        let grpc = StratumGrpc::new(svc);
+        let grpc = LayertwineGrpc::new(svc);
         let result = grpc
-            .branch_list(Request::new(stratum_proto::Empty {}))
+            .branch_list(Request::new(layertwine_proto::Empty {}))
             .await;
         assert!(result.is_ok());
         let resp = result.unwrap().into_inner();
         assert_eq!(resp.branches.len(), 1);
         assert_eq!(resp.branches[0].name, "main");
-        assert_eq!(resp.branches[0].is_current, true);
+        assert!(resp.branches[0].is_current);
     }
 
     #[tokio::test]
     async fn test_rpc_merge_delegates_to_service() {
         let svc = Arc::new(SuccessMockService);
-        let grpc = StratumGrpc::new(svc);
-        let req = Request::new(stratum_proto::MergeRequest {
+        let grpc = LayertwineGrpc::new(svc);
+        let req = Request::new(layertwine_proto::MergeRequest {
             branch: "feature".into(),
             message: Some("merge feature".into()),
         });
@@ -716,8 +1006,8 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_backup_delegates_to_service() {
         let svc = Arc::new(SuccessMockService);
-        let grpc = StratumGrpc::new(svc);
-        let req = Request::new(stratum_proto::BackupRequest {
+        let grpc = LayertwineGrpc::new(svc);
+        let req = Request::new(layertwine_proto::BackupRequest {
             snapshot_id: "snap1".into(),
             label: Some("test label".into()),
         });
@@ -731,8 +1021,8 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_restore_delegates_to_service() {
         let svc = Arc::new(SuccessMockService);
-        let grpc = StratumGrpc::new(svc);
-        let req = Request::new(stratum_proto::RestoreRequest {
+        let grpc = LayertwineGrpc::new(svc);
+        let req = Request::new(layertwine_proto::RestoreRequest {
             backup_id: "backup1".into(),
         });
         let result = grpc.restore(req).await;
@@ -746,8 +1036,8 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_gc_delegates_to_service() {
         let svc = Arc::new(SuccessMockService);
-        let grpc = StratumGrpc::new(svc);
-        let result = grpc.gc(Request::new(stratum_proto::Empty {})).await;
+        let grpc = LayertwineGrpc::new(svc);
+        let result = grpc.gc(Request::new(layertwine_proto::Empty {})).await;
         assert!(result.is_ok());
         let resp = result.unwrap().into_inner();
         assert_eq!(resp.removed_checkpoints, 2);
@@ -759,8 +1049,8 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_push_delegates_to_service() {
         let svc = Arc::new(SuccessMockService);
-        let grpc = StratumGrpc::new(svc);
-        let req = Request::new(stratum_proto::PushRequest {
+        let grpc = LayertwineGrpc::new(svc);
+        let req = Request::new(layertwine_proto::PushRequest {
             remote: Some("origin".into()),
             git_repo: "/tmp/repo".into(),
             message: Some("sync".into()),
@@ -775,8 +1065,8 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_pull_delegates_to_service() {
         let svc = Arc::new(SuccessMockService);
-        let grpc = StratumGrpc::new(svc);
-        let req = Request::new(stratum_proto::PullRequest {
+        let grpc = LayertwineGrpc::new(svc);
+        let req = Request::new(layertwine_proto::PullRequest {
             remote: Some("origin".into()),
             git_repo: "/tmp/repo".into(),
             git_ref: Some("main".into()),
@@ -791,8 +1081,8 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_init_error_maps_to_status() {
         let svc = Arc::new(ErrorMockService);
-        let grpc = StratumGrpc::new(svc);
-        let req = Request::new(stratum_proto::InitRequest {
+        let grpc = LayertwineGrpc::new(svc);
+        let req = Request::new(layertwine_proto::InitRequest {
             db_path: None,
             git_repo: None,
             git_ref: None,
@@ -810,7 +1100,7 @@ mod tests {
     impl ApiService for SuccessMockService {
         fn init(&self, _req: InitRequest) -> ApiResult<InitResponse> {
             Ok(InitResponse {
-                db_path: ".stratum/test.db".into(),
+                db_path: ".layertwine/test.db".into(),
                 manual_partition_id: "manual-1".into(),
                 staged_partition_id: "staged-1".into(),
                 branch: "main".into(),
@@ -968,12 +1258,67 @@ mod tests {
                 merged_count: 2,
             })
         }
-        fn merge_to_staged(
-            &self,
-            _req: MergeToStagedRequest,
-        ) -> ApiResult<MergeToStagedResponse> {
+        fn merge_to_staged(&self, _req: MergeToStagedRequest) -> ApiResult<MergeToStagedResponse> {
             Ok(MergeToStagedResponse {
                 staged_snapshot_id: "staged1".into(),
+            })
+        }
+        fn checkpoint_restore(
+            &self,
+            _req: CheckpointRestoreRequest,
+        ) -> ApiResult<CheckpointRestoreResponse> {
+            Ok(CheckpointRestoreResponse {
+                checkpoint: CheckpointInfo {
+                    id: "cp1".into(),
+                    author: "user".into(),
+                    message: "test".into(),
+                    parents: vec![],
+                    snapshots: vec!["snap1".into()],
+                    created_at: 0,
+                    git_anchor: None,
+                },
+                snapshots: vec![],
+                ancestry: vec![],
+            })
+        }
+        fn checkpoint_restore_by_time(
+            &self,
+            _req: CheckpointRestoreByTimeRequest,
+        ) -> ApiResult<CheckpointRestoreResponse> {
+            Ok(CheckpointRestoreResponse {
+                checkpoint: CheckpointInfo {
+                    id: "cp1".into(),
+                    author: "user".into(),
+                    message: "test".into(),
+                    parents: vec![],
+                    snapshots: vec!["snap1".into()],
+                    created_at: 0,
+                    git_anchor: None,
+                },
+                snapshots: vec![],
+                ancestry: vec![],
+            })
+        }
+        fn checkpoint_diff(
+            &self,
+            _req: CheckpointDiffRequest,
+        ) -> ApiResult<CheckpointDiffResponse> {
+            Ok(CheckpointDiffResponse {
+                from_id: "cp1".into(),
+                to_id: "cp2".into(),
+                added: vec![],
+                removed: vec![],
+                modified: vec!["snap1".into()],
+                total_changes: 1,
+            })
+        }
+        fn checkpoint_rollback(
+            &self,
+            _req: CheckpointRollbackRequest,
+        ) -> ApiResult<CheckpointRollbackResponse> {
+            Ok(CheckpointRollbackResponse {
+                checkpoint_id: "cp1".into(),
+                snapshot_ids: vec!["snap1".into()],
             })
         }
     }
@@ -1047,16 +1392,31 @@ mod tests {
         fn reject_agent(&self, _: RejectAgentRequest) -> ApiResult<RejectAgentResponse> {
             Err(ApiError::internal("not impl"))
         }
-        fn merge_to_unified(
-            &self,
-            _: MergeToUnifiedRequest,
-        ) -> ApiResult<MergeToUnifiedResponse> {
+        fn merge_to_unified(&self, _: MergeToUnifiedRequest) -> ApiResult<MergeToUnifiedResponse> {
             Err(ApiError::internal("not impl"))
         }
-        fn merge_to_staged(
+        fn merge_to_staged(&self, _: MergeToStagedRequest) -> ApiResult<MergeToStagedResponse> {
+            Err(ApiError::internal("not impl"))
+        }
+        fn checkpoint_restore(
             &self,
-            _: MergeToStagedRequest,
-        ) -> ApiResult<MergeToStagedResponse> {
+            _: CheckpointRestoreRequest,
+        ) -> ApiResult<CheckpointRestoreResponse> {
+            Err(ApiError::internal("not impl"))
+        }
+        fn checkpoint_restore_by_time(
+            &self,
+            _: CheckpointRestoreByTimeRequest,
+        ) -> ApiResult<CheckpointRestoreResponse> {
+            Err(ApiError::internal("not impl"))
+        }
+        fn checkpoint_diff(&self, _: CheckpointDiffRequest) -> ApiResult<CheckpointDiffResponse> {
+            Err(ApiError::internal("not impl"))
+        }
+        fn checkpoint_rollback(
+            &self,
+            _: CheckpointRollbackRequest,
+        ) -> ApiResult<CheckpointRollbackResponse> {
             Err(ApiError::internal("not impl"))
         }
     }

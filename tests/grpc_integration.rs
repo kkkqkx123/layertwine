@@ -1,34 +1,32 @@
 #![cfg(feature = "grpc")]
 //! gRPC API integration tests
 //!
-//! These tests verify the gRPC API through the `StratumGrpc` handler layer,
+//! These tests verify the gRPC API through the `LayertwineGrpc` handler layer,
 //! calling RPC methods directly with proto message types against a real
 //! `ApiServiceImpl` backed by SQLite.
 //!
 //! Each test mirrors a real business scenario from
 //! `docs/user-guide/03-gRPC-API参考.md`.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
-use stratum::api::rpc::stratum_proto;
-use stratum::api::rpc::StratumGrpc;
-use stratum::api::{ApiServiceImpl, ServiceConfig};
-use stratum::core::types::AgentInstanceId;
+use layertwine::api::rpc::layertwine_proto;
+use layertwine::api::rpc::LayertwineGrpc;
+use layertwine::api::{ApiServiceImpl, ServiceConfig};
 use tonic::Request;
 
-use stratum_proto::stratum_server::Stratum;
+use layertwine_proto::layertwine_server::Layertwine;
 
 mod common;
 
-// ── Helper to create a StratumGrpc with temp DB ──
+// ── Helper to create a LayertwineGrpc with temp DB ──
 
-fn setup_grpc(db_path: &str) -> StratumGrpc {
+fn setup_grpc(db_path: &str) -> LayertwineGrpc {
     let api = ApiServiceImpl::open(ServiceConfig {
         db_path: db_path.to_string(),
     })
     .expect("failed to create ApiServiceImpl");
-    StratumGrpc::new(Arc::new(api))
+    LayertwineGrpc::new(Arc::new(api))
 }
 
 // ── Scenario 1: Init workflow through gRPC (ref: user-guide §RPC列表/Init) ──
@@ -36,11 +34,11 @@ fn setup_grpc(db_path: &str) -> StratumGrpc {
 #[tokio::test]
 async fn test_grpc_init_and_status() {
     let td = tempfile::TempDir::new().expect("Failed to create temp dir");
-    let db_path = td.path().join("stratum-test.db");
+    let db_path = td.path().join("layertwine-test.db");
     let grpc = setup_grpc(&db_path.to_string_lossy());
 
     // Init
-    let init_req = Request::new(stratum_proto::InitRequest {
+    let init_req = Request::new(layertwine_proto::InitRequest {
         db_path: Some(db_path.to_string_lossy().to_string()),
         git_repo: None,
         git_ref: None,
@@ -53,7 +51,7 @@ async fn test_grpc_init_and_status() {
 
     // Status
     let status_resp = grpc
-        .status(Request::new(stratum_proto::Empty {}))
+        .status(Request::new(layertwine_proto::Empty {}))
         .await
         .expect("status should succeed");
     let status = status_resp.into_inner();
@@ -65,11 +63,11 @@ async fn test_grpc_init_and_status() {
 #[tokio::test]
 async fn test_grpc_edit_commit_log_workflow() {
     let td = tempfile::TempDir::new().expect("Failed to create temp dir");
-    let db_path = td.path().join("stratum-test.db");
+    let db_path = td.path().join("layertwine-test.db");
     let grpc = setup_grpc(&db_path.to_string_lossy());
 
     // Init
-    grpc.init(Request::new(stratum_proto::InitRequest {
+    grpc.init(Request::new(layertwine_proto::InitRequest {
         db_path: Some(db_path.to_string_lossy().to_string()),
         git_repo: None,
         git_ref: None,
@@ -79,7 +77,7 @@ async fn test_grpc_edit_commit_log_workflow() {
 
     // Edit
     let edit_resp = grpc
-        .edit(Request::new(stratum_proto::EditRequest {
+        .edit(Request::new(layertwine_proto::EditRequest {
             file: "src/main.rs".into(),
             content: Some("fn main() {}\n".into()),
         }))
@@ -91,7 +89,7 @@ async fn test_grpc_edit_commit_log_workflow() {
 
     // Commit
     let commit_resp = grpc
-        .commit(Request::new(stratum_proto::CommitRequest {
+        .commit(Request::new(layertwine_proto::CommitRequest {
             message: "initial commit".into(),
             author: Some("dev-1".into()),
         }))
@@ -103,7 +101,9 @@ async fn test_grpc_edit_commit_log_workflow() {
 
     // Log
     let log_resp = grpc
-        .log(Request::new(stratum_proto::LogRequest { count: Some(10) }))
+        .log(Request::new(layertwine_proto::LogRequest {
+            count: Some(10),
+        }))
         .await
         .expect("log should succeed");
     let log = log_resp.into_inner();
@@ -117,11 +117,11 @@ async fn test_grpc_edit_commit_log_workflow() {
 #[tokio::test]
 async fn test_grpc_multi_agent_workflow() {
     let td = tempfile::TempDir::new().expect("Failed to create temp dir");
-    let db_path = td.path().join("stratum-test.db");
+    let db_path = td.path().join("layertwine-test.db");
     let grpc = setup_grpc(&db_path.to_string_lossy());
 
     // Init
-    grpc.init(Request::new(stratum_proto::InitRequest {
+    grpc.init(Request::new(layertwine_proto::InitRequest {
         db_path: Some(db_path.to_string_lossy().to_string()),
         git_repo: None,
         git_ref: None,
@@ -131,7 +131,7 @@ async fn test_grpc_multi_agent_workflow() {
 
     // Agent A edit
     let agent_a_edit = grpc
-        .agent_edit(Request::new(stratum_proto::AgentEditRequest {
+        .agent_edit(Request::new(layertwine_proto::AgentEditRequest {
             agent_id: "agent-a".into(),
             file: "src/auth.rs".into(),
             content: Some("pub fn login() {}\n".into()),
@@ -143,7 +143,7 @@ async fn test_grpc_multi_agent_workflow() {
 
     // Agent A submit
     let agent_a_submit = grpc
-        .agent_submit(Request::new(stratum_proto::AgentSubmitRequest {
+        .agent_submit(Request::new(layertwine_proto::AgentSubmitRequest {
             agent_id: "agent-a".into(),
         }))
         .await
@@ -152,7 +152,7 @@ async fn test_grpc_multi_agent_workflow() {
     assert!(!a_submit.snapshot_id.is_empty());
 
     // Agent B edit
-    grpc.agent_edit(Request::new(stratum_proto::AgentEditRequest {
+    grpc.agent_edit(Request::new(layertwine_proto::AgentEditRequest {
         agent_id: "agent-b".into(),
         file: "src/db.rs".into(),
         content: Some("pub fn connect() {}\n".into()),
@@ -161,7 +161,7 @@ async fn test_grpc_multi_agent_workflow() {
     .expect("agent B edit");
 
     // Agent B submit
-    grpc.agent_submit(Request::new(stratum_proto::AgentSubmitRequest {
+    grpc.agent_submit(Request::new(layertwine_proto::AgentSubmitRequest {
         agent_id: "agent-b".into(),
     }))
     .await
@@ -169,7 +169,7 @@ async fn test_grpc_multi_agent_workflow() {
 
     // Approve agent A
     let approve_a = grpc
-        .approve(Request::new(stratum_proto::ApproveRequest {
+        .approve(Request::new(layertwine_proto::ApproveRequest {
             agent_id: "agent-a".into(),
         }))
         .await
@@ -180,7 +180,7 @@ async fn test_grpc_multi_agent_workflow() {
 
     // Approve agent B
     let approve_b = grpc
-        .approve(Request::new(stratum_proto::ApproveRequest {
+        .approve(Request::new(layertwine_proto::ApproveRequest {
             agent_id: "agent-b".into(),
         }))
         .await
@@ -190,7 +190,7 @@ async fn test_grpc_multi_agent_workflow() {
 
     // Commit
     let commit = grpc
-        .commit(Request::new(stratum_proto::CommitRequest {
+        .commit(Request::new(layertwine_proto::CommitRequest {
             message: "merge auth and db".into(),
             author: Some("reviewer".into()),
         }))
@@ -204,11 +204,11 @@ async fn test_grpc_multi_agent_workflow() {
 #[tokio::test]
 async fn test_grpc_branch_create_switch_merge() {
     let td = tempfile::TempDir::new().expect("Failed to create temp dir");
-    let db_path = td.path().join("stratum-test.db");
+    let db_path = td.path().join("layertwine-test.db");
     let grpc = setup_grpc(&db_path.to_string_lossy());
 
     // Init and commit
-    grpc.init(Request::new(stratum_proto::InitRequest {
+    grpc.init(Request::new(layertwine_proto::InitRequest {
         db_path: Some(db_path.to_string_lossy().to_string()),
         git_repo: None,
         git_ref: None,
@@ -216,14 +216,14 @@ async fn test_grpc_branch_create_switch_merge() {
     .await
     .expect("init");
 
-    grpc.edit(Request::new(stratum_proto::EditRequest {
+    grpc.edit(Request::new(layertwine_proto::EditRequest {
         file: "main.txt".into(),
         content: Some("main content\n".into()),
     }))
     .await
     .expect("edit");
 
-    grpc.commit(Request::new(stratum_proto::CommitRequest {
+    grpc.commit(Request::new(layertwine_proto::CommitRequest {
         message: "commit on main".into(),
         author: Some("dev".into()),
     }))
@@ -232,7 +232,7 @@ async fn test_grpc_branch_create_switch_merge() {
 
     // Create branch
     let create = grpc
-        .branch_create(Request::new(stratum_proto::BranchCreateRequest {
+        .branch_create(Request::new(layertwine_proto::BranchCreateRequest {
             name: "feature/login".into(),
         }))
         .await
@@ -243,7 +243,7 @@ async fn test_grpc_branch_create_switch_merge() {
 
     // Switch branch
     let switch = grpc
-        .branch_switch(Request::new(stratum_proto::BranchSwitchRequest {
+        .branch_switch(Request::new(layertwine_proto::BranchSwitchRequest {
             name: "feature/login".into(),
         }))
         .await
@@ -251,14 +251,14 @@ async fn test_grpc_branch_create_switch_merge() {
     assert_eq!(switch.into_inner().name, "feature/login");
 
     // Edit on feature branch
-    grpc.edit(Request::new(stratum_proto::EditRequest {
+    grpc.edit(Request::new(layertwine_proto::EditRequest {
         file: "feature.txt".into(),
         content: Some("feature content\n".into()),
     }))
     .await
     .expect("edit on feature");
 
-    grpc.commit(Request::new(stratum_proto::CommitRequest {
+    grpc.commit(Request::new(layertwine_proto::CommitRequest {
         message: "commit on feature".into(),
         author: None,
     }))
@@ -266,7 +266,7 @@ async fn test_grpc_branch_create_switch_merge() {
     .expect("commit on feature");
 
     // Switch back to main
-    grpc.branch_switch(Request::new(stratum_proto::BranchSwitchRequest {
+    grpc.branch_switch(Request::new(layertwine_proto::BranchSwitchRequest {
         name: "main".into(),
     }))
     .await
@@ -274,7 +274,7 @@ async fn test_grpc_branch_create_switch_merge() {
 
     // Merge
     let merge = grpc
-        .merge(Request::new(stratum_proto::MergeRequest {
+        .merge(Request::new(layertwine_proto::MergeRequest {
             branch: "feature/login".into(),
             message: Some("merge feature/login".into()),
         }))
@@ -291,10 +291,10 @@ async fn test_grpc_branch_create_switch_merge() {
 #[tokio::test]
 async fn test_grpc_branch_list() {
     let td = tempfile::TempDir::new().expect("Failed to create temp dir");
-    let db_path = td.path().join("stratum-test.db");
+    let db_path = td.path().join("layertwine-test.db");
     let grpc = setup_grpc(&db_path.to_string_lossy());
 
-    grpc.init(Request::new(stratum_proto::InitRequest {
+    grpc.init(Request::new(layertwine_proto::InitRequest {
         db_path: Some(db_path.to_string_lossy().to_string()),
         git_repo: None,
         git_ref: None,
@@ -302,28 +302,28 @@ async fn test_grpc_branch_list() {
     .await
     .expect("init");
 
-    grpc.edit(Request::new(stratum_proto::EditRequest {
+    grpc.edit(Request::new(layertwine_proto::EditRequest {
         file: "test.txt".into(),
         content: Some("content\n".into()),
     }))
     .await
     .expect("edit");
 
-    grpc.commit(Request::new(stratum_proto::CommitRequest {
+    grpc.commit(Request::new(layertwine_proto::CommitRequest {
         message: "commit".into(),
         author: None,
     }))
     .await
     .expect("commit");
 
-    grpc.branch_create(Request::new(stratum_proto::BranchCreateRequest {
+    grpc.branch_create(Request::new(layertwine_proto::BranchCreateRequest {
         name: "feature".into(),
     }))
     .await
     .expect("branch create");
 
     let list = grpc
-        .branch_list(Request::new(stratum_proto::Empty {}))
+        .branch_list(Request::new(layertwine_proto::Empty {}))
         .await
         .expect("branch list");
     let list_inner = list.into_inner();
@@ -343,10 +343,10 @@ async fn test_grpc_branch_list() {
 #[tokio::test]
 async fn test_grpc_backup_and_restore() {
     let td = tempfile::TempDir::new().expect("Failed to create temp dir");
-    let db_path = td.path().join("stratum-test.db");
+    let db_path = td.path().join("layertwine-test.db");
     let grpc = setup_grpc(&db_path.to_string_lossy());
 
-    grpc.init(Request::new(stratum_proto::InitRequest {
+    grpc.init(Request::new(layertwine_proto::InitRequest {
         db_path: Some(db_path.to_string_lossy().to_string()),
         git_repo: None,
         git_ref: None,
@@ -355,7 +355,7 @@ async fn test_grpc_backup_and_restore() {
     .expect("init");
 
     let edit = grpc
-        .edit(Request::new(stratum_proto::EditRequest {
+        .edit(Request::new(layertwine_proto::EditRequest {
             file: "important.txt".into(),
             content: Some("critical data\n".into()),
         }))
@@ -365,7 +365,7 @@ async fn test_grpc_backup_and_restore() {
 
     // Backup
     let backup = grpc
-        .backup(Request::new(stratum_proto::BackupRequest {
+        .backup(Request::new(layertwine_proto::BackupRequest {
             snapshot_id: snapshot_id.clone(),
             label: Some("pre-release".into()),
         }))
@@ -378,7 +378,7 @@ async fn test_grpc_backup_and_restore() {
 
     // Restore
     let restore = grpc
-        .restore(Request::new(stratum_proto::RestoreRequest {
+        .restore(Request::new(layertwine_proto::RestoreRequest {
             backup_id: backup_inner.backup_id.clone(),
         }))
         .await
@@ -394,10 +394,10 @@ async fn test_grpc_backup_and_restore() {
 #[tokio::test]
 async fn test_grpc_gc() {
     let td = tempfile::TempDir::new().expect("Failed to create temp dir");
-    let db_path = td.path().join("stratum-test.db");
+    let db_path = td.path().join("layertwine-test.db");
     let grpc = setup_grpc(&db_path.to_string_lossy());
 
-    grpc.init(Request::new(stratum_proto::InitRequest {
+    grpc.init(Request::new(layertwine_proto::InitRequest {
         db_path: Some(db_path.to_string_lossy().to_string()),
         git_repo: None,
         git_ref: None,
@@ -406,14 +406,14 @@ async fn test_grpc_gc() {
     .expect("init");
 
     for i in 1..=3 {
-        grpc.edit(Request::new(stratum_proto::EditRequest {
+        grpc.edit(Request::new(layertwine_proto::EditRequest {
             file: "test.txt".into(),
             content: Some(format!("v{}\n", i)),
         }))
         .await
         .expect("edit");
 
-        grpc.commit(Request::new(stratum_proto::CommitRequest {
+        grpc.commit(Request::new(layertwine_proto::CommitRequest {
             message: format!("commit {}", i),
             author: None,
         }))
@@ -422,7 +422,7 @@ async fn test_grpc_gc() {
     }
 
     let gc = grpc
-        .gc(Request::new(stratum_proto::Empty {}))
+        .gc(Request::new(layertwine_proto::Empty {}))
         .await
         .expect("gc should succeed");
     let gc_inner = gc.into_inner();
@@ -435,10 +435,10 @@ async fn test_grpc_gc() {
 #[tokio::test]
 async fn test_grpc_edit_without_content_returns_error() {
     let td = tempfile::TempDir::new().expect("Failed to create temp dir");
-    let db_path = td.path().join("stratum-test.db");
+    let db_path = td.path().join("layertwine-test.db");
     let grpc = setup_grpc(&db_path.to_string_lossy());
 
-    grpc.init(Request::new(stratum_proto::InitRequest {
+    grpc.init(Request::new(layertwine_proto::InitRequest {
         db_path: Some(db_path.to_string_lossy().to_string()),
         git_repo: None,
         git_ref: None,
@@ -447,7 +447,7 @@ async fn test_grpc_edit_without_content_returns_error() {
     .expect("init");
 
     let result = grpc
-        .edit(Request::new(stratum_proto::EditRequest {
+        .edit(Request::new(layertwine_proto::EditRequest {
             file: "test.txt".into(),
             content: None,
         }))
@@ -460,10 +460,10 @@ async fn test_grpc_edit_without_content_returns_error() {
 #[tokio::test]
 async fn test_grpc_switch_nonexistent_branch_returns_not_found() {
     let td = tempfile::TempDir::new().expect("Failed to create temp dir");
-    let db_path = td.path().join("stratum-test.db");
+    let db_path = td.path().join("layertwine-test.db");
     let grpc = setup_grpc(&db_path.to_string_lossy());
 
-    grpc.init(Request::new(stratum_proto::InitRequest {
+    grpc.init(Request::new(layertwine_proto::InitRequest {
         db_path: Some(db_path.to_string_lossy().to_string()),
         git_repo: None,
         git_ref: None,
@@ -472,7 +472,7 @@ async fn test_grpc_switch_nonexistent_branch_returns_not_found() {
     .expect("init");
 
     let result = grpc
-        .branch_switch(Request::new(stratum_proto::BranchSwitchRequest {
+        .branch_switch(Request::new(layertwine_proto::BranchSwitchRequest {
             name: "nonexistent".into(),
         }))
         .await;
@@ -486,10 +486,10 @@ async fn test_grpc_switch_nonexistent_branch_returns_not_found() {
 #[tokio::test]
 async fn test_grpc_status_reflects_partition_state() {
     let td = tempfile::TempDir::new().expect("Failed to create temp dir");
-    let db_path = td.path().join("stratum-test.db");
+    let db_path = td.path().join("layertwine-test.db");
     let grpc = setup_grpc(&db_path.to_string_lossy());
 
-    grpc.init(Request::new(stratum_proto::InitRequest {
+    grpc.init(Request::new(layertwine_proto::InitRequest {
         db_path: Some(db_path.to_string_lossy().to_string()),
         git_repo: None,
         git_ref: None,
@@ -499,7 +499,7 @@ async fn test_grpc_status_reflects_partition_state() {
 
     // After init, should have partitions
     let status1 = grpc
-        .status(Request::new(stratum_proto::Empty {}))
+        .status(Request::new(layertwine_proto::Empty {}))
         .await
         .expect("status");
     let s1 = status1.into_inner();
@@ -509,7 +509,7 @@ async fn test_grpc_status_reflects_partition_state() {
     // approval/integrated partitions appear only after agent submission
 
     // After edit, history_len should increase
-    grpc.edit(Request::new(stratum_proto::EditRequest {
+    grpc.edit(Request::new(layertwine_proto::EditRequest {
         file: "test.txt".into(),
         content: Some("hello\n".into()),
     }))
@@ -517,7 +517,7 @@ async fn test_grpc_status_reflects_partition_state() {
     .expect("edit");
 
     let status2 = grpc
-        .status(Request::new(stratum_proto::Empty {}))
+        .status(Request::new(layertwine_proto::Empty {}))
         .await
         .expect("status");
     let s2 = status2.into_inner();
@@ -526,7 +526,10 @@ async fn test_grpc_status_reflects_partition_state() {
         .iter()
         .find(|p| p.layer == "manual_edit")
         .expect("manual partition should exist");
-    assert!(manual.history_len > 0, "history_len should be > 0 after edit");
+    assert!(
+        manual.history_len > 0,
+        "history_len should be > 0 after edit"
+    );
 }
 
 // ── Scenario 10: Log with count parameter ──
@@ -534,10 +537,10 @@ async fn test_grpc_status_reflects_partition_state() {
 #[tokio::test]
 async fn test_grpc_log_count_limit() {
     let td = tempfile::TempDir::new().expect("Failed to create temp dir");
-    let db_path = td.path().join("stratum-test.db");
+    let db_path = td.path().join("layertwine-test.db");
     let grpc = setup_grpc(&db_path.to_string_lossy());
 
-    grpc.init(Request::new(stratum_proto::InitRequest {
+    grpc.init(Request::new(layertwine_proto::InitRequest {
         db_path: Some(db_path.to_string_lossy().to_string()),
         git_repo: None,
         git_ref: None,
@@ -547,14 +550,14 @@ async fn test_grpc_log_count_limit() {
 
     // Create 5 commits
     for i in 1..=5 {
-        grpc.edit(Request::new(stratum_proto::EditRequest {
+        grpc.edit(Request::new(layertwine_proto::EditRequest {
             file: "test.txt".into(),
             content: Some(format!("v{}\n", i)),
         }))
         .await
         .expect("edit");
 
-        grpc.commit(Request::new(stratum_proto::CommitRequest {
+        grpc.commit(Request::new(layertwine_proto::CommitRequest {
             message: format!("commit {}", i),
             author: None,
         }))
@@ -564,7 +567,9 @@ async fn test_grpc_log_count_limit() {
 
     // Request only 2
     let log = grpc
-        .log(Request::new(stratum_proto::LogRequest { count: Some(2) }))
+        .log(Request::new(layertwine_proto::LogRequest {
+            count: Some(2),
+        }))
         .await
         .expect("log");
     let log_inner = log.into_inner();

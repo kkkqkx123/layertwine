@@ -9,16 +9,16 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use stratum::core::delta::Delta;
-use stratum::core::file_node::FileNode;
-use stratum::core::snapshot::Snapshot;
-use stratum::core::types::{AgentInstanceId, LineDiff, SnapshotId, SourceType};
-use stratum::layered::transition::reconstruct_text;
-use stratum::layered::transition::{
+use layertwine::core::delta::Delta;
+use layertwine::core::file_node::FileNode;
+use layertwine::core::snapshot::Snapshot;
+use layertwine::core::types::{AgentInstanceId, LineDiff, SnapshotId, SourceType};
+use layertwine::layered::transition::reconstruct_text;
+use layertwine::layered::transition::{
     execute_forward, execute_rollback, ForwardTransition, RollbackTransition,
 };
-use stratum::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
-use stratum::storage::SqliteStorage;
+use layertwine::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
+use layertwine::storage::SqliteStorage;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -28,7 +28,7 @@ use stratum::storage::SqliteStorage;
 fn setup_storage() -> SqliteStorage {
     let storage = SqliteStorage::new_in_memory().expect("in-memory storage");
     storage
-        .with_conn(stratum::storage::migrations::initialize_full)
+        .with_conn(layertwine::storage::migrations::initialize_full)
         .expect("full schema init");
     storage
 }
@@ -55,38 +55,39 @@ fn get_text(storage: &SqliteStorage, snapshot_id: &SnapshotId) -> String {
 
 /// Ensure staged partition exists.
 fn ensure_staged(storage: &SqliteStorage, initial_id: SnapshotId) {
-    stratum::layered::staged::ensure_staged_partition(storage, initial_id).unwrap();
+    layertwine::layered::staged::ensure_staged_partition(storage, initial_id).unwrap();
 }
 
 /// Ensure manual partition exists.
 fn ensure_manual(storage: &SqliteStorage, initial_id: SnapshotId) {
-    stratum::layered::manual::ensure_manual_partition(storage, initial_id).unwrap();
+    layertwine::layered::manual::ensure_manual_partition(storage, initial_id).unwrap();
 }
 
 /// Ensure agent partition exists.
 fn ensure_agent(storage: &SqliteStorage, agent_id: &AgentInstanceId, initial_id: SnapshotId) {
-    stratum::layered::agent::ensure_agent_partition(storage, agent_id, initial_id).unwrap();
+    layertwine::layered::agent::ensure_agent_partition(storage, agent_id, initial_id).unwrap();
 }
 
 /// Ensure approval partition exists.
 fn ensure_approval(storage: &SqliteStorage, agent_id: &AgentInstanceId, initial_id: SnapshotId) {
-    stratum::layered::approval::ensure_approval_agent_partition(storage, agent_id, initial_id)
+    layertwine::layered::approval::ensure_approval_agent_partition(storage, agent_id, initial_id)
         .unwrap();
 }
 
 /// Ensure integrated partition exists.
 fn ensure_integrated(storage: &SqliteStorage, name: &str, initial_id: SnapshotId) {
-    stratum::layered::integrated::ensure_integrated_partition(storage, name, initial_id).unwrap();
+    layertwine::layered::integrated::ensure_integrated_partition(storage, name, initial_id)
+        .unwrap();
 }
 
 /// Ensure unified partition exists.
 fn ensure_unified(storage: &SqliteStorage, initial_id: SnapshotId) {
-    stratum::layered::unified::ensure_unified_partition(storage, initial_id).unwrap();
+    layertwine::layered::unified::ensure_unified_partition(storage, initial_id).unwrap();
 }
 
 /// Read the current staged snapshot text.
 fn staged_text(storage: &SqliteStorage) -> String {
-    let pid = stratum::layered::staged::staged_partition_id();
+    let pid = layertwine::layered::staged::staged_partition_id();
     let part = storage.get_partition(&pid).unwrap();
     get_text(storage, &part.current_snapshot)
 }
@@ -103,8 +104,12 @@ fn test_full_manual_pipeline() {
     ensure_manual(&storage, initial_id);
 
     // Apply manual edit
-    stratum::layered::manual::apply_manual_edit(&storage, "test.txt", "line1\nmodified\nline3\n")
-        .unwrap();
+    layertwine::layered::manual::apply_manual_edit(
+        &storage,
+        "test.txt",
+        "line1\nmodified\nline3\n",
+    )
+    .unwrap();
 
     // Forward: Manual → Staged
     let result = execute_forward(&storage, ForwardTransition::ManualToStaged, &[]);
@@ -133,7 +138,7 @@ fn test_full_agent_pipeline() {
     ensure_integrated(&storage, feature, initial_id);
 
     // Agent edits
-    stratum::layered::agent::apply_agent_edit(
+    layertwine::layered::agent::apply_agent_edit(
         &storage,
         &agent_id,
         "test.txt",
@@ -185,7 +190,7 @@ fn test_multi_agent_collaboration() {
     ensure_integrated(&storage, feature, initial_id);
 
     // Agent A: modify lineB
-    stratum::layered::agent::apply_agent_edit(
+    layertwine::layered::agent::apply_agent_edit(
         &storage,
         &agent_a,
         "test.txt",
@@ -201,7 +206,7 @@ fn test_multi_agent_collaboration() {
     .unwrap();
 
     // Agent B: modify lineC
-    stratum::layered::agent::apply_agent_edit(
+    layertwine::layered::agent::apply_agent_edit(
         &storage,
         &agent_b,
         "test.txt",
@@ -259,7 +264,7 @@ fn test_multi_feature_merge() {
     ensure_integrated(&storage, feat2, initial_id);
 
     // Feature 1: modify first line
-    stratum::layered::agent::apply_agent_edit(&storage, &agent1, "test.txt", "alpha\nline2\n")
+    layertwine::layered::agent::apply_agent_edit(&storage, &agent1, "test.txt", "alpha\nline2\n")
         .unwrap();
     execute_forward(&storage, ForwardTransition::AgentToApproval, &["agent-1"]).unwrap();
     execute_forward(
@@ -270,7 +275,7 @@ fn test_multi_feature_merge() {
     .unwrap();
 
     // Feature 2: modify second line (different from Feature 1)
-    stratum::layered::agent::apply_agent_edit(&storage, &agent2, "test.txt", "line1\nbeta\n")
+    layertwine::layered::agent::apply_agent_edit(&storage, &agent2, "test.txt", "line1\nbeta\n")
         .unwrap();
     execute_forward(&storage, ForwardTransition::AgentToApproval, &["agent-2"]).unwrap();
     execute_forward(
@@ -283,7 +288,7 @@ fn test_multi_feature_merge() {
     // Merge both features into unified — each modifies a different line → no conflict
     let names = &[feat1.to_string(), feat2.to_string()];
     let merge_result =
-        stratum::layered::unified::merge_features_to_unified(&storage, names).unwrap();
+        layertwine::layered::unified::merge_features_to_unified(&storage, names).unwrap();
     assert!(
         !merge_result.has_conflicts(),
         "non-overlapping edits should not conflict"
@@ -314,7 +319,7 @@ fn test_rollback_staged_to_manual() {
     ensure_manual(&storage, initial_id);
 
     // Apply manual edit and merge to staged
-    stratum::layered::manual::apply_manual_edit(&storage, "test.txt", "original\nedited\n")
+    layertwine::layered::manual::apply_manual_edit(&storage, "test.txt", "original\nedited\n")
         .unwrap();
     execute_forward(&storage, ForwardTransition::ManualToStaged, &[]).unwrap();
 
@@ -354,7 +359,7 @@ fn test_merge_conflict_detection() {
     ensure_integrated(&storage, feature, initial_id);
 
     // Agent A: modify first line
-    stratum::layered::agent::apply_agent_edit(
+    layertwine::layered::agent::apply_agent_edit(
         &storage,
         &agent_a,
         "test.txt",
@@ -362,12 +367,12 @@ fn test_merge_conflict_detection() {
     )
     .unwrap();
     execute_forward(&storage, ForwardTransition::AgentToApproval, &["agent-a"]).unwrap();
-    let r1 =
-        stratum::layered::integrated::merge_agent_to_feature(&storage, &agent_a, feature).unwrap();
+    let r1 = layertwine::layered::integrated::merge_agent_to_feature(&storage, &agent_a, feature)
+        .unwrap();
     assert!(!r1.has_conflicts(), "first merge should succeed cleanly");
 
     // Agent B: modify same first line (different change)
-    stratum::layered::agent::apply_agent_edit(
+    layertwine::layered::agent::apply_agent_edit(
         &storage,
         &agent_b,
         "test.txt",
@@ -375,8 +380,8 @@ fn test_merge_conflict_detection() {
     )
     .unwrap();
     execute_forward(&storage, ForwardTransition::AgentToApproval, &["agent-b"]).unwrap();
-    let r2 =
-        stratum::layered::integrated::merge_agent_to_feature(&storage, &agent_b, feature).unwrap();
+    let r2 = layertwine::layered::integrated::merge_agent_to_feature(&storage, &agent_b, feature)
+        .unwrap();
 
     // Both agents modified the same line → expect conflict
     assert!(
@@ -401,7 +406,7 @@ fn test_idempotent_merge() {
     assert!(result.is_ok());
 
     // Content should remain unchanged
-    let pid = stratum::layered::staged::staged_partition_id();
+    let pid = layertwine::layered::staged::staged_partition_id();
     let part = storage.get_partition(&pid).unwrap();
     assert_eq!(
         part.current_snapshot, initial_id,
@@ -429,21 +434,28 @@ fn test_approval_integrated_unified_staged_chain() {
     ensure_integrated(&storage, feature, initial_id);
 
     // Apply edit and move to approval
-    stratum::layered::agent::apply_agent_edit(&storage, &agent_id, "test.txt", "start\nchained\n")
-        .unwrap();
-    stratum::layered::agent::move_agent_to_approval(&storage, &agent_id).unwrap();
+    layertwine::layered::agent::apply_agent_edit(
+        &storage,
+        &agent_id,
+        "test.txt",
+        "start\nchained\n",
+    )
+    .unwrap();
+    layertwine::layered::agent::move_agent_to_approval(&storage, &agent_id).unwrap();
 
     // Direct function call: approval → integrated
     let merge_result =
-        stratum::layered::integrated::merge_agent_to_feature(&storage, &agent_id, feature).unwrap();
+        layertwine::layered::integrated::merge_agent_to_feature(&storage, &agent_id, feature)
+            .unwrap();
     assert!(!merge_result.has_conflicts());
     let integrated_sid = merge_result.snapshot_id;
 
     // Direct function call: integrated → unified
-    stratum::layered::unified::merge_features_to_unified(&storage, &[feature.to_string()]).unwrap();
+    layertwine::layered::unified::merge_features_to_unified(&storage, &[feature.to_string()])
+        .unwrap();
 
     // Direct function call: unified → staged
-    let staged_sid = stratum::layered::staged::merge_unified_to_staged(&storage).unwrap();
+    let staged_sid = layertwine::layered::staged::merge_unified_to_staged(&storage).unwrap();
 
     // Staged snapshot should be different from integrated snapshot
     assert_ne!(staged_sid, integrated_sid, "staged snapshot must advance");
@@ -464,11 +476,11 @@ fn test_sequential_manual_edits() {
 
     // Multiple edits without forward in between
     let id1 =
-        stratum::layered::manual::apply_manual_edit(&storage, "test.txt", "line1\nmodified\n")
+        layertwine::layered::manual::apply_manual_edit(&storage, "test.txt", "line1\nmodified\n")
             .unwrap();
     assert_ne!(id1, initial_id);
 
-    let id2 = stratum::layered::manual::apply_manual_edit(
+    let id2 = layertwine::layered::manual::apply_manual_edit(
         &storage,
         "test.txt",
         "line1\nmodified\nline3\n",
@@ -493,11 +505,11 @@ fn test_edit_after_forward() {
     ensure_staged(&storage, initial_id);
     ensure_manual(&storage, initial_id);
 
-    stratum::layered::manual::apply_manual_edit(&storage, "test.txt", "base\na\n").unwrap();
+    layertwine::layered::manual::apply_manual_edit(&storage, "test.txt", "base\na\n").unwrap();
     execute_forward(&storage, ForwardTransition::ManualToStaged, &[]).unwrap();
     assert_eq!(staged_text(&storage), "base\na");
 
-    stratum::layered::manual::apply_manual_edit(&storage, "test.txt", "base\na\nb\n").unwrap();
+    layertwine::layered::manual::apply_manual_edit(&storage, "test.txt", "base\na\nb\n").unwrap();
     execute_forward(&storage, ForwardTransition::ManualToStaged, &[]).unwrap();
     assert_eq!(staged_text(&storage), "base\na\nb");
 }
@@ -507,7 +519,7 @@ fn test_edit_after_forward() {
 // ---------------------------------------------------------------------------
 #[test]
 fn test_state_machine_integration() {
-    use stratum::layered::StateMachine;
+    use layertwine::layered::StateMachine;
 
     let storage = Arc::new(setup_storage());
     let sm = StateMachine::new(storage.clone());
@@ -529,7 +541,7 @@ fn test_state_machine_integration() {
     ensure_manual(s, initial_id);
 
     // Apply manual edit
-    stratum::layered::manual::apply_manual_edit(s, "test.txt", "sm\nedited\n").unwrap();
+    layertwine::layered::manual::apply_manual_edit(s, "test.txt", "sm\nedited\n").unwrap();
 
     // Execute forward via state machine
     let sid = sm
@@ -537,9 +549,9 @@ fn test_state_machine_integration() {
         .unwrap();
 
     // Verify via sm
-    let staged_pid = stratum::layered::staged::staged_partition_id();
+    let staged_pid = layertwine::layered::staged::staged_partition_id();
     let part = sm
-        .get_partition(&stratum::core::types::LayerType::Staged, &staged_pid)
+        .get_partition(&layertwine::core::types::LayerType::Staged, &staged_pid)
         .unwrap();
     assert_eq!(part.current_snapshot, sid);
 

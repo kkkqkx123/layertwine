@@ -1,8 +1,8 @@
+use layertwine::core::delta::Delta;
+use layertwine::core::file_node::FileNode;
+use layertwine::core::snapshot::Snapshot;
+use layertwine::core::types::{ContentId, DiffOp, Hunk, LineDiff, SourceType};
 use std::path::PathBuf;
-use stratum::core::delta::Delta;
-use stratum::core::file_node::FileNode;
-use stratum::core::snapshot::Snapshot;
-use stratum::core::types::{ContentId, DiffOp, Hunk, LineDiff, SourceType};
 
 fn generate_test_text(lines: usize) -> String {
     (0..lines).map(|i| format!("line {}\n", i)).collect()
@@ -30,7 +30,7 @@ fn create_test_delta(lines: usize, change_rate: f64) -> Delta {
     let old_text = generate_test_text(lines);
     let new_text = generate_modified_text(&old_text, change_rate);
     let file_node = FileNode::new(PathBuf::from("test.txt"), old_text.as_bytes());
-    let diff = stratum::engine::diff::diff_to_line_diff(&old_text, &new_text);
+    let diff = layertwine::engine::diff::diff_to_line_diff(&old_text, &new_text);
     Delta::new(file_node, diff, SourceType::Manual)
 }
 

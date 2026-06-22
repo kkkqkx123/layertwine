@@ -1,4 +1,4 @@
-use stratum::engine::diff::{diff_to_line_diff, format_unified_diff};
+use layertwine::engine::diff::{diff_to_line_diff, format_unified_diff};
 
 fn generate_test_text(lines: usize) -> String {
     (0..lines).map(|i| format!("line {}\n", i)).collect()

@@ -8,7 +8,7 @@ use crate::core::delta::Delta;
 use crate::core::types::LineDiff;
 #[allow(unused_imports)]
 use crate::core::types::{DiffOp, Hunk};
-use crate::error::{Result, StratumError};
+use crate::error::{LayertwineError, Result};
 
 /// Apply Delta sequentially from the baseline content to rebuild the complete file content.
 ///
@@ -26,13 +26,7 @@ pub fn apply_deltas(content: &str, deltas: &[Delta]) -> Result<String> {
         lines = apply_line_diff(&lines, &delta.diff)?;
     }
 
-    let ends_with_newline = content.ends_with('\n');
-    let result = lines.join("\n");
-    Ok(if ends_with_newline {
-        format!("{}\n", result)
-    } else {
-        result
-    })
+    Ok(lines.join("\n"))
 }
 
 /// Batch apply multiple deltas with optimized sorting and processing.
@@ -41,12 +35,12 @@ pub fn apply_deltas(content: &str, deltas: &[Delta]) -> Result<String> {
 /// This is more efficient than applying deltas sequentially when there are multiple deltas.
 pub fn apply_deltas_batch(content: &str, deltas: &[Delta]) -> Result<String> {
     if deltas.is_empty() {
-        return Ok(content.to_string());
+        let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+        return Ok(lines.join("\n"));
     }
 
     let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
 
-    // Collect all hunks from all deltas with their delta index
     let mut all_hunks: Vec<(usize, usize, &Hunk)> = Vec::new();
     for (delta_idx, delta) in deltas.iter().enumerate() {
         for (hunk_idx, hunk) in delta.diff.hunks.iter().enumerate() {
@@ -54,21 +48,13 @@ pub fn apply_deltas_batch(content: &str, deltas: &[Delta]) -> Result<String> {
         }
     }
 
-    // Sort all hunks by their old_start position
     all_hunks.sort_unstable_by_key(|(_, _, h)| h.old_start);
 
-    // Apply hunks in sorted order
     for (_delta_idx, _hunk_idx, hunk) in &all_hunks {
         apply_single_hunk_to_lines(&mut lines, hunk)?;
     }
 
-    let ends_with_newline = content.ends_with('\n');
-    let result = lines.join("\n");
-    Ok(if ends_with_newline {
-        format!("{}\n", result)
-    } else {
-        result
-    })
+    Ok(lines.join("\n"))
 }
 
 /// Apply a single hunk to the lines vector in-place.
@@ -77,7 +63,7 @@ fn apply_single_hunk_to_lines(lines: &mut Vec<String>, hunk: &Hunk) -> Result<()
     let hunk_end = hunk_start + hunk.old_len as usize;
 
     if hunk_end > lines.len() {
-        return Err(StratumError::Engine(format!(
+        return Err(LayertwineError::Engine(format!(
             "Hunk out of range: old_start={}, old_len={}, total rows={}",
             hunk.old_start,
             hunk.old_len,
@@ -138,13 +124,13 @@ fn apply_line_diff(lines: &[String], diff: &LineDiff) -> Result<Vec<String>> {
 
         // Ensure that hunk locations do not overlap and do not cross boundaries
         if hunk_start < old_pos {
-            return Err(StratumError::Engine(format!(
+            return Err(LayertwineError::Engine(format!(
                 "Overlapping hunk: old_start={}, processed to position {}",
                 hunk.old_start, old_pos
             )));
         }
         if hunk_end > lines.len() {
-            return Err(StratumError::Engine(format!(
+            return Err(LayertwineError::Engine(format!(
                 "Hunk out of range: old_start={}, old_len={}, total rows={}",
                 hunk.old_start,
                 hunk.old_len,
@@ -470,7 +456,7 @@ mod tests {
     fn test_apply_empty_deltas() {
         let content = "hello\nworld\n";
         let result = apply_deltas(content, &[]).unwrap();
-        assert_eq!(result, "hello\nworld\n");
+        assert_eq!(result, "hello\nworld");
     }
 
     #[test]
@@ -496,7 +482,7 @@ mod tests {
             SourceType::Manual,
         );
         let result = apply_deltas(content, &[delta]).unwrap();
-        assert_eq!(result, "line1\nline2\nline3\n");
+        assert_eq!(result, "line1\nline2\nline3");
     }
 
     #[test]
@@ -519,7 +505,7 @@ mod tests {
             SourceType::Manual,
         );
         let result = apply_deltas(content, &[delta]).unwrap();
-        assert_eq!(result, "line1\nline3\n");
+        assert_eq!(result, "line1\nline3");
     }
 
     #[test]
@@ -544,7 +530,7 @@ mod tests {
             SourceType::Manual,
         );
         let result = apply_deltas(content, &[delta]).unwrap();
-        assert_eq!(result, "aaa\nxxx\nccc\n");
+        assert_eq!(result, "aaa\nxxx\nccc");
     }
 
     #[test]
@@ -590,7 +576,7 @@ mod tests {
             SourceType::Manual,
         );
         let result = apply_deltas(content, &[delta1, delta2]).unwrap();
-        assert_eq!(result, "a\nx\ny\nc\n");
+        assert_eq!(result, "a\nx\ny\nc");
     }
 
     #[test]

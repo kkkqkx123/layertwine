@@ -1,6 +1,6 @@
 # 性能基准测试
 
-本目录包含 Stratum 项目的性能基准测试，使用 Criterion 库进行测试。
+本目录包含 Layertwine 项目的性能基准测试，使用 Criterion 库进行测试。
 
 ## 基准测试概览
 

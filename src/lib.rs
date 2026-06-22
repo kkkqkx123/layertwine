@@ -11,6 +11,9 @@ pub mod layered;
 pub mod runtime;
 pub mod storage;
 
+#[cfg(test)]
+mod test_utils;
+
 // Re-export common types
 pub use crate::error as err;
-pub use error::{StorageError, StorageResult, StratumError};
+pub use error::{LayertwineError, StorageError, StorageResult};

@@ -1,12 +1,12 @@
-# Stratum CLI 使用指南
+# Layertwine CLI 使用指南
 
-> Stratum（地层）—— 轻量文件编辑历史存储层，专为多 Agent 协同 + 人工编辑混合场景设计。
+> Layertwine（地层）—— 轻量文件编辑历史存储层，专为多 Agent 协同 + 人工编辑混合场景设计。
 
 ## 概述
 
-Stratum 提供一套完整的命令行接口（CLI），用于管理文件编辑历史、分层状态机流转、检查点提交、分支管理、快照备份以及 Git 双向同步。
+Layertwine 提供一套完整的命令行接口（CLI），用于管理文件编辑历史、分层状态机流转、检查点提交、分支管理、快照备份以及 Git 双向同步。
 
-当前 CLI 通过 Rust 库暴露，入口为 `stratum::cli::run()`。所有功能均通过 clap v4 子命令系统组织。
+当前 CLI 通过 Rust 库暴露，入口为 `layertwine::cli::run()`。所有功能均通过 clap v4 子命令系统组织。
 
 ---
 
@@ -14,7 +14,7 @@ Stratum 提供一套完整的命令行接口（CLI），用于管理文件编辑
 
 | 选项                    | 说明                         | 默认值                |
 | ----------------------- | ---------------------------- | --------------------- |
-| `-d, --db <PATH>`       | Stratum 数据库文件路径       | `.stratum/stratum.db` |
+| `-d, --db <PATH>`       | Layertwine 数据库文件路径       | `.layertwine/layertwine.db` |
 | `-g, --git-repo <PATH>` | Git 仓库路径（用于同步操作） | 无                    |
 | `--json`                | JSON 输出模式（全局标志）    | 否                    |
 | `-h, --help`            | 打印帮助信息                 | —                     |
@@ -24,13 +24,13 @@ Stratum 提供一套完整的命令行接口（CLI），用于管理文件编辑
 
 ## 命令参考
 
-### `stratum init` — 初始化仓库
+### `layertwine init` — 初始化仓库
 
 ```
-stratum init [--git-ref <REF>]
+layertwine init [--git-ref <REF>]
 ```
 
-在当前目录初始化一个新的 Stratum 仓库。若指定了 `--git-repo`，则同时从 Git 仓库导入基线。
+在当前目录初始化一个新的 Layertwine 仓库。若指定了 `--git-repo`，则同时从 Git 仓库导入基线。
 
 **选项：**
 
@@ -42,17 +42,17 @@ stratum init [--git-ref <REF>]
 
 ```bash
 # 初始化空仓库
-stratum init
+layertwine init
 
 # 从 Git 仓库导入基线初始化
-stratum --git-repo /path/to/repo init --git-ref HEAD
+layertwine --git-repo /path/to/repo init --git-ref HEAD
 ```
 
 **输出：**
 
 ```
-  Initializing stratum repository ... done
-Initialized empty stratum repository at '.stratum/stratum.db'
+  Initializing layertwine repository ... done
+Initialized empty layertwine repository at '.layertwine/layertwine.db'
   Manual partition: <uuid>
   Staged partition: <uuid>
   Branch: main
@@ -60,10 +60,10 @@ Initialized empty stratum repository at '.stratum/stratum.db'
 
 ---
 
-### `stratum status` — 查看当前状态
+### `layertwine status` — 查看当前状态
 
 ```
-stratum status
+layertwine status
 ```
 
 显示所有层的分区状态，包括当前快照 ID 和历史记录数量。
@@ -99,10 +99,10 @@ approval         approved:agent-01        c3d4e5f6a1b2       1 snapshots
 
 ---
 
-### `stratum edit` — 手动编辑文件
+### `layertwine edit` — 手动编辑文件
 
 ```
-stratum edit <FILE> [-c, --content <CONTENT>]
+layertwine edit <FILE> [-c, --content <CONTENT>]
 ```
 
 对指定文件进行手动编辑，记录到 `manual_edit` 层。编辑后自动合并到 `staged` 层。
@@ -117,7 +117,7 @@ stratum edit <FILE> [-c, --content <CONTENT>]
 **示例：**
 
 ```bash
-stratum edit src/main.rs -c "fn main() {}"
+layertwine edit src/main.rs -c "fn main() {}"
 ```
 
 **输出：**
@@ -129,11 +129,11 @@ Merged to staged -> snapshot f6e5d4c3b2a1
 
 ---
 
-### `stratum agent` — Agent 操作
+### `layertwine agent` — Agent 操作
 
 ```
-stratum agent <AGENT_ID> edit <FILE> [-c, --content <CONTENT>]
-stratum agent <AGENT_ID> submit
+layertwine agent <AGENT_ID> edit <FILE> [-c, --content <CONTENT>]
+layertwine agent <AGENT_ID> submit
 ```
 
 管理 Agent 的编辑和提交流程。
@@ -157,10 +157,10 @@ stratum agent <AGENT_ID> submit
 
 ```bash
 # Agent 编辑文件
-stratum agent agent-01 edit src/module.rs -c "pub fn new() -> Self { Self }"
+layertwine agent agent-01 edit src/module.rs -c "pub fn new() -> Self { Self }"
 
 # Agent 提交审核
-stratum agent agent-01 submit
+layertwine agent agent-01 submit
 ```
 
 **输出：**
@@ -172,10 +172,10 @@ Agent 'agent-01' submitted for approval -> snapshot c3d4e5f6a1b2
 
 ---
 
-### `stratum approve` — 审核通过 Agent 修改
+### `layertwine approve` — 审核通过 Agent 修改
 
 ```
-stratum approve <AGENT_ID>
+layertwine approve <AGENT_ID>
 ```
 
 审核通过指定 Agent 的修改。流程：
@@ -193,7 +193,7 @@ stratum approve <AGENT_ID>
 **示例：**
 
 ```bash
-stratum approve agent-01
+layertwine approve agent-01
 ```
 
 **输出：**
@@ -205,10 +205,10 @@ Merged to staged -> snapshot e5f6a1b2c3d4
 
 ---
 
-### `stratum commit` — 提交检查点
+### `layertwine commit` — 提交检查点
 
 ```
-stratum commit -m <MESSAGE> [-a <AUTHOR>]
+layertwine commit -m <MESSAGE> [-a <AUTHOR>]
 ```
 
 将 `staged` 层的当前状态提交为一个检查点（Checkpoint），记录到自研检查点仓库。
@@ -223,7 +223,7 @@ stratum commit -m <MESSAGE> [-a <AUTHOR>]
 **示例：**
 
 ```bash
-stratum commit -m "实现用户登录模块" -a "developer-1"
+layertwine commit -m "实现用户登录模块" -a "developer-1"
 ```
 
 **输出：**
@@ -234,10 +234,10 @@ Committed checkpoint a1b2c3d4e5f6: 实现用户登录模块
 
 ---
 
-### `stratum log` — 查看提交历史
+### `layertwine log` — 查看提交历史
 
 ```
-stratum log [--count <N>]
+layertwine log [--count <N>]
 ```
 
 查看检查点提交历史，支持表格和 JSON 输出。
@@ -263,12 +263,12 @@ Total: 3 checkpoint(s)
 
 ---
 
-### `stratum branch` — 分支管理
+### `layertwine branch` — 分支管理
 
 ```
-stratum branch create <NAME>
-stratum branch switch <NAME>
-stratum branch list
+layertwine branch create <NAME>
+layertwine branch switch <NAME>
+layertwine branch list
 ```
 
 **子命令：**
@@ -283,13 +283,13 @@ stratum branch list
 
 ```bash
 # 创建新分支
-stratum branch create feature/login
+layertwine branch create feature/login
 
 # 切换分支
-stratum branch switch feature/login
+layertwine branch switch feature/login
 
 # 列出所有分支
-stratum branch list
+layertwine branch list
 ```
 
 **输出（list）：**
@@ -305,10 +305,10 @@ Branch                   Head                 Updated
 
 ---
 
-### `stratum merge` — 合并分支
+### `layertwine merge` — 合并分支
 
 ```
-stratum merge <BRANCH> [-m, --message <MESSAGE>]
+layertwine merge <BRANCH> [-m, --message <MESSAGE>]
 ```
 
 将指定分支合并到当前分支。
@@ -323,7 +323,7 @@ stratum merge <BRANCH> [-m, --message <MESSAGE>]
 **示例：**
 
 ```bash
-stratum merge feature/login -m "合并登录功能到主分支"
+layertwine merge feature/login -m "合并登录功能到主分支"
 ```
 
 **输出：**
@@ -334,13 +334,13 @@ Merged 'feature/login' into 'main' -> checkpoint d4e5f6a1b2c3
 
 ---
 
-### `stratum backup` — 备份快照
+### `layertwine backup` — 备份快照
 
 ```
-stratum backup <SNAPSHOT_ID> [--label <LABEL>]
+layertwine backup <SNAPSHOT_ID> [--label <LABEL>]
 ```
 
-将指定快照备份到独立的备份仓库（默认写入 `stratum-backup.db`）。
+将指定快照备份到独立的备份仓库（默认写入 `layertwine-backup.db`）。
 
 **参数：**
 
@@ -352,7 +352,7 @@ stratum backup <SNAPSHOT_ID> [--label <LABEL>]
 **示例：**
 
 ```bash
-stratum backup a1b2c3d4e5f6 --label "发布前基线"
+layertwine backup a1b2c3d4e5f6 --label "发布前基线"
 ```
 
 **输出：**
@@ -363,10 +363,10 @@ Backup f6e5d4c3b2a1 created for snapshot a1b2c3d4e5f6 (label: 发布前基线)
 
 ---
 
-### `stratum restore` — 从备份恢复
+### `layertwine restore` — 从备份恢复
 
 ```
-stratum restore <BACKUP_ID>
+layertwine restore <BACKUP_ID>
 ```
 
 从备份仓库恢复指定备份的快照数据到主存储。
@@ -380,7 +380,7 @@ stratum restore <BACKUP_ID>
 **示例：**
 
 ```bash
-stratum restore f6e5d4c3b2a1
+layertwine restore f6e5d4c3b2a1
 ```
 
 **输出：**
@@ -391,10 +391,10 @@ Restored backup f6e5d4c3b2a1 -> file: src/main.rs
 
 ---
 
-### `stratum gc` — 执行垃圾回收
+### `layertwine gc` — 执行垃圾回收
 
 ```
-stratum gc
+layertwine gc
 ```
 
 清理冗余检查点和快照数据。当 Delta 链深度超过阈值时触发深度压缩。
@@ -402,7 +402,7 @@ stratum gc
 **示例：**
 
 ```bash
-stratum gc
+layertwine gc
 ```
 
 **输出：**
@@ -415,10 +415,10 @@ GC complete: 5 checkpoints removed, 12 snapshots freed, 102400 bytes
 
 ---
 
-### `stratum push` — 推送到 Git
+### `layertwine push` — 推送到 Git
 
 ```
-stratum push [--remote <REMOTE>] [-m, --message <MESSAGE>]
+layertwine push [--remote <REMOTE>] [-m, --message <MESSAGE>]
 ```
 
 将当前分支的检查点历史推送到关联的 Git 仓库。需要预先通过 `--git-repo` 指定 Git 仓库路径。
@@ -428,12 +428,12 @@ stratum push [--remote <REMOTE>] [-m, --message <MESSAGE>]
 | 参数                      | 说明                                           |
 | ------------------------- | ---------------------------------------------- |
 | `--remote <REMOTE>`       | Git 远程名称（可选，默认 `origin`）            |
-| `-m, --message <MESSAGE>` | Git 提交信息（可选，默认 `sync from stratum`） |
+| `-m, --message <MESSAGE>` | Git 提交信息（可选，默认 `sync from layertwine`） |
 
 **示例：**
 
 ```bash
-stratum --git-repo /path/to/repo push --remote origin -m "同步检查点到 Git"
+layertwine --git-repo /path/to/repo push --remote origin -m "同步检查点到 Git"
 ```
 
 **输出：**
@@ -445,13 +445,13 @@ Pushed to remote 'origin' (commit: 9f8e7d6c5b4a)
 
 ---
 
-### `stratum pull` — 从 Git 拉取
+### `layertwine pull` — 从 Git 拉取
 
 ```
-stratum pull [--remote <REMOTE>] [--git-ref <REF>]
+layertwine pull [--remote <REMOTE>] [--git-ref <REF>]
 ```
 
-从关联的 Git 仓库拉取并导入最新提交作为 Stratum 检查点。需要预先通过 `--git-repo` 指定 Git 仓库路径。
+从关联的 Git 仓库拉取并导入最新提交作为 Layertwine 检查点。需要预先通过 `--git-repo` 指定 Git 仓库路径。
 
 **参数：**
 
@@ -463,7 +463,7 @@ stratum pull [--remote <REMOTE>] [--git-ref <REF>]
 **示例：**
 
 ```bash
-stratum --git-repo /path/to/repo pull --remote origin --git-ref main
+layertwine --git-repo /path/to/repo pull --remote origin --git-ref main
 ```
 
 **输出：**
@@ -482,56 +482,56 @@ Pulled from remote 'origin' ref 'main'
 
 ```bash
 # 1. 初始化仓库
-stratum init
+layertwine init
 
 # 2. 编辑文件
-stratum edit src/main.rs -c "fn main() { println!(\"Hello\"); }"
+layertwine edit src/main.rs -c "fn main() { println!(\"Hello\"); }"
 
 # 3. 提交检查点
-stratum commit -m "初始提交"
+layertwine commit -m "初始提交"
 
 # 4. 查看状态和历史
-stratum status
-stratum log
+layertwine status
+layertwine log
 ```
 
 ### 多 Agent 协同流程
 
 ```bash
 # 1. 初始化
-stratum init
+layertwine init
 
 # 2. Agent A 编辑并提交审核
-stratum agent agent-a edit src/auth.rs -c "pub fn login() {}"
-stratum agent agent-a submit
+layertwine agent agent-a edit src/auth.rs -c "pub fn login() {}"
+layertwine agent agent-a submit
 
 # 3. Agent B 编辑并提交审核
-stratum agent agent-b edit src/db.rs -c "pub fn connect() {}"
-stratum agent agent-b submit
+layertwine agent agent-b edit src/db.rs -c "pub fn connect() {}"
+layertwine agent agent-b submit
 
 # 4. 人工审核
-stratum approve agent-a
-stratum approve agent-b
+layertwine approve agent-a
+layertwine approve agent-b
 
 # 5. 提交最终检查点
-stratum commit -m "合并 auth 和 db 模块"
+layertwine commit -m "合并 auth 和 db 模块"
 ```
 
 ### Git 集成流程
 
 ```bash
 # 1. 从已有 Git 仓库初始化
-stratum --git-repo /path/to/repo init --git-ref main
+layertwine --git-repo /path/to/repo init --git-ref main
 
-# 2. 在 Stratum 中进行编辑
-stratum edit src/lib.rs -c "// new code"
-stratum commit -m "Stratum 编辑"
+# 2. 在 Layertwine 中进行编辑
+layertwine edit src/lib.rs -c "// new code"
+layertwine commit -m "Layertwine 编辑"
 
 # 3. 将检查点推回 Git
-stratum --git-repo /path/to/repo push
+layertwine --git-repo /path/to/repo push
 
-# 4. 拉取 Git 更新到 Stratum
-stratum --git-repo /path/to/repo pull
+# 4. 拉取 Git 更新到 Layertwine
+layertwine --git-repo /path/to/repo pull
 ```
 
 ---

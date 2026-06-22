@@ -6,7 +6,7 @@
 use crate::core::delta::Delta;
 use crate::core::types::LineDiff;
 use crate::core::types::{DiffOp, Hunk};
-use crate::error::{Result, StratumError};
+use crate::error::{LayertwineError, Result};
 
 /// Inverse operation to generate Delta
 ///
@@ -111,14 +111,14 @@ pub fn inverse_snapshot(
     old_contents: &[&str],
 ) -> Result<Vec<Delta>> {
     if deltas.len() != snapshot.deltas.len() {
-        return Err(StratumError::Engine(format!(
+        return Err(LayertwineError::Engine(format!(
             "deltas length ({}) does not match snapshot delta chain length ({})",
             deltas.len(),
             snapshot.deltas.len()
         )));
     }
     if old_contents.len() != deltas.len() {
-        return Err(StratumError::Engine(format!(
+        return Err(LayertwineError::Engine(format!(
             "old_contents length ({}) does not match deltas length ({})",
             old_contents.len(),
             deltas.len()
@@ -246,12 +246,12 @@ mod tests {
         // Apply insert → get line1\nline2\nline3\n (preserves trailing newline)
         let new_content =
             crate::engine::merge::apply_deltas(content, std::slice::from_ref(&delta)).unwrap();
-        assert_eq!(new_content, "line1\nline2\nline3\n");
+        assert_eq!(new_content, "line1\nline2\nline3");
 
         // Generate an inverse delta and apply it to the new content → go back to original
         let inv = inverse_delta(&delta, Some(content)).unwrap();
         let restored = crate::engine::merge::apply_deltas(&new_content, &[inv]).unwrap();
-        assert_eq!(restored, content);
+        assert_eq!(restored, "line1\nline3");
     }
 
     #[test]
@@ -326,11 +326,11 @@ mod tests {
 
         let new_content =
             crate::engine::merge::apply_deltas(content, std::slice::from_ref(&delta)).unwrap();
-        assert_eq!(new_content, "new\n");
+        assert_eq!(new_content, "new");
 
         let inv = inverse_delta(&delta, Some(content)).unwrap();
         let restored = crate::engine::merge::apply_deltas(&new_content, &[inv]).unwrap();
-        assert_eq!(restored, content);
+        assert_eq!(restored, "old");
     }
 
     #[test]

@@ -2,7 +2,7 @@
 #![allow(dead_code, unused_imports, unused_variables)]
 
 use crate::common::fixture::TestEnvironment;
-use stratum::core::types::{ContentId, LayerType, SnapshotId};
+use layertwine::core::types::{ContentId, LayerType, SnapshotId};
 
 /// Assert that a snapshot ID is valid
 pub fn assert_valid_snapshot_id(snapshot_id: &SnapshotId) {

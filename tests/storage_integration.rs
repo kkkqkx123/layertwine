@@ -13,19 +13,19 @@
 
 use std::path::PathBuf;
 
-use stratum::core::delta::Delta;
-use stratum::core::file_node::FileNode;
-use stratum::core::partition::Partition;
-use stratum::core::snapshot::{Snapshot, SnapshotCompression};
-use stratum::core::types::{
+use layertwine::core::delta::Delta;
+use layertwine::core::file_node::FileNode;
+use layertwine::core::partition::Partition;
+use layertwine::core::snapshot::{Snapshot, SnapshotCompression};
+use layertwine::core::types::{
     AgentInstanceId, ContentId, DiffOp, Hunk, LayerType, LineDiff, PartitionType, SourceType,
 };
-use stratum::storage::repository::{
+use layertwine::storage::repository::{
     AtomicOps, BranchStore, CheckpointStore, DeltaStore, FileNodeStore, LayerStore, MetadataStore,
     PartitionStore, SnapshotStore,
 };
-use stratum::storage::SqliteStorage;
-use stratum::StorageResult;
+use layertwine::storage::SqliteStorage;
+use layertwine::StorageResult;
 
 fn create_test_storage() -> StorageResult<SqliteStorage> {
     SqliteStorage::new_in_memory()
@@ -735,9 +735,9 @@ fn test_atomic_ops_success() -> StorageResult<()> {
             partition_type: PartitionType::Manual.name(),
             created_at: chrono::Utc::now().timestamp_millis(),
             has_conflicts: false,
-        content: None,
-        source: String::new(),
-        compression: SnapshotCompression::None,
+            content: None,
+            source: String::new(),
+            compression: SnapshotCompression::None,
         };
 
         storage.store_snapshot(&snapshot, b"content")?;
@@ -769,15 +769,15 @@ fn test_atomic_ops_rollback_on_error() -> StorageResult<()> {
             partition_type: PartitionType::Manual.name(),
             created_at: chrono::Utc::now().timestamp_millis(),
             has_conflicts: false,
-        content: None,
-        source: String::new(),
-        compression: SnapshotCompression::None,
+            content: None,
+            source: String::new(),
+            compression: SnapshotCompression::None,
         };
 
         storage.store_snapshot(&snapshot, b"content")?;
 
         // Simulate an error
-        Err(stratum::StorageError::NotFound("test error".to_string()))
+        Err(layertwine::StorageError::NotFound("test error".to_string()))
     });
 
     // Should return the error
@@ -861,7 +861,7 @@ fn test_atomic_ops_rollback_on_error() -> StorageResult<()> {
 //         storage.store_snapshot(&snapshot, b"content")?;
 //
 //         // Simulate an error
-//         return Err(stratum::StorageError::NotFound("test error".to_string()));
+//         return Err(layertwine::StorageError::NotFound("test error".to_string()));
 //     });
 //
 //     // Should return the error
@@ -884,11 +884,11 @@ fn test_store_and_get_checkpoint() -> StorageResult<()> {
     let checkpoint_id = ContentId::from_content(b"checkpoint1");
     let parent_id = ContentId::from_content(b"parent");
 
-    let checkpoint = stratum::checkpoint::Checkpoint {
+    let checkpoint = layertwine::checkpoint::Checkpoint {
         id: checkpoint_id,
         parents: vec![parent_id],
         baseline_snapshots: vec![ContentId::from_content(b"snapshot1")],
-        metadata: stratum::checkpoint::CheckpointMetadata {
+        metadata: layertwine::checkpoint::CheckpointMetadata {
             author: "test_user".to_string(),
             message: "test commit".to_string(),
             git_anchor: Some("abc123".to_string()),
@@ -915,11 +915,11 @@ fn test_checkpoint_exists() -> StorageResult<()> {
     let storage = SqliteStorage::new_full_in_memory()?;
 
     let checkpoint_id = ContentId::from_content(b"checkpoint1");
-    let checkpoint = stratum::checkpoint::Checkpoint {
+    let checkpoint = layertwine::checkpoint::Checkpoint {
         id: checkpoint_id,
         parents: vec![],
         baseline_snapshots: vec![],
-        metadata: stratum::checkpoint::CheckpointMetadata {
+        metadata: layertwine::checkpoint::CheckpointMetadata {
             author: "test_user".to_string(),
             message: "test".to_string(),
             git_anchor: None,
@@ -939,30 +939,30 @@ fn test_checkpoint_exists() -> StorageResult<()> {
 fn test_list_checkpoints() -> StorageResult<()> {
     let storage = SqliteStorage::new_full_in_memory()?;
 
-    let checkpoint1 = stratum::checkpoint::Checkpoint {
+    let checkpoint1 = layertwine::checkpoint::Checkpoint {
         id: ContentId::from_content(b"checkpoint1"),
         parents: vec![],
         baseline_snapshots: vec![],
-        metadata: stratum::checkpoint::CheckpointMetadata {
+        metadata: layertwine::checkpoint::CheckpointMetadata {
             author: "user1".to_string(),
             message: "first".to_string(),
             git_anchor: None,
         },
         created_at: 1000,
-    snapshot_sources: std::collections::HashMap::new(),
+        snapshot_sources: std::collections::HashMap::new(),
     };
 
-    let checkpoint2 = stratum::checkpoint::Checkpoint {
+    let checkpoint2 = layertwine::checkpoint::Checkpoint {
         id: ContentId::from_content(b"checkpoint2"),
         parents: vec![],
         baseline_snapshots: vec![],
-        metadata: stratum::checkpoint::CheckpointMetadata {
+        metadata: layertwine::checkpoint::CheckpointMetadata {
             author: "user2".to_string(),
             message: "second".to_string(),
             git_anchor: None,
         },
         created_at: 2000,
-    snapshot_sources: std::collections::HashMap::new(),
+        snapshot_sources: std::collections::HashMap::new(),
     };
 
     storage.store_checkpoint(&checkpoint1)?;
@@ -982,11 +982,11 @@ fn test_delete_checkpoint() -> StorageResult<()> {
     let storage = SqliteStorage::new_full_in_memory()?;
 
     let checkpoint_id = ContentId::from_content(b"checkpoint1");
-    let checkpoint = stratum::checkpoint::Checkpoint {
+    let checkpoint = layertwine::checkpoint::Checkpoint {
         id: checkpoint_id,
         parents: vec![],
         baseline_snapshots: vec![],
-        metadata: stratum::checkpoint::CheckpointMetadata {
+        metadata: layertwine::checkpoint::CheckpointMetadata {
             author: "user".to_string(),
             message: "test".to_string(),
             git_anchor: None,
@@ -1014,7 +1014,7 @@ fn test_store_and_get_branch() -> StorageResult<()> {
 
     let branch_id = ContentId::from_content(b"checkpoint1");
 
-    let branch = stratum::checkpoint::branch::Branch {
+    let branch = layertwine::checkpoint::branch::Branch {
         name: "main".to_string(),
         head: branch_id,
         created_at: chrono::Utc::now().timestamp_millis(),
@@ -1037,7 +1037,7 @@ fn test_update_branch_head() -> StorageResult<()> {
     let old_head = ContentId::from_content(b"checkpoint1");
     let new_head = ContentId::from_content(b"checkpoint2");
 
-    let branch = stratum::checkpoint::branch::Branch {
+    let branch = layertwine::checkpoint::branch::Branch {
         name: "main".to_string(),
         head: old_head,
         created_at: 1000,
@@ -1058,14 +1058,14 @@ fn test_update_branch_head() -> StorageResult<()> {
 fn test_list_branches() -> StorageResult<()> {
     let storage = SqliteStorage::new_full_in_memory()?;
 
-    let branch1 = stratum::checkpoint::branch::Branch {
+    let branch1 = layertwine::checkpoint::branch::Branch {
         name: "main".to_string(),
         head: ContentId::from_content(b"checkpoint1"),
         created_at: 1000,
         updated_at: 1000,
     };
 
-    let branch2 = stratum::checkpoint::branch::Branch {
+    let branch2 = layertwine::checkpoint::branch::Branch {
         name: "feature".to_string(),
         head: ContentId::from_content(b"checkpoint2"),
         created_at: 2000,
@@ -1089,7 +1089,7 @@ fn test_list_branches() -> StorageResult<()> {
 fn test_delete_branch() -> StorageResult<()> {
     let storage = SqliteStorage::new_full_in_memory()?;
 
-    let branch = stratum::checkpoint::branch::Branch {
+    let branch = layertwine::checkpoint::branch::Branch {
         name: "test_branch".to_string(),
         head: ContentId::from_content(b"checkpoint1"),
         created_at: chrono::Utc::now().timestamp_millis(),
@@ -1139,7 +1139,7 @@ fn test_store_and_get_layer() -> StorageResult<()> {
     let partition_id1 = uuid::Uuid::now_v7();
     let partition_id2 = uuid::Uuid::now_v7();
 
-    let layer = stratum::core::layer::Layer {
+    let layer = layertwine::core::layer::Layer {
         layer_type: LayerType::ManualEdit,
         partitions: vec![partition_id1, partition_id2],
     };
@@ -1159,12 +1159,12 @@ fn test_store_and_get_layer() -> StorageResult<()> {
 fn test_list_layer_types() -> StorageResult<()> {
     let storage = create_test_storage()?;
 
-    let layer1 = stratum::core::layer::Layer {
+    let layer1 = layertwine::core::layer::Layer {
         layer_type: LayerType::ManualEdit,
         partitions: vec![uuid::Uuid::now_v7()],
     };
 
-    let layer2 = stratum::core::layer::Layer {
+    let layer2 = layertwine::core::layer::Layer {
         layer_type: LayerType::AgentEdit,
         partitions: vec![uuid::Uuid::now_v7()],
     };
@@ -1184,7 +1184,7 @@ fn test_list_layer_types() -> StorageResult<()> {
 fn test_delete_layer() -> StorageResult<()> {
     let storage = create_test_storage()?;
 
-    let layer = stratum::core::layer::Layer {
+    let layer = layertwine::core::layer::Layer {
         layer_type: LayerType::ManualEdit,
         partitions: vec![uuid::Uuid::now_v7()],
     };

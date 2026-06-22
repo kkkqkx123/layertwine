@@ -3,7 +3,7 @@
 use crate::common::fixture::{TestConfig, TestEnvironment};
 use crate::common::helpers::*;
 use crate::common::output::*;
-use stratum::api::*;
+use layertwine::api::*;
 
 #[test]
 fn test_large_file_handling() {

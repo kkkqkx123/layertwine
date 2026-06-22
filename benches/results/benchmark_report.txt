@@ -1,4 +1,4 @@
-Stratum Benchmark Results Report
+Layertwine Benchmark Results Report
 ================================================================================
 Generated: 2026-06-10 02:50:09
 Total Benchmarks: 32

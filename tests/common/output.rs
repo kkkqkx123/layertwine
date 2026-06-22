@@ -1,11 +1,11 @@
 //! Formatted output utilities for E2E tests
 #![allow(dead_code, unused_imports, unused_variables)]
 
+use layertwine::api::StatusResponse;
+use layertwine::core::partition::Partition;
+use layertwine::core::types::LayerType;
+use layertwine::core::types::SnapshotId;
 use std::fmt;
-use stratum::api::StatusResponse;
-use stratum::core::partition::Partition;
-use stratum::core::types::LayerType;
-use stratum::core::types::SnapshotId;
 
 /// Formatted layer state output
 #[derive(Debug)]
@@ -172,7 +172,7 @@ pub fn print_layer_state_from_status(status: &StatusResponse) {
     print_section_header("Current Layer State");
 
     // Group partitions by layer
-    let mut layers: std::collections::HashMap<String, Vec<&stratum::api::PartitionInfo>> =
+    let mut layers: std::collections::HashMap<String, Vec<&layertwine::api::PartitionInfo>> =
         std::collections::HashMap::new();
 
     for partition in &status.partitions {

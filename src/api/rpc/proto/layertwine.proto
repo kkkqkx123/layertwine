@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package stratum;
+package layertwine;
 
-service Stratum {
+service Layertwine {
     // Repository lifecycle
     rpc Init(InitRequest) returns (InitResponse);
     rpc Status(Empty) returns (StatusResponse);
@@ -29,8 +29,25 @@ service Stratum {
 
     // Maintenance
     rpc Gc(Empty) returns (GcResponse);
+    rpc Compact(CompactRequest) returns (CompactResponse);
     rpc Push(PushRequest) returns (PushResponse);
     rpc Pull(PullRequest) returns (PullResponse);
+
+    // Show / diff display
+    rpc Show(ShowRequest) returns (ShowResponse);
+
+    // Checkpoint restore operations
+    rpc CheckpointRestore(CheckpointRestoreRequest) returns (CheckpointRestoreResponse);
+    rpc CheckpointRestoreByTime(CheckpointRestoreByTimeRequest) returns (CheckpointRestoreResponse);
+    rpc CheckpointDiff(CheckpointDiffRequest) returns (CheckpointDiffResponse);
+    rpc CheckpointRollback(CheckpointRollbackRequest) returns (CheckpointRollbackResponse);
+
+    // Granular approval operations
+    rpc ListPendingApprovals(Empty) returns (ListPendingApprovalsResponse);
+    rpc ApproveAgent(ApproveAgentRequest) returns (ApproveAgentResponse);
+    rpc RejectAgent(RejectAgentRequest) returns (RejectAgentResponse);
+    rpc MergeToUnified(MergeToUnifiedRequest) returns (MergeToUnifiedResponse);
+    rpc MergeToStaged(MergeToStagedRequest) returns (MergeToStagedResponse);
 }
 
 message Empty {}
@@ -210,4 +227,126 @@ message PullRequest {
 message PullResponse {
     string remote = 1;
     string git_ref = 2;
+}
+
+message CompactRequest {
+    optional bool vacuum_full = 1;
+}
+
+message CompactResponse {
+    bool wal_checkpointed = 1;
+    int64 freelist_before = 2;
+    int64 total_pages = 3;
+    int64 freelist_after = 4;
+    bool vacuum_performed = 5;
+    string message = 6;
+}
+
+message ShowRequest {
+    string show_what = 1;
+    optional string target_id = 2;
+}
+
+message ShowResponse {
+    string target = 1;
+    repeated FileDiff diffs = 2;
+}
+
+message FileDiff {
+    string file_path = 1;
+    string unified_diff = 2;
+    uint32 inserts = 3;
+    uint32 deletes = 4;
+}
+
+message CheckpointRestoreRequest {
+    string checkpoint_id = 1;
+    repeated string source_filter = 2;
+}
+
+message CheckpointRestoreByTimeRequest {
+    int64 target_time = 1;
+    repeated string source_filter = 2;
+}
+
+message RestoredSnapshotInfo {
+    string snapshot_id = 1;
+    string source = 2;
+    string content_hex = 3;
+    string content_type = 4;
+}
+
+message CheckpointRestoreResponse {
+    CheckpointInfo checkpoint = 1;
+    repeated RestoredSnapshotInfo snapshots = 2;
+    repeated string ancestry = 3;
+}
+
+message CheckpointDiffRequest {
+    string from_id = 1;
+    string to_id = 2;
+}
+
+message CheckpointDiffResponse {
+    string from_id = 1;
+    string to_id = 2;
+    repeated string added = 3;
+    repeated string removed = 4;
+    repeated string modified = 5;
+    uint32 total_changes = 6;
+}
+
+message CheckpointRollbackRequest {
+    string checkpoint_id = 1;
+}
+
+message CheckpointRollbackResponse {
+    string checkpoint_id = 1;
+    repeated string snapshot_ids = 2;
+}
+
+message ApprovalInfo {
+    string agent_id = 1;
+    string partition_name = 2;
+    string current_snapshot = 3;
+    uint32 history_len = 4;
+}
+
+message ListPendingApprovalsResponse {
+    repeated ApprovalInfo approvals = 1;
+    uint32 total = 2;
+}
+
+message ApproveAgentRequest {
+    string agent_id = 1;
+    optional string integrated_name = 2;
+}
+
+message ApproveAgentResponse {
+    string agent_id = 1;
+    string integrated_snapshot_id = 2;
+}
+
+message RejectAgentRequest {
+    string agent_id = 1;
+}
+
+message RejectAgentResponse {
+    string agent_id = 1;
+    string baseline_snapshot_id = 2;
+}
+
+message MergeToUnifiedRequest {
+    repeated string integration_names = 1;
+}
+
+message MergeToUnifiedResponse {
+    string unified_snapshot_id = 1;
+    uint32 merged_count = 2;
+}
+
+message MergeToStagedRequest {}
+
+message MergeToStagedResponse {
+    string staged_snapshot_id = 1;
 }

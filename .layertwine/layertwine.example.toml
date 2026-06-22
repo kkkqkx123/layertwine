@@ -1,17 +1,17 @@
-# Stratum Example Configuration
+# Layertwine Example Configuration
 #
-# Copy this file to stratum.toml in one of the following locations
+# Copy this file to layertwine.toml in one of the following locations
 # (listed from lowest to highest priority):
-#   ~/.config/stratum.toml          — user-global override
-#   <binary-dir>/stratum.toml       — per-installation override
-#   <db-dir>/stratum.toml           — per-repository override (highest)
+#   ~/.config/layertwine.toml          — user-global override
+#   <binary-dir>/layertwine.toml       — per-installation override
+#   <db-dir>/layertwine.toml           — per-repository override (highest)
 #
 # All fields are optional; missing fields fall back to defaults.
 # See https://toml.io/ for TOML 1.1 syntax.
 
 # Path to the SQLite database file.
-# Default: ".stratum/stratum.db"
-# db_path = ".stratum/stratum.db"
+# Default: ".layertwine/layertwine.db"
+# db_path = ".layertwine/layertwine.db"
 
 [maintenance]
 

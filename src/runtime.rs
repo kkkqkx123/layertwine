@@ -1,4 +1,4 @@
-//! Runtime mode abstraction for Stratum
+//! Runtime mode abstraction for Layertwine
 //!
 //! Provides unified entry point for different runtime modes:
 //! - CLI mode: Command-line interface
@@ -8,7 +8,7 @@
 use std::env;
 use std::net::SocketAddr;
 
-use crate::error::StratumError;
+use crate::error::LayertwineError;
 
 /// Runtime mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,25 +24,26 @@ pub enum RunMode {
 /// Common configuration shared across all modes
 #[derive(Debug, Clone)]
 pub struct CommonConfig {
-    /// Path to the stratum database file
+    /// Path to the layertwine database file
     pub db_path: String,
     /// Path to the Git repository (optional)
     pub git_repo: Option<String>,
 }
 
 /// Parse common configuration from environment variables
-fn parse_common_config() -> Result<CommonConfig, StratumError> {
-    let db_path = env::var("STRATUM_DB_PATH").unwrap_or_else(|_| ".stratum/stratum.db".to_string());
-    let git_repo = env::var("STRATUM_GIT_REPO").ok();
+fn parse_common_config() -> Result<CommonConfig, LayertwineError> {
+    let db_path =
+        env::var("LAYERTWINE_DB_PATH").unwrap_or_else(|_| ".layertwine/layertwine.db".to_string());
+    let git_repo = env::var("LAYERTWINE_GIT_REPO").ok();
 
     Ok(CommonConfig { db_path, git_repo })
 }
 
 /// Detect run mode from environment variables
-fn detect_run_mode(_config: &CommonConfig) -> Result<RunMode, StratumError> {
+fn detect_run_mode(_config: &CommonConfig) -> Result<RunMode, LayertwineError> {
     #[cfg(all(feature = "cli", feature = "http"))]
     {
-        if let Ok(mode) = env::var("STRATUM_MODE") {
+        if let Ok(mode) = env::var("LAYERTWINE_MODE") {
             match mode.to_lowercase().as_str() {
                 "cli" => return Ok(RunMode::Cli),
                 "http" => return Ok(RunMode::Http),
@@ -51,13 +52,13 @@ fn detect_run_mode(_config: &CommonConfig) -> Result<RunMode, StratumError> {
                     return Ok(RunMode::Grpc);
                     #[cfg(not(feature = "grpc"))]
                     {
-                        return Err(StratumError::General(
+                        return Err(LayertwineError::General(
                             "gRPC mode requires 'grpc' feature".into(),
                         ));
                     }
                 }
                 _ => {
-                    return Err(StratumError::General(format!(
+                    return Err(LayertwineError::General(format!(
                         "unknown mode '{}': expected 'cli', 'http', or 'grpc'",
                         mode
                     )))
@@ -81,7 +82,7 @@ fn detect_run_mode(_config: &CommonConfig) -> Result<RunMode, StratumError> {
     }
     #[cfg(all(not(feature = "cli"), not(feature = "http"), not(feature = "grpc")))]
     {
-        Err(StratumError::General(
+        Err(LayertwineError::General(
             "No transport feature enabled. Enable at least one of: cli, http, grpc".into(),
         ))
     }
@@ -89,21 +90,23 @@ fn detect_run_mode(_config: &CommonConfig) -> Result<RunMode, StratumError> {
 
 /// Parse HTTP server bind address
 #[cfg(feature = "http")]
-fn parse_http_addr() -> Result<SocketAddr, StratumError> {
-    let addr_str = env::var("STRATUM_HTTP_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+fn parse_http_addr() -> Result<SocketAddr, LayertwineError> {
+    let addr_str =
+        env::var("LAYERTWINE_HTTP_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
 
     addr_str.parse().map_err(|e| {
-        StratumError::General(format!("invalid HTTP bind address '{}': {}", addr_str, e))
+        LayertwineError::General(format!("invalid HTTP bind address '{}': {}", addr_str, e))
     })
 }
 
 /// Parse gRPC server bind address
 #[cfg(feature = "grpc")]
-fn parse_grpc_addr() -> Result<SocketAddr, StratumError> {
-    let addr_str = env::var("STRATUM_GRPC_ADDR").unwrap_or_else(|_| "127.0.0.1:50051".to_string());
+fn parse_grpc_addr() -> Result<SocketAddr, LayertwineError> {
+    let addr_str =
+        env::var("LAYERTWINE_GRPC_ADDR").unwrap_or_else(|_| "127.0.0.1:50051".to_string());
 
     addr_str.parse().map_err(|e| {
-        StratumError::General(format!("invalid gRPC bind address '{}': {}", addr_str, e))
+        LayertwineError::General(format!("invalid gRPC bind address '{}': {}", addr_str, e))
     })
 }
 
@@ -120,7 +123,7 @@ pub struct RuntimeConfig {
 
 impl RuntimeConfig {
     /// Parse configuration from command-line arguments
-    pub fn parse() -> Result<Self, StratumError> {
+    pub fn parse() -> Result<Self, LayertwineError> {
         let common = parse_common_config()?;
         let mode = detect_run_mode(&common)?;
 
@@ -132,7 +135,7 @@ impl RuntimeConfig {
                 }
                 #[cfg(not(feature = "http"))]
                 {
-                    return Err(StratumError::General(
+                    return Err(LayertwineError::General(
                         "HTTP mode requires 'http' feature".into(),
                     ));
                 }
@@ -144,7 +147,7 @@ impl RuntimeConfig {
                 }
                 #[cfg(not(feature = "grpc"))]
                 {
-                    return Err(StratumError::General(
+                    return Err(LayertwineError::General(
                         "gRPC mode requires 'grpc' feature".into(),
                     ));
                 }
@@ -160,11 +163,11 @@ impl RuntimeConfig {
     }
 }
 
-/// Main entry point for Stratum (synchronous version for CLI mode)
+/// Main entry point for Layertwine (synchronous version for CLI mode)
 ///
 /// Parses configuration, creates the service, and runs in the appropriate mode.
 /// This function is used when only CLI mode is available.
-pub fn run_sync() -> Result<(), StratumError> {
+pub fn run_sync() -> Result<(), LayertwineError> {
     let config = RuntimeConfig::parse()?;
 
     match config.mode {
@@ -175,22 +178,22 @@ pub fn run_sync() -> Result<(), StratumError> {
             }
             #[cfg(not(feature = "cli"))]
             {
-                Err(StratumError::General(
+                Err(LayertwineError::General(
                     "CLI mode requires 'cli' feature".into(),
                 ))
             }
         }
-        RunMode::Http | RunMode::Grpc => Err(StratumError::General(
+        RunMode::Http | RunMode::Grpc => Err(LayertwineError::General(
             "Async runtime required for HTTP/gRPC mode. Use run_async() instead.".into(),
         )),
     }
 }
 
-/// Main entry point for Stratum (asynchronous version)
+/// Main entry point for Layertwine (asynchronous version)
 ///
 /// Parses configuration, creates the service, and runs in the appropriate mode.
 /// This function is used when HTTP or gRPC mode is available.
-pub async fn run_async() -> Result<(), StratumError> {
+pub async fn run_async() -> Result<(), LayertwineError> {
     let config = RuntimeConfig::parse()?;
 
     match config.mode {
@@ -201,7 +204,7 @@ pub async fn run_async() -> Result<(), StratumError> {
             }
             #[cfg(not(feature = "cli"))]
             {
-                Err(StratumError::General(
+                Err(LayertwineError::General(
                     "CLI mode requires 'cli' feature".into(),
                 ))
             }
@@ -216,7 +219,7 @@ pub async fn run_async() -> Result<(), StratumError> {
             }
             #[cfg(not(feature = "http"))]
             {
-                Err(StratumError::General(
+                Err(LayertwineError::General(
                     "HTTP mode requires 'http' feature".into(),
                 ))
             }
@@ -231,7 +234,7 @@ pub async fn run_async() -> Result<(), StratumError> {
             }
             #[cfg(not(feature = "grpc"))]
             {
-                Err(StratumError::General(
+                Err(LayertwineError::General(
                     "gRPC mode requires 'grpc' feature".into(),
                 ))
             }
@@ -241,12 +244,12 @@ pub async fn run_async() -> Result<(), StratumError> {
 
 /// Run in CLI mode (synchronous)
 #[cfg(feature = "cli")]
-fn run_cli_sync(_config: &CommonConfig) -> Result<(), StratumError> {
+fn run_cli_sync(_config: &CommonConfig) -> Result<(), LayertwineError> {
     let exit_code = crate::cli::run();
     if exit_code == 0 {
         Ok(())
     } else {
-        Err(StratumError::General(format!(
+        Err(LayertwineError::General(format!(
             "CLI exited with code {}",
             exit_code
         )))
@@ -255,13 +258,13 @@ fn run_cli_sync(_config: &CommonConfig) -> Result<(), StratumError> {
 
 /// Run in CLI mode (async wrapper)
 #[cfg(feature = "cli")]
-async fn run_cli(_config: &CommonConfig) -> Result<(), StratumError> {
+async fn run_cli(_config: &CommonConfig) -> Result<(), LayertwineError> {
     run_cli_sync(_config)
 }
 
 /// Run in HTTP mode
 #[cfg(feature = "http")]
-async fn run_http(config: &CommonConfig, addr: SocketAddr) -> Result<(), StratumError> {
+async fn run_http(config: &CommonConfig, addr: SocketAddr) -> Result<(), LayertwineError> {
     use crate::api::service::{ApiService, ApiServiceImpl, ServiceConfig};
     use std::sync::Arc;
 
@@ -277,7 +280,7 @@ async fn run_http(config: &CommonConfig, addr: SocketAddr) -> Result<(), Stratum
 
 /// Run in gRPC mode
 #[cfg(feature = "grpc")]
-async fn run_grpc(config: &CommonConfig, addr: SocketAddr) -> Result<(), StratumError> {
+async fn run_grpc(config: &CommonConfig, addr: SocketAddr) -> Result<(), LayertwineError> {
     use crate::api::service::{ApiService, ApiServiceImpl, ServiceConfig};
     use std::sync::Arc;
 

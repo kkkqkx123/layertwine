@@ -1,13 +1,13 @@
 use clap::{Parser, Subcommand};
 
-/// Stratum — lightweight file-edit history storage layer for multi-agent + human collaborative editing
+/// Layertwine — lightweight file-edit history storage layer for multi-agent + human collaborative editing
 #[derive(Parser, Debug)]
-#[command(name = "stratum")]
-#[command(about = "Stratum - file-edit history storage layer", long_about = None)]
+#[command(name = "layertwine")]
+#[command(about = "Layertwine - file-edit history storage layer", long_about = None)]
 #[command(version)]
 pub struct Cli {
-    /// Path to the stratum database file
-    #[arg(short = 'd', long = "db", default_value = ".stratum/stratum.db")]
+    /// Path to the layertwine database file
+    #[arg(short = 'd', long = "db", default_value = ".layertwine/layertwine.db")]
     pub db_path: String,
 
     /// Path to the Git repository (for sync operations)
@@ -24,7 +24,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Initialize a new stratum repository
+    /// Initialize a new layertwine repository
     #[command(name = "init")]
     Init {
         /// Git ref to initialize from (e.g. HEAD, branch name, commit hash)
@@ -53,13 +53,6 @@ pub enum Commands {
         agent_id: String,
         #[command(subcommand)]
         action: AgentCommands,
-    },
-
-    /// Approve an agent's changes
-    #[command(name = "approve")]
-    Approve {
-        /// Agent ID to approve
-        agent_id: String,
     },
 
     /// Commit staged changes as a checkpoint
@@ -144,7 +137,7 @@ pub enum Commands {
         #[arg(long = "remote", default_value = "origin")]
         remote: String,
         /// Commit message for the Git commit
-        #[arg(short = 'm', long = "message", default_value = "sync from stratum")]
+        #[arg(short = 'm', long = "message", default_value = "sync from layertwine")]
         message: String,
     },
 
@@ -157,6 +150,20 @@ pub enum Commands {
         /// Git ref to pull (default: HEAD)
         #[arg(long = "git-ref", default_value = "HEAD")]
         git_ref: String,
+    },
+
+    /// Checkpoint operations (restore, diff, rollback)
+    #[command(name = "checkpoint")]
+    Checkpoint {
+        #[command(subcommand)]
+        action: CheckpointCommands,
+    },
+
+    /// Approval operations (list, approve, reject, merge)
+    #[command(name = "approval")]
+    Approval {
+        #[command(subcommand)]
+        action: ApprovalCommands,
     },
 }
 
@@ -193,6 +200,74 @@ pub enum BranchCommands {
     /// List all branches
     #[command(name = "list")]
     List,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CheckpointCommands {
+    /// Restore files from a checkpoint
+    #[command(name = "restore")]
+    Restore {
+        /// Checkpoint ID to restore from
+        checkpoint_id: String,
+        /// Optional source filter (e.g. "file://src/**")
+        #[arg(long = "source-filter")]
+        source_filter: Option<Vec<String>>,
+    },
+    /// Restore from the nearest checkpoint to a target time
+    #[command(name = "restore-by-time")]
+    RestoreByTime {
+        /// Target timestamp (Unix epoch milliseconds)
+        target_time: i64,
+        /// Optional source filter
+        #[arg(long = "source-filter")]
+        source_filter: Option<Vec<String>>,
+    },
+    /// Diff two checkpoints
+    #[command(name = "diff")]
+    Diff {
+        /// From checkpoint ID
+        from_id: String,
+        /// To checkpoint ID
+        to_id: String,
+    },
+    /// Rollback staged partition to a checkpoint
+    #[command(name = "rollback")]
+    Rollback {
+        /// Checkpoint ID to rollback to
+        checkpoint_id: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ApprovalCommands {
+    /// List pending agent approvals
+    #[command(name = "list")]
+    List,
+    /// Approve a single agent submission
+    #[command(name = "approve")]
+    Approve {
+        /// Agent ID to approve
+        agent_id: String,
+        /// Name for the integrated partition
+        #[arg(long = "integrated-name")]
+        integrated_name: Option<String>,
+    },
+    /// Reject a single agent submission
+    #[command(name = "reject")]
+    Reject {
+        /// Agent ID to reject
+        agent_id: String,
+    },
+    /// Merge integrated partitions to unified
+    #[command(name = "merge-to-unified")]
+    MergeToUnified {
+        /// Integration names (auto-detect if empty)
+        #[arg(long = "names")]
+        names: Option<Vec<String>>,
+    },
+    /// Merge unified to staged
+    #[command(name = "merge-to-staged")]
+    MergeToStaged,
 }
 
 /// Parse CLI arguments and return the Cli struct

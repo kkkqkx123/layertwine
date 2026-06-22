@@ -1,6 +1,6 @@
 use crate::core::file_node::FileNode;
 use crate::core::types::{ContentId, DeltaId, SnapshotId};
-use crate::error::{Result, StratumError};
+use crate::error::{LayertwineError, Result};
 use serde::{Deserialize, Serialize};
 
 /// Snapshot content type - supports multiple content forms
@@ -59,18 +59,6 @@ impl SnapshotContent {
             Self::Structured(_) => true,
         }
     }
-}
-
-#[derive(Serialize)]
-struct SnapshotForId<'a> {
-    file: Option<&'a FileNode>,
-    deltas: &'a Vec<DeltaId>,
-    parents: &'a Vec<SnapshotId>,
-    partition_type: &'a str,
-    has_conflicts: bool,
-    source: &'a str,
-    content_type: &'a str,
-    content_hash: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -205,30 +193,37 @@ impl Snapshot {
     }
 
     pub fn compute_id(&self) -> SnapshotId {
-        let content_hash = match &self.content {
-            Some(c) => {
-                let bytes = c.to_bytes();
-                let hash = blake3::hash(&bytes);
-                u64::from_le_bytes(hash.as_bytes()[..8].try_into().unwrap_or([0u8; 8]))
+        let mut hasher = blake3::Hasher::new();
+
+        let path = self.file.path_str();
+        hasher.update(path.as_bytes());
+        hasher.update(&self.file.base_hash);
+
+        for delta in &self.deltas {
+            hasher.update(delta.0.as_ref());
+        }
+
+        for parent in &self.parents {
+            hasher.update(parent.0.as_ref());
+        }
+
+        hasher.update(self.partition_type.as_bytes());
+        hasher.update(&[self.has_conflicts as u8]);
+        hasher.update(self.source.as_bytes());
+
+        match &self.content {
+            None => {
+                hasher.update(b"none");
             }
-            None => 0u64,
-        };
-        let content_type = match &self.content {
-            Some(c) => c.content_type(),
-            None => "none",
-        };
-        let snapshot_for_id = SnapshotForId {
-            file: Some(&self.file),
-            deltas: &self.deltas,
-            parents: &self.parents,
-            partition_type: &self.partition_type,
-            has_conflicts: self.has_conflicts,
-            source: &self.source,
-            content_type,
-            content_hash,
-        };
-        let json = serde_json::to_vec(&snapshot_for_id).unwrap_or_default();
-        SnapshotId::from_content(&json)
+            Some(c) => {
+                hasher.update(c.content_type().as_bytes());
+                let content_bytes = c.to_bytes();
+                let content_hash = blake3::hash(&content_bytes);
+                hasher.update(content_hash.as_bytes().as_ref());
+            }
+        }
+
+        ContentId(*hasher.finalize().as_bytes())
     }
 
     /// Compress the snapshot content
@@ -237,7 +232,7 @@ impl Snapshot {
             if let Some(ref content) = self.content {
                 let bytes = content.to_bytes();
                 let compressed = zstd::encode_all(bytes.as_slice(), 3).map_err(|e| {
-                    StratumError::Serialization(format!("zstd compression failed: {}", e))
+                    LayertwineError::Serialization(format!("zstd compression failed: {}", e))
                 })?;
                 self.content = Some(SnapshotContent::Structured(compressed));
                 self.compression = SnapshotCompression::Zstd;
@@ -253,10 +248,9 @@ impl Snapshot {
             SnapshotCompression::Zstd => {
                 if let Some(SnapshotContent::Structured(ref bytes)) = self.content {
                     let decompressed = zstd::decode_all(bytes.as_slice()).map_err(|e| {
-                        StratumError::Serialization(format!("zstd decompression failed: {}", e))
+                        LayertwineError::Serialization(format!("zstd decompression failed: {}", e))
                     })?;
-                    self.content =
-                        Some(SnapshotContent::from_bytes(&self.source, decompressed)?);
+                    self.content = Some(SnapshotContent::from_bytes(&self.source, decompressed)?);
                     self.compression = SnapshotCompression::None;
                 }
             }
@@ -338,9 +332,9 @@ impl SnapshotBuilder {
     }
 
     pub fn build(self) -> Result<Snapshot> {
-        let file = self.file.ok_or_else(|| StratumError::Checkpoint(
-            "file is required for snapshot".to_string()
-        ))?;
+        let file = self.file.ok_or_else(|| {
+            LayertwineError::Checkpoint("file is required for snapshot".to_string())
+        })?;
         let now = chrono::Utc::now().timestamp_millis();
         let snapshot = Snapshot {
             id: ContentId([0u8; 32]),

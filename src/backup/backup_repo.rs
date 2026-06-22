@@ -11,7 +11,7 @@ use crate::core::snapshot::Snapshot;
 use crate::core::types::{BackupId, ContentId, SnapshotId, SourceType};
 use crate::engine::diff::diff_to_line_diff;
 use crate::engine::merge::apply_deltas;
-use crate::error::{Result, StratumError};
+use crate::error::{LayertwineError, Result};
 use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
 use crate::{StorageError, StorageResult};
 
@@ -36,8 +36,8 @@ CREATE INDEX IF NOT EXISTS idx_backup_agent_id ON backup_snapshots(agent_id);
 CREATE INDEX IF NOT EXISTS idx_backup_source_type ON backup_snapshots(source_type);
 ";
 
-fn map_db_err(e: rusqlite::Error) -> StratumError {
-    StratumError::Storage(StorageError::Database(e))
+fn map_db_err(e: rusqlite::Error) -> LayertwineError {
+    LayertwineError::Storage(StorageError::Database(e))
 }
 
 pub struct BackupRepo {
@@ -74,16 +74,16 @@ impl BackupRepo {
     {
         let snapshot = core_repo
             .get_snapshot(&snapshot_id)
-            .map_err(StratumError::Storage)?;
+            .map_err(LayertwineError::Storage)?;
 
         let deltas: Vec<Delta> = core_repo
             .get_deltas(&snapshot.deltas)
-            .map_err(StratumError::Storage)?;
+            .map_err(LayertwineError::Storage)?;
 
         // Read and store complete file content for physical isolation
         let file_content = core_repo
             .get_file_content(snapshot.file.path_str(), &snapshot.file.base_hash)
-            .map_err(StratumError::Storage)?;
+            .map_err(LayertwineError::Storage)?;
 
         let (agent_id, source_type) = Self::extract_source_info_from_deltas(&deltas);
 
@@ -312,7 +312,7 @@ impl BackupRepo {
             .map_err(map_db_err)?;
 
         if affected == 0 {
-            return Err(StratumError::NotFound(format!(
+            return Err(LayertwineError::NotFound(format!(
                 "backup {} not found",
                 backup_id
             )));
@@ -350,38 +350,45 @@ impl BackupRepo {
             recomputed.id == backup.id
         };
         if !integrity_ok {
-            return Err(StratumError::General(
+            return Err(LayertwineError::General(
                 "backup data integrity check failed".to_string(),
             ));
         }
 
-        fn strip_trailing_newline(s: &str) -> &str {
-            s.strip_suffix('\n').unwrap_or(s)
-        }
-
         // Step 1: Reconstruct the backed-up file content using backup's stored file_content
         let backup_base_str = String::from_utf8_lossy(&backup.file_content).to_string();
-        let backup_base_str = strip_trailing_newline(&backup_base_str).to_string();
         let backup_text = apply_deltas(&backup_base_str, &backup.deltas)?;
+        let has_trailing_newline = backup_base_str.ends_with('\n');
+        let backup_base_str = if has_trailing_newline {
+            backup_base_str.trim_end_matches('\n').to_string()
+        } else {
+            backup_base_str
+        };
 
         // Step 2: Get current staged content
         let staged_partition = core_repo.get_partition_by_name("staged")?;
         let staged_snapshot = core_repo.get_snapshot(&staged_partition.current_snapshot)?;
+        let staged_deltas = core_repo.get_deltas(&staged_snapshot.deltas)?;
         let staged_base = core_repo.get_file_content(
             staged_snapshot.file.path_str(),
             &staged_snapshot.file.base_hash,
         )?;
         let staged_base_str = String::from_utf8(staged_base)
-            .map_err(|e| StratumError::General(format!("non-utf8 file content: {}", e)))?;
-        let staged_deltas = core_repo.get_deltas(&staged_snapshot.deltas)?;
-        let staged_text = apply_deltas(strip_trailing_newline(&staged_base_str), &staged_deltas)?;
+            .map_err(|e| LayertwineError::General(format!("non-utf8 file content: {}", e)))?;
+        let staged_text = apply_deltas(&staged_base_str, &staged_deltas)?;
 
         // Step 3: Three-way merge
-        //   base = original file content (common ancestor)
+        //   base = original file content (common ancestor), normalized without trailing newline
         //   ours = current staged content
         //   theirs = backed-up content
         let (merged_text, _conflicts) =
             crate::engine::merge::merge_texts(&backup_base_str, &staged_text, &backup_text);
+
+        let merged_text = if has_trailing_newline && !merged_text.is_empty() {
+            format!("{}\n", merged_text)
+        } else {
+            merged_text
+        };
 
         // Step 4: Compute diff from base to merged result, create delta
         let diff = diff_to_line_diff(&backup_base_str, &merged_text);
@@ -390,11 +397,7 @@ impl BackupRepo {
             .last()
             .map(|d| d.file.clone())
             .unwrap_or_else(|| backup.file.clone());
-        let merge_delta = Delta::new(
-            merge_file,
-            diff,
-            crate::core::types::SourceType::Backup,
-        );
+        let merge_delta = Delta::new(merge_file, diff, crate::core::types::SourceType::Backup);
         core_repo.store_delta(&merge_delta)?;
 
         // Step 5: Create merge snapshot with both parents
@@ -638,7 +641,7 @@ mod tests {
         let merged_deltas = core.get_deltas(&merged_snapshot.deltas).unwrap();
         let merged_content =
             apply_deltas(&String::from_utf8(merged_base).unwrap(), &merged_deltas).unwrap();
-        assert_eq!(merged_content, "a\nB\nC\n");
+        assert_eq!(merged_content, "a\nB\nC");
     }
 
     #[test]
@@ -686,7 +689,7 @@ mod tests {
         let merged_deltas = core.get_deltas(&merged_snapshot.deltas).unwrap();
         let merged_content =
             apply_deltas(&String::from_utf8(merged_base).unwrap(), &merged_deltas).unwrap();
-        assert_eq!(merged_content, "line1\nmodified\nline3\n");
+        assert_eq!(merged_content, "line1\nmodified\nline3");
     }
 
     #[test]

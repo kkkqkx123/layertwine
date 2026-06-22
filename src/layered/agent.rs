@@ -10,7 +10,7 @@ use crate::core::snapshot::Snapshot;
 use crate::core::types::{AgentInstanceId, PartitionId, PartitionType, SnapshotId, SourceType};
 use crate::engine::diff::diff_to_line_diff;
 use crate::engine::merge::apply_deltas;
-use crate::error::{Result, StratumError};
+use crate::error::{LayertwineError, Result};
 use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
 use std::path::PathBuf;
 /// Generate stable IDs for agent partitions via UUIDv5
@@ -38,7 +38,7 @@ pub fn ensure_agent_partition<S: PartitionStore>(
             };
             storage
                 .create_partition(&partition)
-                .map_err(StratumError::Storage)?;
+                .map_err(LayertwineError::Storage)?;
             Ok(partition)
         }
     }
@@ -59,7 +59,7 @@ where
 {
     let pid = agent_partition_id(agent_id);
     let partition = storage.get_partition(&pid).map_err(|_| {
-        StratumError::NotFound(format!(
+        LayertwineError::NotFound(format!(
             "agent partition for {} not found, call ensure_agent_partition first",
             agent_id
         ))
@@ -67,23 +67,23 @@ where
 
     let current_snapshot = storage
         .get_snapshot(&partition.current_snapshot)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     // Read old content
     let old_content = {
         let deltas = storage
             .get_deltas(&current_snapshot.deltas)
-            .map_err(StratumError::Storage)?;
+            .map_err(LayertwineError::Storage)?;
         let content_str = String::from_utf8_lossy(
             &storage
                 .get_file_content(
                     current_snapshot.file.path_str(),
                     &current_snapshot.file.base_hash,
                 )
-                .map_err(StratumError::Storage)?,
+                .map_err(LayertwineError::Storage)?,
         )
         .to_string();
-        apply_deltas(&content_str, &deltas).map_err(|e| StratumError::Engine(e.to_string()))?
+        apply_deltas(&content_str, &deltas).map_err(|e| LayertwineError::Engine(e.to_string()))?
     };
 
     // Calculate diff
@@ -101,8 +101,10 @@ where
     );
     storage
         .store_file_node(&file_node, old_content.as_bytes())
-        .map_err(StratumError::Storage)?;
-    storage.store_delta(&delta).map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
+    storage
+        .store_delta(&delta)
+        .map_err(LayertwineError::Storage)?;
 
     // Creating a New Snapshot
     let new_snapshot = Snapshot::from_parent(
@@ -112,12 +114,12 @@ where
     );
     storage
         .store_snapshot(&new_snapshot, b"")
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     // Updating the partition pointer
     storage
         .update_pointer(&pid, &new_snapshot.id)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     Ok(new_snapshot.id)
 }
@@ -134,11 +136,11 @@ where
     let agent_pid = agent_partition_id(agent_id);
     let approval_pid = crate::layered::approval::approval_agent_partition_id(agent_id);
 
-    let agent_partition = storage
-        .get_partition(&agent_pid)
-        .map_err(|_| StratumError::NotFound(format!("agent partition {} not found", agent_id)))?;
+    let agent_partition = storage.get_partition(&agent_pid).map_err(|_| {
+        LayertwineError::NotFound(format!("agent partition {} not found", agent_id))
+    })?;
     let approval_partition = storage.get_partition(&approval_pid).map_err(|_| {
-        StratumError::NotFound(format!(
+        LayertwineError::NotFound(format!(
             "approval partition for agent {} not found, call ensure_approval_agent_partition first",
             agent_id
         ))
@@ -146,10 +148,10 @@ where
 
     let agent_snapshot = storage
         .get_snapshot(&agent_partition.current_snapshot)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
     let approval_snapshot = storage
         .get_snapshot(&approval_partition.current_snapshot)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     // Reconstructed text
     let agent_text = crate::layered::transition::reconstruct_text(storage, &agent_snapshot)?;
@@ -163,19 +165,15 @@ where
 
     let agent_deltas = storage
         .get_deltas(&agent_snapshot.deltas)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
     let merge_file = agent_deltas
         .last()
         .map(|d| d.file.clone())
         .unwrap_or_else(|| agent_snapshot.file.clone());
-    let merge_delta = Delta::new(
-        merge_file,
-        merge_diff,
-        SourceType::Agent(agent_id.clone()),
-    );
+    let merge_delta = Delta::new(merge_file, merge_diff, SourceType::Agent(agent_id.clone()));
     storage
         .store_delta(&merge_delta)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     // Create a merge snapshot
     let new_snapshot = Snapshot::merge(
@@ -186,11 +184,11 @@ where
     );
     storage
         .store_snapshot(&new_snapshot, b"")
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     storage
         .update_pointer(&approval_pid, &new_snapshot.id)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     Ok(new_snapshot.id)
 }
@@ -201,22 +199,22 @@ where
     S: SnapshotStore + PartitionStore,
 {
     let pid = agent_partition_id(agent_id);
-    let partition = storage
-        .get_partition(&pid)
-        .map_err(|_| StratumError::NotFound(format!("agent partition {} not found", agent_id)))?;
+    let partition = storage.get_partition(&pid).map_err(|_| {
+        LayertwineError::NotFound(format!("agent partition {} not found", agent_id))
+    })?;
 
     let current_snapshot = storage
         .get_snapshot(&partition.current_snapshot)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     // If a parent snapshot exists, fallback to the parent snapshot
     if let Some(&parent_id) = current_snapshot.parents.first() {
         storage
             .update_pointer(&pid, &parent_id)
-            .map_err(StratumError::Storage)?;
+            .map_err(LayertwineError::Storage)?;
         Ok(())
     } else {
-        Err(StratumError::StateMachine(
+        Err(LayertwineError::StateMachine(
             "agent has no parent snapshot to discard to".into(),
         ))
     }
@@ -225,41 +223,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::delta::Delta;
-    use crate::core::file_node::FileNode;
-    use crate::core::snapshot::Snapshot;
     use crate::core::types::SourceType;
     use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
-    use crate::storage::SqliteStorage;
-
-    fn setup_storage() -> SqliteStorage {
-        SqliteStorage::new_in_memory().unwrap()
-    }
-
-    fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {
-        let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
-        storage
-            .store_file_node(&file_node, content.as_bytes())
-            .unwrap();
-
-        let empty_diff = crate::core::types::LineDiff::new(vec![]);
-        let delta = Delta::new(
-            file_node.clone(),
-            empty_diff,
-            SourceType::Agent("test-agent".into()),
-        );
-        storage.store_delta(&delta).unwrap();
-
-        let snapshot = Snapshot::new_initial(file_node, delta.id);
-        storage.store_snapshot(&snapshot, b"").unwrap();
-        snapshot.id
-    }
+    use crate::test_utils::{create_initial_snapshot, setup_storage};
 
     #[test]
     fn test_apply_agent_edit() {
         let storage = setup_storage();
         let agent_id = AgentInstanceId("agent-1".into());
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let initial_id =
+            create_initial_snapshot(&storage, "base\n", SourceType::Agent("test-agent".into()));
         ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
 
         let new_id = apply_agent_edit(&storage, &agent_id, "test.txt", "base\nmodified\n").unwrap();
@@ -270,7 +243,11 @@ mod tests {
     fn test_discard_agent_edit() {
         let storage = setup_storage();
         let agent_id = AgentInstanceId("agent-2".into());
-        let initial_id = create_initial_snapshot(&storage, "original\n");
+        let initial_id = create_initial_snapshot(
+            &storage,
+            "original\n",
+            SourceType::Agent("test-agent".into()),
+        );
         ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
 
         // Application Editor
@@ -289,7 +266,8 @@ mod tests {
     #[test]
     fn test_agent_isolation() {
         let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "shared\n");
+        let initial_id =
+            create_initial_snapshot(&storage, "shared\n", SourceType::Agent("test-agent".into()));
 
         let agent_a = AgentInstanceId("agent-a".into());
         let agent_b = AgentInstanceId("agent-b".into());
@@ -317,7 +295,8 @@ mod tests {
     fn test_ensure_agent_partition_already_exists() {
         let storage = setup_storage();
         let agent_id = AgentInstanceId("agent-exists".into());
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let initial_id =
+            create_initial_snapshot(&storage, "base\n", SourceType::Agent("test-agent".into()));
 
         let p1 = ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
         let p2 = ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
@@ -329,7 +308,8 @@ mod tests {
     fn test_discard_agent_edit_no_parent() {
         let storage = setup_storage();
         let agent_id = AgentInstanceId("agent-noparent".into());
-        let initial_id = create_initial_snapshot(&storage, "only\n");
+        let initial_id =
+            create_initial_snapshot(&storage, "only\n", SourceType::Agent("test-agent".into()));
         ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
 
         // Initial snapshot has no parents → discard should fail
@@ -341,7 +321,8 @@ mod tests {
     fn test_apply_agent_edit_no_changes() {
         let storage = setup_storage();
         let agent_id = AgentInstanceId("agent-nochange".into());
-        let initial_id = create_initial_snapshot(&storage, "same");
+        let initial_id =
+            create_initial_snapshot(&storage, "same", SourceType::Agent("test-agent".into()));
         ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
 
         // Apply same content → no new snapshot
@@ -356,7 +337,8 @@ mod tests {
     fn test_move_agent_to_approval() {
         let storage = setup_storage();
         let agent_id = AgentInstanceId("agent-move".into());
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let initial_id =
+            create_initial_snapshot(&storage, "base\n", SourceType::Agent("test-agent".into()));
 
         // Create agent partition
         ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
@@ -390,7 +372,8 @@ mod tests {
     fn test_agent_sequential_edits() {
         let storage = setup_storage();
         let agent_id = AgentInstanceId("agent-seq".into());
-        let initial_id = create_initial_snapshot(&storage, "a\nb\n");
+        let initial_id =
+            create_initial_snapshot(&storage, "a\nb\n", SourceType::Agent("test-agent".into()));
         ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
 
         let first = apply_agent_edit(&storage, &agent_id, "test.txt", "a\nmodified\n").unwrap();
@@ -409,7 +392,11 @@ mod tests {
     fn test_agent_edit_multiple_files() {
         let storage = setup_storage();
         let agent_id = AgentInstanceId("agent-mf".into());
-        let initial_id = create_initial_snapshot(&storage, "content1\n");
+        let initial_id = create_initial_snapshot(
+            &storage,
+            "content1\n",
+            SourceType::Agent("test-agent".into()),
+        );
         ensure_agent_partition(&storage, &agent_id, initial_id).unwrap();
 
         // Create a second initial file node for a different file

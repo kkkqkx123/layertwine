@@ -2,18 +2,18 @@
 #![allow(dead_code, unused_imports, unused_variables)]
 
 use crate::common::fixture::TestEnvironment;
-use std::path::PathBuf;
-use stratum::api::{
+use layertwine::api::{
     AgentEditRequest, AgentSubmitRequest, ApiService, ApproveAgentRequest, CommitRequest,
     EditRequest, InitRequest, LogRequest, StatusResponse,
 };
-use stratum::core::partition::Partition;
-use stratum::core::snapshot::Snapshot;
-use stratum::core::types::LayerType;
-use stratum::core::types::SnapshotId;
-use stratum::storage::repository::{PartitionStore, SnapshotStore};
+use layertwine::core::partition::Partition;
+use layertwine::core::snapshot::Snapshot;
+use layertwine::core::types::LayerType;
+use layertwine::core::types::SnapshotId;
+use layertwine::storage::repository::{PartitionStore, SnapshotStore};
+use std::path::PathBuf;
 
-/// Initialize a stratum repository
+/// Initialize a layertwine repository
 pub fn init_repository(env: &TestEnvironment) {
     env.api
         .init(InitRequest {
@@ -86,7 +86,7 @@ pub fn merge_to_unified(
     env: &TestEnvironment,
     integration_names: Option<Vec<String>>,
 ) -> SnapshotId {
-    use stratum::api::MergeToUnifiedRequest;
+    use layertwine::api::MergeToUnifiedRequest;
     let response = env
         .api
         .merge_to_unified(MergeToUnifiedRequest { integration_names })
@@ -97,7 +97,7 @@ pub fn merge_to_unified(
 
 /// Merge unified layer to staged layer
 pub fn merge_to_staged(env: &TestEnvironment) -> SnapshotId {
-    use stratum::api::MergeToStagedRequest;
+    use layertwine::api::MergeToStagedRequest;
     let response = env
         .api
         .merge_to_staged(MergeToStagedRequest {})
@@ -211,10 +211,10 @@ pub fn reconstruct_text(env: &TestEnvironment, snapshot_id: &SnapshotId) -> Opti
 
 /// Helper function to reconstruct text from snapshot
 fn reconstruct_from_snapshot(
-    storage: &stratum::storage::SqliteStorage,
+    storage: &layertwine::storage::SqliteStorage,
     snapshot: &Snapshot,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    use stratum::layered::transition::reconstruct_text;
+    use layertwine::layered::transition::reconstruct_text;
 
     let text = reconstruct_text(storage, snapshot)?;
     Ok(text)

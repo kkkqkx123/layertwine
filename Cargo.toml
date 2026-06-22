@@ -1,5 +1,5 @@
 [package]
-name = "stratum"
+name = "layertwine"
 version = "0.1.0"
 edition = "2021"
 
@@ -24,6 +24,7 @@ rusqlite = { version = "0.39", features = ["bundled"] }
 blake3 = "1.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+hex = "0.4"
 thiserror = "2"
 chrono = "0.4"
 uuid = { version = "1", features = ["std", "v5", "v7", "serde"] }
@@ -32,6 +33,7 @@ git2 = "0.21"
 parking_lot = "0.12"
 lazy_static = "1.5"
 zstd = "0.13"
+smallvec = "1"
 
 # Config
 toml = "1.1"
@@ -51,7 +53,7 @@ tonic = { version = "0.12", optional = true }
 prost = { version = "0.13", optional = true }
 
 [[bin]]
-name = "stratum"
+name = "layertwine"
 required-features = ["cli"]
 
 [dev-dependencies]
@@ -84,4 +86,8 @@ harness = false
 
 [[bench]]
 name = "serialization"
+harness = false
+
+[[bench]]
+name = "checkpoint"
 harness = false

@@ -9,7 +9,7 @@ use crate::core::partition::Partition;
 use crate::core::snapshot::Snapshot;
 use crate::core::types::{AgentInstanceId, PartitionId, PartitionType, SnapshotId, SourceType};
 use crate::engine::diff::diff_to_line_diff;
-use crate::error::{Result, StratumError};
+use crate::error::{LayertwineError, Result};
 use crate::layered::MergeResult;
 use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
 
@@ -42,7 +42,7 @@ pub fn ensure_integrated_partition<S: PartitionStore>(
             };
             storage
                 .create_partition(&partition)
-                .map_err(StratumError::Storage)?;
+                .map_err(LayertwineError::Storage)?;
             Ok(partition)
         }
     }
@@ -65,7 +65,7 @@ pub fn create_feature_branch<S: PartitionStore>(
     };
     storage
         .create_partition(&partition)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
     Ok(partition)
 }
 
@@ -77,12 +77,12 @@ pub fn get_feature_baseline<S: SnapshotStore + PartitionStore>(
 ) -> Result<Snapshot> {
     let pid = integrated_partition_id(feature_name);
     let part = storage.get_partition(&pid).map_err(|_| {
-        StratumError::NotFound(format!("integrated partition {} not found", feature_name))
+        LayertwineError::NotFound(format!("integrated partition {} not found", feature_name))
     })?;
     let baseline_id = &part.history[0];
     storage
         .get_snapshot(baseline_id)
-        .map_err(StratumError::Storage)
+        .map_err(LayertwineError::Storage)
 }
 
 // Forward migration operations -
@@ -101,11 +101,11 @@ where
     let integrated_pid = integrated_partition_id(feature_name);
 
     let approval_partition = storage.get_partition(&approval_pid).map_err(|_| {
-        StratumError::NotFound(format!("approval agent partition {} not found", agent_id))
+        LayertwineError::NotFound(format!("approval agent partition {} not found", agent_id))
     })?;
     let approval_snapshot = storage
         .get_snapshot(&approval_partition.current_snapshot)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     let integrated_partition =
         ensure_integrated_partition(storage, feature_name, approval_partition.current_snapshot)?;
@@ -120,7 +120,7 @@ where
     let baseline_snapshot = get_feature_baseline(storage, feature_name)?;
     let integrated_snapshot = storage
         .get_snapshot(&integrated_partition.current_snapshot)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     let baseline_text = crate::layered::transition::reconstruct_text(storage, &baseline_snapshot)?;
     let approval_text = crate::layered::transition::reconstruct_text(storage, &approval_snapshot)?;
@@ -142,19 +142,15 @@ where
 
     let approval_deltas = storage
         .get_deltas(&approval_snapshot.deltas)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
     let merge_file = approval_deltas
         .last()
         .map(|d| d.file.clone())
         .unwrap_or_else(|| baseline_snapshot.file.clone());
-    let merge_delta = Delta::new(
-        merge_file,
-        merge_diff,
-        SourceType::Agent(agent_id.clone()),
-    );
+    let merge_delta = Delta::new(merge_file, merge_diff, SourceType::Agent(agent_id.clone()));
     storage
         .store_delta(&merge_delta)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     let new_snapshot = Snapshot::merge(
         vec![&baseline_snapshot, &approval_snapshot, &integrated_snapshot],
@@ -164,11 +160,11 @@ where
     );
     storage
         .store_snapshot(&new_snapshot, b"")
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     storage
         .update_pointer(&integrated_pid, &new_snapshot.id)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     Ok(MergeResult {
         snapshot_id: new_snapshot.id,
@@ -179,32 +175,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::delta::Delta;
-    use crate::core::file_node::FileNode;
     use crate::core::types::SourceType;
-    use crate::storage::SqliteStorage;
-
-    fn setup_storage() -> SqliteStorage {
-        SqliteStorage::new_in_memory().unwrap()
-    }
-
-    fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {
-        let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
-        storage
-            .store_file_node(&file_node, content.as_bytes())
-            .unwrap();
-        let empty_diff = crate::core::types::LineDiff::new(vec![]);
-        let delta = Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
-        storage.store_delta(&delta).unwrap();
-        let snapshot = Snapshot::new_initial(file_node, delta.id);
-        storage.store_snapshot(&snapshot, b"").unwrap();
-        snapshot.id
-    }
+    use crate::test_utils::{create_initial_snapshot, setup_storage};
 
     #[test]
     fn test_ensure_integrated_partition() {
         let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
 
         let p1 = ensure_integrated_partition(&storage, "feat-1", initial_id).unwrap();
         let p2 = ensure_integrated_partition(&storage, "feat-1", initial_id).unwrap();

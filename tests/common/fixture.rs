@@ -1,13 +1,13 @@
 //! Fixture definitions and generation for E2E tests
 #![allow(dead_code, unused_imports, unused_variables)]
 
+use layertwine::api::{ApiService, ApiServiceImpl, ServiceConfig};
+use layertwine::core::file_node::FileNode;
+use layertwine::core::partition::Partition;
+use layertwine::core::snapshot::Snapshot;
+use layertwine::core::types::{DiffOp, Hunk, LayerType, LineDiff, PartitionType};
+use layertwine::storage::SqliteStorage;
 use std::path::{Path, PathBuf};
-use stratum::api::{ApiService, ApiServiceImpl, ServiceConfig};
-use stratum::core::file_node::FileNode;
-use stratum::core::partition::Partition;
-use stratum::core::snapshot::Snapshot;
-use stratum::core::types::{DiffOp, Hunk, LayerType, LineDiff, PartitionType};
-use stratum::storage::SqliteStorage;
 use tempfile::TempDir;
 
 /// Test environment configuration
@@ -21,7 +21,7 @@ pub struct TestConfig {
 impl Default for TestConfig {
     fn default() -> Self {
         TestConfig {
-            db_name: "stratum-test.db".into(),
+            db_name: "layertwine-test.db".into(),
             enable_git: false,
             verbose: true,
         }

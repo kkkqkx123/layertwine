@@ -14,7 +14,7 @@ use crate::core::partition::Partition;
 use crate::core::snapshot::Snapshot;
 use crate::core::types::{CheckpointId, PartitionId, PartitionType, SnapshotId, SourceType};
 use crate::engine::diff::diff_to_line_diff;
-use crate::error::{Result, StratumError};
+use crate::error::{LayertwineError, Result};
 use crate::storage::repository::{
     BranchStore, CheckpointStore, DeltaStore, FileNodeStore, MetadataStore, PartitionStore,
     SnapshotStore,
@@ -70,7 +70,7 @@ pub fn ensure_staged_partition<S: PartitionStore>(
             };
             storage
                 .create_partition(&partition)
-                .map_err(StratumError::Storage)?;
+                .map_err(LayertwineError::Storage)?;
             Ok(partition)
         }
     }
@@ -90,12 +90,12 @@ where
     let unified_pid = crate::layered::unified::unified_partition_id();
 
     let unified_partition = storage.get_partition(&unified_pid).map_err(|_| {
-        StratumError::NotFound(
+        LayertwineError::NotFound(
             "unified partition not found, call ensure_unified_partition first".into(),
         )
     })?;
     let staged_partition = storage.get_partition(&staged_pid).map_err(|_| {
-        StratumError::NotFound(
+        LayertwineError::NotFound(
             "staged partition not found, call ensure_staged_partition first".into(),
         )
     })?;
@@ -107,10 +107,10 @@ where
 
     let unified_snapshot = storage
         .get_snapshot(&unified_partition.current_snapshot)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
     let staged_snapshot = storage
         .get_snapshot(&staged_partition.current_snapshot)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     let unified_text = crate::layered::transition::reconstruct_text(storage, &unified_snapshot)?;
     let staged_text = crate::layered::transition::reconstruct_text(storage, &staged_snapshot)?;
@@ -122,7 +122,7 @@ where
 
     let unified_deltas = storage
         .get_deltas(&unified_snapshot.deltas)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
     let merge_file = unified_deltas
         .last()
         .map(|d| d.file.clone())
@@ -130,7 +130,7 @@ where
     let merge_delta = Delta::new(merge_file, merge_diff, SourceType::Manual);
     storage
         .store_delta(&merge_delta)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     let new_snapshot = Snapshot::merge(
         vec![&staged_snapshot, &unified_snapshot],
@@ -140,11 +140,11 @@ where
     );
     storage
         .store_snapshot(&new_snapshot, b"")
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     storage
         .update_pointer(&staged_pid, &new_snapshot.id)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     Ok(new_snapshot.id)
 }
@@ -164,10 +164,10 @@ where
 
     let unified = storage
         .get_partition(&unified_pid)
-        .map_err(|_| StratumError::NotFound("unified partition not found".into()))?;
+        .map_err(|_| LayertwineError::NotFound("unified partition not found".into()))?;
     let staged = storage
         .get_partition(&staged_pid)
-        .map_err(|_| StratumError::NotFound("staged partition not found".into()))?;
+        .map_err(|_| LayertwineError::NotFound("staged partition not found".into()))?;
 
     // Check if staged contains unified content
     if staged.current_snapshot == unified.current_snapshot {
@@ -206,7 +206,7 @@ where
     let staged_pid = staged_partition_id();
     let staged_partition = storage
         .get_partition(&staged_pid)
-        .map_err(|_| StratumError::NotFound("staged partition not found".into()))?;
+        .map_err(|_| LayertwineError::NotFound("staged partition not found".into()))?;
     let current_snapshot_id = staged_partition.current_snapshot;
 
     // 2. Get or create branch
@@ -217,7 +217,7 @@ where
             let branch = crate::checkpoint::branch::Branch::new(branch_name, current_snapshot_id);
             storage
                 .store_branch(&branch)
-                .map_err(StratumError::Storage)?;
+                .map_err(LayertwineError::Storage)?;
             current_snapshot_id
         }
     };
@@ -230,12 +230,12 @@ where
     // 4. Store checkpoint
     storage
         .store_checkpoint(&cp)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     // 5. Update branch head
     storage
         .update_branch_head(branch_name, &cp_id)
-        .map_err(StratumError::Storage)?;
+        .map_err(LayertwineError::Storage)?;
 
     Ok(cp_id)
 }
@@ -245,44 +245,18 @@ pub fn reset_staged<S: PartitionStore>(storage: &S, base_snapshot_id: SnapshotId
     let pid = staged_partition_id();
     storage
         .update_pointer(&pid, &base_snapshot_id)
-        .map_err(StratumError::Storage)
+        .map_err(LayertwineError::Storage)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::delta::Delta;
     use crate::core::file_node::FileNode;
-    use crate::core::snapshot::Snapshot;
     use crate::core::types::{PartitionType, SourceType};
     use crate::engine::diff::diff_to_line_diff;
     use crate::storage::repository::FileNodeStore;
-    use crate::storage::repository::{DeltaStore, SnapshotStore};
     use crate::storage::SqliteStorage;
-
-    fn setup_storage() -> SqliteStorage {
-        let storage = SqliteStorage::new_in_memory().unwrap();
-        storage
-            .with_conn(crate::storage::migrations::initialize_full)
-            .unwrap();
-        storage
-    }
-
-    fn create_initial_snapshot(
-        storage: &SqliteStorage,
-        content: &str,
-    ) -> crate::core::types::SnapshotId {
-        let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
-        storage
-            .store_file_node(&file_node, content.as_bytes())
-            .unwrap();
-        let empty_diff = crate::core::types::LineDiff::new(vec![]);
-        let delta = Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
-        storage.store_delta(&delta).unwrap();
-        let snapshot = Snapshot::new_initial(file_node, delta.id);
-        storage.store_snapshot(&snapshot, b"").unwrap();
-        snapshot.id
-    }
+    use crate::test_utils::{create_initial_snapshot, setup_storage_full};
 
     fn create_snapshot_with_content(
         storage: &SqliteStorage,
@@ -308,8 +282,8 @@ mod tests {
 
     #[test]
     fn test_ensure_staged_partition() {
-        let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let storage = setup_storage_full();
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
 
         let p1 = ensure_staged_partition(&storage, initial_id).unwrap();
         let p2 = ensure_staged_partition(&storage, initial_id).unwrap();
@@ -318,8 +292,8 @@ mod tests {
 
     #[test]
     fn test_merge_unified_to_staged() {
-        let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let storage = setup_storage_full();
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
         ensure_staged_partition(&storage, initial_id).unwrap();
 
         let unified_pid = crate::layered::unified::unified_partition_id();
@@ -351,8 +325,8 @@ mod tests {
 
     #[test]
     fn test_merge_unified_to_staged_no_changes() {
-        let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let storage = setup_storage_full();
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
         ensure_staged_partition(&storage, initial_id).unwrap();
 
         let unified_pid = crate::layered::unified::unified_partition_id();
@@ -374,8 +348,8 @@ mod tests {
 
     #[test]
     fn test_commit_staged_to_checkpoint() {
-        let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let storage = setup_storage_full();
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
         ensure_staged_partition(&storage, initial_id).unwrap();
 
         let cp_id =
@@ -391,8 +365,8 @@ mod tests {
 
     #[test]
     fn test_commit_staged_to_checkpoint_multiple() {
-        let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let storage = setup_storage_full();
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
         ensure_staged_partition(&storage, initial_id).unwrap();
 
         let cp_id1 =
@@ -414,8 +388,8 @@ mod tests {
 
     #[test]
     fn test_reset_staged() {
-        let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let storage = setup_storage_full();
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
         ensure_staged_partition(&storage, initial_id).unwrap();
 
         let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), b"base\nmodified\n");
@@ -441,8 +415,8 @@ mod tests {
 
     #[test]
     fn test_reset_staged_at_base() {
-        let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let storage = setup_storage_full();
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
         ensure_staged_partition(&storage, initial_id).unwrap();
 
         reset_staged(&storage, initial_id).unwrap();

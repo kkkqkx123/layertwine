@@ -1,21 +1,21 @@
-# Stratum gRPC API 参考
+# Layertwine gRPC API 参考
 
-> Stratum 的 gRPC API 以 Protobuf 定义为核心，通过 Tonic 框架提供。当前 proto 定义已完备，tonic-build 代码生成和处理器实现处于开发中。
+> Layertwine 的 gRPC API 以 Protobuf 定义为核心，通过 Tonic 框架提供。当前 proto 定义已完备，tonic-build 代码生成和处理器实现处于开发中。
 
 ## 当前状态
 
 gRPC 服务端 **尚未完整实现**。调用 `rpc::serve()` 会返回 `"gRPC server requires tonic-build codegen"` 错误。
 
-- **Proto 文件**: `src/api/rpc/proto/stratum.proto` — 已完备
+- **Proto 文件**: `src/api/rpc/proto/layertwine.proto` — 已完备
 - **Rust 类型映射**: `src/api/types.rs` 中定义了与 proto 消息 1:1 对应的请求/响应类型
 - **服务逻辑**: `ApiService` trait（`src/api/service.rs`）已实现所有业务逻辑
-- **待完成**: `tonic-build` 编译 proto 并实现 `StratumGrpc` 的 gRPC handler
+- **待完成**: `tonic-build` 编译 proto 并实现 `LayertwineGrpc` 的 gRPC handler
 
 启用需在 `build.rs` 中加入 tonic-build 编译：
 
 ```rust
 fn main() {
-    tonic_build::compile_protos("src/api/rpc/proto/stratum.proto")
+    tonic_build::compile_protos("src/api/rpc/proto/layertwine.proto")
         .expect("failed to compile protos");
 }
 ```
@@ -28,9 +28,9 @@ fn main() {
 
 | 变量               | 默认值               | 说明                           |
 | ------------------ | -------------------- | ------------------------------ |
-| `STRATUM_MODE`     | `cli`                | 设为 `grpc` 启动 gRPC 服务     |
-| `STRATUM_DB_PATH`  | `.stratum/stratum.db` | SQLite 数据库文件路径          |
-| `STRATUM_GRPC_ADDR`| `127.0.0.1:50051`    | gRPC 服务器绑定地址与端口       |
+| `LAYERTWINE_MODE`     | `cli`                | 设为 `grpc` 启动 gRPC 服务     |
+| `LAYERTWINE_DB_PATH`  | `.layertwine/layertwine.db` | SQLite 数据库文件路径          |
+| `LAYERTWINE_GRPC_ADDR`| `127.0.0.1:50051`    | gRPC 服务器绑定地址与端口       |
 
 ---
 
@@ -39,9 +39,9 @@ fn main() {
 ```protobuf
 syntax = "proto3";
 
-package stratum;
+package layertwine;
 
-service Stratum {
+service Layertwine {
     // Repository lifecycle
     rpc Init(InitRequest) returns (InitResponse);
     rpc Status(Empty) returns (StatusResponse);
@@ -134,7 +134,7 @@ message InitResponse {
 
 | 字段                    | 类型           | 说明                                |
 | ----------------------- | -------------- | ----------------------------------- |
-| `InitRequest.db_path`   | string (可选)  | 数据库路径，默认 `.stratum/stratum.db` |
+| `InitRequest.db_path`   | string (可选)  | 数据库路径，默认 `.layertwine/layertwine.db` |
 | `InitRequest.git_repo`  | string (可选)  | Git 仓库路径                        |
 | `InitRequest.git_ref`   | string (可选)  | 从 Git 初始化时的引用               |
 | `InitResponse.branch`   | string         | 当前分支名，默认 `"main"`           |
@@ -390,7 +390,7 @@ gRPC 层与 HTTP 层共享 `ApiService` trait 作为业务逻辑入口：
 gRPC Client
     │
     ▼
-tonic Server (StratumGrpc)
+tonic Server (LayertwineGrpc)
     │  ┌─ Init()        → service.init(InitRequest)
     │  ├─ Status()      → service.status()
     │  ├─ Edit()        → service.edit(EditRequest)

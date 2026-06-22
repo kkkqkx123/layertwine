@@ -6,7 +6,7 @@
 use crate::core::partition::Partition;
 use crate::core::types::{AgentInstanceId, PartitionId, PartitionType, SnapshotId};
 use crate::error::StorageError;
-use crate::error::{Result, StratumError};
+use crate::error::{LayertwineError, Result};
 use crate::storage::repository::PartitionStore;
 use rusqlite::params;
 
@@ -35,7 +35,7 @@ pub fn ensure_approval_agent_partition<S: PartitionStore>(
             };
             storage
                 .create_partition(&partition)
-                .map_err(StratumError::Storage)?;
+                .map_err(LayertwineError::Storage)?;
             Ok(partition)
         }
     }
@@ -43,7 +43,9 @@ pub fn ensure_approval_agent_partition<S: PartitionStore>(
 
 /// List all approval-type partitions (regardless of status)
 pub fn list_approval_partitions<S: PartitionStore>(storage: &S) -> Result<Vec<Partition>> {
-    let all = storage.list_partitions().map_err(StratumError::Storage)?;
+    let all = storage
+        .list_partitions()
+        .map_err(LayertwineError::Storage)?;
     Ok(all
         .into_iter()
         .filter(|p| matches!(p.partition_type, PartitionType::Approval(_)))
@@ -70,16 +72,15 @@ pub fn reject_approval<S: PartitionStore + 'static>(
 ) -> Result<SnapshotId> {
     let pid = approval_agent_partition_id(agent_id);
     let partition = storage.get_partition(&pid).map_err(|_| {
-        StratumError::NotFound(format!(
+        LayertwineError::NotFound(format!(
             "approval partition for agent '{}' not found",
             agent_id
         ))
     })?;
 
-    let base_snapshot = partition
-        .history
-        .first()
-        .ok_or_else(|| StratumError::StateMachine("approval partition has empty history".into()))?;
+    let base_snapshot = partition.history.first().ok_or_else(|| {
+        LayertwineError::StateMachine("approval partition has empty history".into())
+    })?;
 
     // Try to use direct SQL update if storage is SqliteStorage
     // We need to use Any for downcast since PartitionStore doesn't provide is_sqlite method
@@ -94,7 +95,7 @@ pub fn reject_approval<S: PartitionStore + 'static>(
             "UPDATE partitions SET current_snapshot = ?1, updated_at = ?2 WHERE id = ?3",
             params![&base_snapshot.0.to_vec(), now, &pid.as_bytes().to_vec()],
         )
-        .map_err(|e| StratumError::Storage(StorageError::Database(e)))?;
+        .map_err(|e| LayertwineError::Storage(StorageError::Database(e)))?;
 
         // Delete all history except the first (baseline)
         conn.execute(
@@ -105,14 +106,14 @@ pub fn reject_approval<S: PartitionStore + 'static>(
              )",
             params![&pid.as_bytes().to_vec()],
         )
-        .map_err(|e| StratumError::Storage(StorageError::Database(e)))?;
+        .map_err(|e| LayertwineError::Storage(StorageError::Database(e)))?;
 
         Ok(*base_snapshot)
     } else {
         // Fall back to update_pointer for other storage implementations
         storage
             .update_pointer(&pid, base_snapshot)
-            .map_err(StratumError::Storage)?;
+            .map_err(LayertwineError::Storage)?;
 
         Ok(*base_snapshot)
     }
@@ -121,35 +122,14 @@ pub fn reject_approval<S: PartitionStore + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::delta::Delta;
-    use crate::core::file_node::FileNode;
-    use crate::core::snapshot::Snapshot;
     use crate::core::types::SourceType;
-    use crate::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
-    use crate::storage::SqliteStorage;
-
-    fn setup_storage() -> SqliteStorage {
-        SqliteStorage::new_in_memory().unwrap()
-    }
-
-    fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {
-        let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
-        storage
-            .store_file_node(&file_node, content.as_bytes())
-            .unwrap();
-        let empty_diff = crate::core::types::LineDiff::new(vec![]);
-        let delta = Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
-        storage.store_delta(&delta).unwrap();
-        let snapshot = Snapshot::new_initial(file_node, delta.id);
-        storage.store_snapshot(&snapshot, b"").unwrap();
-        snapshot.id
-    }
+    use crate::test_utils::{create_initial_snapshot, setup_storage};
 
     #[test]
     fn test_ensure_approval_agent_partition() {
         let storage = setup_storage();
         let agent_id = AgentInstanceId("test-agent".into());
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
 
         let p1 = ensure_approval_agent_partition(&storage, &agent_id, initial_id).unwrap();
         let p2 = ensure_approval_agent_partition(&storage, &agent_id, initial_id).unwrap();
@@ -172,7 +152,7 @@ mod tests {
     #[test]
     fn test_list_approval_partitions() {
         let storage = setup_storage();
-        let base_id = create_initial_snapshot(&storage, "base\n");
+        let base_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
 
         let agent_a = AgentInstanceId("agent-a".into());
         let agent_b = AgentInstanceId("agent-b".into());
@@ -187,7 +167,7 @@ mod tests {
     #[test]
     fn test_list_pending_approvals_empty() {
         let storage = setup_storage();
-        let base_id = create_initial_snapshot(&storage, "base\n");
+        let base_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
 
         let agent = AgentInstanceId("agent".into());
         ensure_approval_agent_partition(&storage, &agent, base_id).unwrap();
@@ -200,7 +180,7 @@ mod tests {
     #[test]
     fn test_reject_approval() {
         let storage = setup_storage();
-        let base_id = create_initial_snapshot(&storage, "base\n");
+        let base_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
 
         let agent = AgentInstanceId("reject-agent".into());
 
@@ -208,11 +188,11 @@ mod tests {
         let mut p = ensure_approval_agent_partition(&storage, &agent, base_id).unwrap();
 
         // Simulate move_agent_to_approval by advancing the pointer
-        let merged_id = create_initial_snapshot(&storage, "agent changes\n");
+        let merged_id = create_initial_snapshot(&storage, "agent changes\n", SourceType::Manual);
         p.advance(merged_id);
         storage
             .update_pointer(&p.id, &merged_id)
-            .map_err(StratumError::Storage)
+            .map_err(LayertwineError::Storage)
             .unwrap();
 
         // Verify partition now has 2 history entries

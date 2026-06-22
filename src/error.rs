@@ -7,9 +7,9 @@ pub mod exit_codes {
     pub const USAGE_ERROR: i32 = 2;
 }
 
-/// Stratum Global Error Type
+/// Layertwine Global Error Type
 #[derive(Error, Debug)]
-pub enum StratumError {
+pub enum LayertwineError {
     // Storage layer error.
     #[error("Storage layer error: {0}")]
     Storage(#[from] StorageError),
@@ -66,13 +66,13 @@ pub enum StratumError {
     NotFound(String),
 }
 
-impl StratumError {
+impl LayertwineError {
     /// Get the appropriate exit code for this error
     pub fn exit_code(&self) -> i32 {
         match self {
-            StratumError::Cli { .. } => exit_codes::USAGE_ERROR,
-            StratumError::NotFound(_) => exit_codes::GENERAL_ERROR,
-            StratumError::Transaction(_) => exit_codes::GENERAL_ERROR,
+            LayertwineError::Cli { .. } => exit_codes::USAGE_ERROR,
+            LayertwineError::NotFound(_) => exit_codes::GENERAL_ERROR,
+            LayertwineError::Transaction(_) => exit_codes::GENERAL_ERROR,
             _ => exit_codes::GENERAL_ERROR,
         }
     }
@@ -80,7 +80,7 @@ impl StratumError {
     /// Format error with CLI-friendly context and suggestion
     pub fn format_cli(&self) -> String {
         match self {
-            StratumError::Cli {
+            LayertwineError::Cli {
                 context,
                 suggestion,
             } => {
@@ -90,59 +90,59 @@ impl StratumError {
                     format!("error: {}", context)
                 }
             }
-            StratumError::NotFound(entity) => {
+            LayertwineError::NotFound(entity) => {
                 format!(
                     "error: {} not found\n  hint: check that the name or ID is correct",
                     entity
                 )
             }
-            StratumError::Storage(e) => {
+            LayertwineError::Storage(e) => {
                 format!("error: storage operation failed\n  detail: {}\n  hint: check database integrity and permissions", e)
             }
-            StratumError::Engine(e) => {
+            LayertwineError::Engine(e) => {
                 format!("error: engine operation failed\n  detail: {}", e)
             }
-            StratumError::StateMachine(e) => {
+            LayertwineError::StateMachine(e) => {
                 format!("error: state transition rejected\n  detail: {}", e)
             }
-            StratumError::Checkpoint(e) => {
+            LayertwineError::Checkpoint(e) => {
                 format!("error: checkpoint operation failed\n  detail: {}", e)
             }
-            StratumError::Restore(e) => {
+            LayertwineError::Restore(e) => {
                 format!("error: restore operation failed\n  detail: {}", e)
             }
-            StratumError::Transaction(e) => {
+            LayertwineError::Transaction(e) => {
                 format!(
                     "error: transaction operation failed\n  detail: {}\n  hint: check for conflicts and retry",
                     e
                 )
             }
-            StratumError::Integrity(e) => {
+            LayertwineError::Integrity(e) => {
                 format!(
                     "error: integrity check failed\n  detail: {}\n  hint: data may be corrupted, consider restoring from backup",
                     e
                 )
             }
-            StratumError::GitSync(e) => {
+            LayertwineError::GitSync(e) => {
                 format!("error: git sync failed\n  detail: {}", e)
             }
-            StratumError::Gc(e) => {
+            LayertwineError::Gc(e) => {
                 format!("error: garbage collection failed\n  detail: {}", e)
             }
-            StratumError::General(e) => {
+            LayertwineError::General(e) => {
                 format!("error: {}", e)
             }
-            StratumError::Serialization(e) => {
+            LayertwineError::Serialization(e) => {
                 format!("error: serialization failed\n  detail: {}", e)
             }
         }
     }
 }
 
-impl StratumError {
+impl LayertwineError {
     /// Convenience constructor for CLI errors with suggestion
     pub fn cli(context: impl Into<String>, suggestion: impl Into<String>) -> Self {
-        StratumError::Cli {
+        LayertwineError::Cli {
             context: context.into(),
             suggestion: Some(suggestion.into()),
         }
@@ -150,7 +150,7 @@ impl StratumError {
 
     /// Convenience constructor for CLI errors without suggestion
     pub fn cli_simple(context: impl Into<String>) -> Self {
-        StratumError::Cli {
+        LayertwineError::Cli {
             context: context.into(),
             suggestion: None,
         }
@@ -180,14 +180,14 @@ pub enum StorageError {
 }
 
 /// Convenient Result Alias
-pub type Result<T> = std::result::Result<T, StratumError>;
+pub type Result<T> = std::result::Result<T, LayertwineError>;
 
 /// Storage Layer Result Alias
 pub type StorageResult<T> = std::result::Result<T, StorageError>;
 
-impl From<serde_json::Error> for StratumError {
+impl From<serde_json::Error> for LayertwineError {
     fn from(e: serde_json::Error) -> Self {
-        StratumError::Serialization(e.to_string())
+        LayertwineError::Serialization(e.to_string())
     }
 }
 
@@ -197,8 +197,8 @@ impl From<serde_json::Error> for StorageError {
     }
 }
 
-impl From<crate::api::types::ApiError> for StratumError {
+impl From<crate::api::types::ApiError> for LayertwineError {
     fn from(e: crate::api::types::ApiError) -> Self {
-        StratumError::General(format!("[{}] {}", e.code, e.message))
+        LayertwineError::General(format!("[{}] {}", e.code, e.message))
     }
 }

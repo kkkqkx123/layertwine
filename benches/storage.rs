@@ -1,9 +1,9 @@
-use stratum::core::delta::Delta;
-use stratum::core::file_node::FileNode;
-use stratum::core::snapshot::Snapshot;
-use stratum::core::types::SourceType;
-use stratum::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
-use stratum::storage::sqlite::SqliteStorage;
+use layertwine::core::delta::Delta;
+use layertwine::core::file_node::FileNode;
+use layertwine::core::snapshot::Snapshot;
+use layertwine::core::types::SourceType;
+use layertwine::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
+use layertwine::storage::sqlite::SqliteStorage;
 use tempfile::TempDir;
 
 fn generate_test_text(lines: usize) -> String {
@@ -29,7 +29,7 @@ fn generate_modified_text(base: &str, change_rate: f64) -> String {
 }
 
 fn create_delta(file_path: &str, content: &[u8]) -> Delta {
-    use stratum::engine::diff::diff_to_line_diff;
+    use layertwine::engine::diff::diff_to_line_diff;
 
     let old_text = std::str::from_utf8(content).unwrap();
     let new_text = generate_modified_text(old_text, 0.1);
@@ -43,7 +43,7 @@ fn create_snapshot(file_path: &str, content: &[u8]) -> Snapshot {
     let new_text = generate_modified_text(old_text, 0.1);
     let file_node = FileNode::new(std::path::PathBuf::from(file_path), content);
 
-    let diff = stratum::engine::diff::diff_to_line_diff(old_text, &new_text);
+    let diff = layertwine::engine::diff::diff_to_line_diff(old_text, &new_text);
     let delta = Delta::new(file_node.clone(), diff, SourceType::Manual);
 
     Snapshot::new_initial(file_node, delta.id)

@@ -435,8 +435,10 @@ fn test_branch_list_and_delete() {
 #[test]
 fn test_sqlite_storage_repeated_snapshot_ops() {
     let storage = create_test_storage();
-    let file = create_test_file_node("stratum.txt", b"stratum content");
-    storage.store_file_node(&file, b"stratum content").unwrap();
+    let file = create_test_file_node("layertwine.txt", b"layertwine content");
+    storage
+        .store_file_node(&file, b"layertwine content")
+        .unwrap();
 
     assert!(storage
         .file_node_exists(file.path_str(), &file.base_hash)
@@ -463,12 +465,12 @@ fn test_sqlite_storage_repeated_partition_ops() {
     storage.store_snapshot(&snapshot, b"").unwrap();
 
     let partition = Partition::new(
-        "stratum-partition".to_string(),
+        "layertwine-partition".to_string(),
         PartitionType::Manual,
         snapshot.id,
     );
     storage.create_partition(&partition).unwrap();
 
     let retrieved = storage.get_partition(&partition.id).unwrap();
-    assert_eq!(retrieved.name, "stratum-partition");
+    assert_eq!(retrieved.name, "layertwine-partition");
 }

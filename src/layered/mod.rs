@@ -15,7 +15,7 @@ pub mod unified;
 use crate::core::layer::Layer;
 use crate::core::partition::Partition;
 use crate::core::types::{CheckpointId, LayerType, PartitionId, PartitionType, SnapshotId};
-use crate::error::{Result, StratumError};
+use crate::error::{LayertwineError, Result};
 use crate::storage::repository::{BranchStore, CheckpointStore, LayerStore, PartitionStore};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -90,7 +90,7 @@ where
     ) -> Result<Partition> {
         self.storage
             .get_partition(partition_id)
-            .map_err(StratumError::Storage)
+            .map_err(LayertwineError::Storage)
     }
 
     /// Getting or creating partitions
@@ -107,7 +107,7 @@ where
             Err(_) => {
                 self.storage
                     .create_partition(partition)
-                    .map_err(StratumError::Storage)?;
+                    .map_err(LayertwineError::Storage)?;
                 Ok(partition.clone())
             }
         }
@@ -121,7 +121,7 @@ where
     ) -> Result<()> {
         self.storage
             .update_pointer(partition_id, snapshot_id)
-            .map_err(StratumError::Storage)
+            .map_err(LayertwineError::Storage)
     }
 
     // Layer management -
@@ -140,13 +140,13 @@ where
         let branch = self
             .storage
             .get_branch(branch_name)
-            .map_err(StratumError::Storage)?;
+            .map_err(LayertwineError::Storage)?;
         let head_cp = self
             .storage
             .get_checkpoint(&branch.head)
-            .map_err(StratumError::Storage)?;
+            .map_err(LayertwineError::Storage)?;
         if head_cp.baseline_snapshots.is_empty() {
-            return Err(StratumError::Checkpoint(
+            return Err(LayertwineError::Checkpoint(
                 "branch head checkpoint has no snapshots".into(),
             ));
         }
@@ -158,14 +158,14 @@ where
             Ok(_) => {
                 self.storage
                     .update_pointer(&staged_pid, &base_snapshot)
-                    .map_err(StratumError::Storage)?;
+                    .map_err(LayertwineError::Storage)?;
             }
             Err(_) => {
                 let partition =
                     Partition::new("staged".to_string(), PartitionType::Staged, base_snapshot);
                 self.storage
                     .create_partition(&partition)
-                    .map_err(StratumError::Storage)?;
+                    .map_err(LayertwineError::Storage)?;
             }
         }
 
@@ -180,7 +180,7 @@ where
         let partitions = self
             .storage
             .list_partitions()
-            .map_err(StratumError::Storage)?;
+            .map_err(LayertwineError::Storage)?;
 
         let mut layer_map: HashMap<crate::core::types::LayerType, Vec<PartitionId>> =
             HashMap::new();
@@ -194,7 +194,7 @@ where
             layer.partitions = pids.clone();
             self.storage
                 .store_layer(&layer)
-                .map_err(StratumError::Storage)?;
+                .map_err(LayertwineError::Storage)?;
         }
 
         Ok(())
@@ -225,36 +225,12 @@ mod tests {
     use crate::core::snapshot::Snapshot;
     use crate::core::types::{LayerType, SourceType};
     use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
-    use crate::storage::SqliteStorage;
+    use crate::test_utils::{create_initial_snapshot, setup_storage_full};
     use std::sync::Arc;
-
-    fn setup_storage() -> SqliteStorage {
-        let storage = SqliteStorage::new_in_memory().unwrap();
-        storage
-            .with_conn(crate::storage::migrations::initialize_full)
-            .unwrap();
-        storage
-    }
-
-    fn create_initial_snapshot(
-        storage: &SqliteStorage,
-        content: &str,
-    ) -> crate::core::types::SnapshotId {
-        let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
-        storage
-            .store_file_node(&file_node, content.as_bytes())
-            .unwrap();
-        let empty_diff = crate::core::types::LineDiff::new(vec![]);
-        let delta = Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
-        storage.store_delta(&delta).unwrap();
-        let snapshot = Snapshot::new_initial(file_node, delta.id);
-        storage.store_snapshot(&snapshot, b"").unwrap();
-        snapshot.id
-    }
 
     #[test]
     fn test_state_machine_new() {
-        let storage = Arc::new(setup_storage());
+        let storage = Arc::new(setup_storage_full());
         let sm = StateMachine::new(storage);
         let result = sm.get_partition(&LayerType::ManualEdit, &uuid::Uuid::now_v7());
         assert!(
@@ -265,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_state_machine_create_layer() {
-        let storage = Arc::new(setup_storage());
+        let storage = Arc::new(setup_storage_full());
         let sm = StateMachine::new(storage);
 
         let manual_layer = sm.create_layer(&LayerType::ManualEdit);
@@ -284,10 +260,10 @@ mod tests {
 
     #[test]
     fn test_state_machine_update_partition_pointer() {
-        let storage = Arc::new(setup_storage());
+        let storage = Arc::new(setup_storage_full());
         let sm = StateMachine::new(storage.clone());
 
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
         let pid = uuid::Uuid::now_v7();
         let partition = Partition {
             id: pid,
@@ -325,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_state_machine_storage_accessor() {
-        let storage = Arc::new(setup_storage());
+        let storage = Arc::new(setup_storage_full());
         let sm = StateMachine::new(storage.clone());
         let retrieved = sm.storage();
         let partitions = retrieved.list_partitions();
@@ -334,10 +310,10 @@ mod tests {
 
     #[test]
     fn test_state_machine_get_partition() {
-        let storage = Arc::new(setup_storage());
+        let storage = Arc::new(setup_storage_full());
         let sm = StateMachine::new(storage.clone());
 
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
         let pid = uuid::Uuid::now_v7();
         let partition = Partition {
             id: pid,
@@ -357,10 +333,10 @@ mod tests {
 
     #[test]
     fn test_state_machine_get_or_create_partition() {
-        let storage = Arc::new(setup_storage());
+        let storage = Arc::new(setup_storage_full());
         let sm = StateMachine::new(storage.clone());
 
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
         let pid = uuid::Uuid::now_v7();
         let partition = Partition {
             id: pid,
@@ -381,7 +357,7 @@ mod tests {
 
     #[test]
     fn test_state_machine_switch_branch_nonexistent() {
-        let storage = Arc::new(setup_storage());
+        let storage = Arc::new(setup_storage_full());
         let sm = StateMachine::new(storage);
 
         let result = sm.switch_branch("nonexistent-branch");
@@ -393,10 +369,10 @@ mod tests {
 
     #[test]
     fn test_state_machine_sync_layers() {
-        let storage = Arc::new(setup_storage());
+        let storage = Arc::new(setup_storage_full());
         let sm = StateMachine::new(storage.clone());
 
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
 
         let storage_ref = &*storage;
         crate::layered::manual::ensure_manual_partition(storage_ref, initial_id).unwrap();
@@ -414,10 +390,10 @@ mod tests {
 
     #[test]
     fn test_state_machine_with_transaction() {
-        let storage = Arc::new(setup_storage());
+        let storage = Arc::new(setup_storage_full());
         let sm = StateMachine::new(storage.clone());
 
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
 
         let result = sm.with_transaction(|storage| {
             let pid = uuid::Uuid::now_v7();

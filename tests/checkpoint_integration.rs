@@ -8,13 +8,13 @@
 //! - Persistence and loading from storage
 //! - Log history and traversal
 
-use stratum::checkpoint::branch::Branch;
-use stratum::checkpoint::types::{Checkpoint, CheckpointBuilder, CheckpointMetadata};
-use stratum::checkpoint::repo::CheckpointRepo;
-use stratum::checkpoint::restore::RestoreRequest;
-use stratum::core::file_node::FileNode;
-use stratum::core::snapshot::{Snapshot, SnapshotContent};
-use stratum::core::types::{CheckpointId, ContentId, SnapshotId};
+use layertwine::checkpoint::branch::Branch;
+use layertwine::checkpoint::repo::CheckpointRepo;
+use layertwine::checkpoint::restore::RestoreRequest;
+use layertwine::checkpoint::types::{Checkpoint, CheckpointBuilder, CheckpointMetadata};
+use layertwine::core::file_node::FileNode;
+use layertwine::core::snapshot::{Snapshot, SnapshotContent};
+use layertwine::core::types::{CheckpointId, ContentId, SnapshotId};
 
 fn dummy_snapshot_id(n: u8) -> SnapshotId {
     ContentId::from_content(&[n; 8])
@@ -861,7 +861,7 @@ fn test_dag_built_dynamically() {
 
 #[test]
 fn test_dag_built_after_load() {
-    use stratum::storage::SqliteStorage;
+    use layertwine::storage::SqliteStorage;
 
     let storage = SqliteStorage::new_full_in_memory().unwrap();
 
@@ -921,10 +921,7 @@ fn multi_snapshot_repo(specs: Vec<(u8, &str)>) -> CheckpointRepo {
 
 #[test]
 fn test_restore_full_integration() {
-    let repo = multi_snapshot_repo(vec![
-        (1, "file://src/main.rs"),
-        (2, "agent://state"),
-    ]);
+    let repo = multi_snapshot_repo(vec![(1, "file://src/main.rs"), (2, "agent://state")]);
 
     let head = repo.current_branch_head();
     let resp = repo.restore_full(&head).unwrap();
@@ -943,7 +940,9 @@ fn test_restore_selective_integration() {
     ]);
 
     let head = repo.current_branch_head();
-    let resp = repo.restore_selective(&head, vec!["agent://", "graph://"]).unwrap();
+    let resp = repo
+        .restore_selective(&head, vec!["agent://", "graph://"])
+        .unwrap();
 
     assert_eq!(resp.snapshots.len(), 2);
     let sources: Vec<&str> = resp.snapshots.iter().map(|(_, _, s)| s.as_str()).collect();
@@ -953,10 +952,7 @@ fn test_restore_selective_integration() {
 
 #[test]
 fn test_restore_dispatcher_integration() {
-    let repo = multi_snapshot_repo(vec![
-        (1, "file://src/a.rs"),
-        (2, "agent://state"),
-    ]);
+    let repo = multi_snapshot_repo(vec![(1, "file://src/a.rs"), (2, "agent://state")]);
 
     let head = repo.current_branch_head();
 
@@ -990,10 +986,7 @@ fn test_restore_dispatcher_integration() {
 
 #[test]
 fn test_diff_checkpoints_integration() {
-    let repo = multi_snapshot_repo(vec![
-        (1, "file://a.rs"),
-        (2, "file://b.rs"),
-    ]);
+    let repo = multi_snapshot_repo(vec![(1, "file://a.rs"), (2, "file://b.rs")]);
 
     let snap = make_cached_snapshot(3, "file://c.rs");
     let snap_id = snap.id;
@@ -1016,5 +1009,9 @@ fn test_validate_integrity_integration() {
     let repo = multi_snapshot_repo(vec![(1, "file://src/main.rs")]);
     let head = repo.current_branch_head();
     let issues = repo.validate_integrity(&head).unwrap();
-    assert!(issues.is_empty(), "expected clean integrity, got: {:?}", issues);
+    assert!(
+        issues.is_empty(),
+        "expected clean integrity, got: {:?}",
+        issues
+    );
 }

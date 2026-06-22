@@ -57,7 +57,7 @@ where
     // 5. Merge to feature
     let merge_result = integrated::merge_agent_to_feature(storage, agent_id, feature_name)?;
     if merge_result.has_conflicts() {
-        return Err(crate::error::StratumError::General(format!(
+        return Err(crate::error::LayertwineError::General(format!(
             "Merge conflicts detected: {}",
             merge_result.format_conflicts()
         )));
@@ -66,7 +66,7 @@ where
     // 6. Merge feature to unified
     let unified_result = unified::merge_features_to_unified(storage, &[feature_name.to_string()])?;
     if unified_result.has_conflicts() {
-        return Err(crate::error::StratumError::General(format!(
+        return Err(crate::error::LayertwineError::General(format!(
             "Merge conflicts detected: {}",
             unified_result.format_conflicts()
         )));
@@ -78,7 +78,9 @@ where
     // 8. Return staged snapshot (checkpoint commit would be the next step)
     let staged_partition = storage
         .get_partition(&staged::staged_partition_id())
-        .map_err(|_| crate::error::StratumError::NotFound("staged partition not found".into()))?;
+        .map_err(|_| {
+            crate::error::LayertwineError::NotFound("staged partition not found".into())
+        })?;
     Ok(staged_partition.current_snapshot)
 }
 
@@ -100,7 +102,7 @@ where
         + CheckpointStore,
 {
     if agents.is_empty() {
-        return Err(crate::error::StratumError::General(
+        return Err(crate::error::LayertwineError::General(
             "至少需要一个agent".to_string(),
         ));
     }
@@ -121,7 +123,7 @@ where
         // Merge agent's work into feature
         let merge_result = integrated::merge_agent_to_feature(storage, &agent_id, feature_name)?;
         if merge_result.has_conflicts() {
-            return Err(crate::error::StratumError::General(format!(
+            return Err(crate::error::LayertwineError::General(format!(
                 "Merge conflicts for agent {}: {}",
                 agent_id,
                 merge_result.format_conflicts()
@@ -132,7 +134,7 @@ where
     // 4. Merge feature to unified
     let unified_result = unified::merge_features_to_unified(storage, &[feature_name.to_string()])?;
     if unified_result.has_conflicts() {
-        return Err(crate::error::StratumError::General(format!(
+        return Err(crate::error::LayertwineError::General(format!(
             "Merge conflicts detected: {}",
             unified_result.format_conflicts()
         )));
@@ -144,7 +146,9 @@ where
     // 6. Return staged snapshot
     let staged_partition = storage
         .get_partition(&staged::staged_partition_id())
-        .map_err(|_| crate::error::StratumError::NotFound("staged partition not found".into()))?;
+        .map_err(|_| {
+            crate::error::LayertwineError::NotFound("staged partition not found".into())
+        })?;
     Ok(staged_partition.current_snapshot)
 }
 
@@ -162,7 +166,7 @@ where
         + CheckpointStore,
 {
     if feature_names.is_empty() {
-        return Err(crate::error::StratumError::General(
+        return Err(crate::error::LayertwineError::General(
             "至少需要一个feature".to_string(),
         ));
     }
@@ -170,7 +174,7 @@ where
     // 1. Merge features to unified
     let unified_result = unified::merge_features_to_unified(storage, feature_names)?;
     if unified_result.has_conflicts() {
-        return Err(crate::error::StratumError::General(format!(
+        return Err(crate::error::LayertwineError::General(format!(
             "Merge conflicts detected: {}",
             unified_result.format_conflicts()
         )));
@@ -182,7 +186,9 @@ where
     // 3. Return staged snapshot
     let staged_partition = storage
         .get_partition(&staged::staged_partition_id())
-        .map_err(|_| crate::error::StratumError::NotFound("staged partition not found".into()))?;
+        .map_err(|_| {
+            crate::error::LayertwineError::NotFound("staged partition not found".into())
+        })?;
     Ok(staged_partition.current_snapshot)
 }
 
@@ -196,14 +202,14 @@ where
     match storage.get_partition(&staged::staged_partition_id()) {
         Ok(staged) => storage
             .get_snapshot(&staged.current_snapshot)
-            .map_err(crate::error::StratumError::Storage),
+            .map_err(crate::error::LayertwineError::Storage),
         Err(_) => {
             // If staged doesn't exist, try to get unified
             match storage.get_partition(&unified::unified_partition_id()) {
                 Ok(unified) => storage
                     .get_snapshot(&unified.current_snapshot)
-                    .map_err(crate::error::StratumError::Storage),
-                Err(_) => Err(crate::error::StratumError::NotFound(
+                    .map_err(crate::error::LayertwineError::Storage),
+                Err(_) => Err(crate::error::LayertwineError::NotFound(
                     "No baseline found. Please initialize staged or unified first.".to_string(),
                 )),
             }
@@ -214,32 +220,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::file_node::FileNode;
     use crate::core::types::SourceType;
-    use crate::storage::SqliteStorage;
-
-    fn setup_storage() -> SqliteStorage {
-        SqliteStorage::new_in_memory().unwrap()
-    }
-
-    fn create_initial_snapshot(storage: &SqliteStorage, content: &str) -> SnapshotId {
-        let file_node = FileNode::new(std::path::PathBuf::from("test.txt"), content.as_bytes());
-        storage
-            .store_file_node(&file_node, content.as_bytes())
-            .unwrap();
-        let empty_diff = crate::core::types::LineDiff::new(vec![]);
-        let delta =
-            crate::core::delta::Delta::new(file_node.clone(), empty_diff, SourceType::Manual);
-        storage.store_delta(&delta).unwrap();
-        let snapshot = crate::core::snapshot::Snapshot::new_initial(file_node, delta.id);
-        storage.store_snapshot(&snapshot, b"").unwrap();
-        snapshot.id
-    }
+    use crate::test_utils::{create_initial_snapshot, setup_storage};
 
     #[test]
     fn test_develop_single_feature() {
         let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\n");
+        let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
 
         staged::ensure_staged_partition(&storage, initial_id).unwrap();
 
@@ -267,7 +254,8 @@ mod tests {
     #[test]
     fn test_develop_feature_with_collaboration() {
         let storage = setup_storage();
-        let initial_id = create_initial_snapshot(&storage, "base\nmiddle\nend\n");
+        let initial_id =
+            create_initial_snapshot(&storage, "base\nmiddle\nend\n", SourceType::Manual);
 
         staged::ensure_staged_partition(&storage, initial_id).unwrap();
 

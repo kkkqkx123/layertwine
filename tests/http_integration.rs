@@ -6,11 +6,10 @@
 //!
 //! Each test mirrors a real business scenario from the user guide.
 
-
-use stratum::api::{
-    ApiService, ApproveRequest, BackupRequest, BranchCreateRequest,
-    BranchSwitchRequest, CommitRequest, EditRequest, GcRequest, InitRequest, LogRequest,
-    MergeRequest, RestoreRequest, ShowRequest,
+use layertwine::api::{
+    ApiService, ApproveRequest, BackupRequest, BranchCreateRequest, BranchSwitchRequest,
+    CommitRequest, EditRequest, GcRequest, InitRequest, LogRequest, MergeRequest, RestoreRequest,
+    ShowRequest,
 };
 
 mod common;
@@ -111,7 +110,7 @@ fn test_multi_agent_workflow_edit_submit_approve() {
     // Agent A: edit
     let agent_a_edit = env
         .api
-        .agent_edit(stratum::api::AgentEditRequest {
+        .agent_edit(layertwine::api::AgentEditRequest {
             agent_id: "agent-a".into(),
             file: "src/auth.rs".into(),
             content: Some("pub fn login() {}\n".into()),
@@ -123,7 +122,7 @@ fn test_multi_agent_workflow_edit_submit_approve() {
     // Agent A: submit
     let agent_a_submit = env
         .api
-        .agent_submit(stratum::api::AgentSubmitRequest {
+        .agent_submit(layertwine::api::AgentSubmitRequest {
             agent_id: "agent-a".into(),
         })
         .expect("agent A submit should succeed");
@@ -132,7 +131,7 @@ fn test_multi_agent_workflow_edit_submit_approve() {
     // Agent B: edit
     let agent_b_edit = env
         .api
-        .agent_edit(stratum::api::AgentEditRequest {
+        .agent_edit(layertwine::api::AgentEditRequest {
             agent_id: "agent-b".into(),
             file: "src/db.rs".into(),
             content: Some("pub fn connect() {}\n".into()),
@@ -143,7 +142,7 @@ fn test_multi_agent_workflow_edit_submit_approve() {
     // Agent B: submit
     let agent_b_submit = env
         .api
-        .agent_submit(stratum::api::AgentSubmitRequest {
+        .agent_submit(layertwine::api::AgentSubmitRequest {
             agent_id: "agent-b".into(),
         })
         .expect("agent B submit should succeed");
@@ -546,8 +545,11 @@ fn test_switch_nonexistent_branch_returns_error() {
     });
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.code == "NOT_FOUND" || err.code == "CHECKPOINT_ERROR"
-        , "expected NOT_FOUND or CHECKPOINT_ERROR, got {}", err.code);
+    assert!(
+        err.code == "NOT_FOUND" || err.code == "CHECKPOINT_ERROR",
+        "expected NOT_FOUND or CHECKPOINT_ERROR, got {}",
+        err.code
+    );
 }
 
 // ── Scenario 12: Error handling - duplicate branch ──
@@ -606,7 +608,7 @@ fn test_agent_submit_without_edit_returns_error() {
         })
         .expect("init should succeed");
 
-    let result = env.api.agent_submit(stratum::api::AgentSubmitRequest {
+    let result = env.api.agent_submit(layertwine::api::AgentSubmitRequest {
         agent_id: "no-edit-agent".into(),
     });
     assert!(result.is_err());
@@ -643,10 +645,7 @@ fn test_gc_after_commits() {
             .expect("commit");
     }
 
-    let gc_resp = env
-        .api
-        .gc(GcRequest {})
-        .expect("gc should succeed");
+    let gc_resp = env.api.gc(GcRequest {}).expect("gc should succeed");
     // GC may or may not remove things, but should not crash
     let _ = gc_resp;
 }
@@ -668,7 +667,7 @@ fn test_compact_after_operations() {
 
     let compact = env
         .api
-        .compact(stratum::api::CompactRequest {
+        .compact(layertwine::api::CompactRequest {
             vacuum_full: Some(false),
         })
         .expect("compact should succeed");

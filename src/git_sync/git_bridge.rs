@@ -6,7 +6,7 @@ use crate::core::file_node::FileNode;
 use crate::core::snapshot::Snapshot;
 use crate::core::types::LineDiff;
 use crate::core::types::{CheckpointId, SourceType};
-use crate::error::{Result, StratumError};
+use crate::error::{LayertwineError, Result};
 use crate::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
 
 #[cfg(test)]
@@ -58,19 +58,19 @@ impl GitBridge {
         S: SnapshotStore + DeltaStore + FileNodeStore,
     {
         let git_repo = git2::Repository::open(git_repo_path)
-            .map_err(|e| StratumError::GitSync(format!("failed to open git repo: {}", e)))?;
+            .map_err(|e| LayertwineError::GitSync(format!("failed to open git repo: {}", e)))?;
 
         let resolved = git_repo.revparse_single(git_ref).map_err(|e| {
-            StratumError::GitSync(format!("failed to resolve ref '{}': {}", git_ref, e))
+            LayertwineError::GitSync(format!("failed to resolve ref '{}': {}", git_ref, e))
         })?;
 
         let commit = resolved
             .peel_to_commit()
-            .map_err(|e| StratumError::GitSync(format!("failed to peel to commit: {}", e)))?;
+            .map_err(|e| LayertwineError::GitSync(format!("failed to peel to commit: {}", e)))?;
 
         let tree = commit
             .tree()
-            .map_err(|e| StratumError::GitSync(format!("failed to get tree: {}", e)))?;
+            .map_err(|e| LayertwineError::GitSync(format!("failed to get tree: {}", e)))?;
 
         let git_commit_hash = commit.id().to_string();
         let mut snapshots: Vec<Snapshot> = Vec::new();
@@ -78,7 +78,7 @@ impl GitBridge {
         walk_tree_and_create_snapshots(&git_repo, &tree, "", storage, &mut snapshots)?;
 
         if snapshots.is_empty() {
-            return Err(StratumError::GitSync(
+            return Err(LayertwineError::GitSync(
                 "no files found in git ref".to_string(),
             ));
         }
@@ -121,70 +121,72 @@ impl GitBridge {
         S: SnapshotStore + DeltaStore + FileNodeStore,
     {
         let git_repo = git2::Repository::open(git_repo_path)
-            .map_err(|e| StratumError::GitSync(format!("failed to open git repo: {}", e)))?;
+            .map_err(|e| LayertwineError::GitSync(format!("failed to open git repo: {}", e)))?;
 
-        let checkpoint_id = checkpoint_repo
-            .get_branch_head(branch_name)
-            .map_err(|_| StratumError::NotFound(format!("branch '{}' not found", branch_name)))?;
+        let checkpoint_id = checkpoint_repo.get_branch_head(branch_name).map_err(|_| {
+            LayertwineError::NotFound(format!("branch '{}' not found", branch_name))
+        })?;
 
         let checkpoint = checkpoint_repo
             .get_checkpoint(&checkpoint_id)
-            .map_err(|_| StratumError::NotFound("checkpoint not found".to_string()))?;
+            .map_err(|_| LayertwineError::NotFound("checkpoint not found".to_string()))?;
 
         if checkpoint.baseline_snapshots.is_empty() {
-            return Err(StratumError::GitSync(
+            return Err(LayertwineError::GitSync(
                 "checkpoint has no baseline snapshots".to_string(),
             ));
         }
 
         let workdir = git_repo
             .workdir()
-            .ok_or_else(|| StratumError::GitSync("bare repository has no workdir".to_string()))?
+            .ok_or_else(|| LayertwineError::GitSync("bare repository has no workdir".to_string()))?
             .to_path_buf();
 
         let mut index = git_repo
             .index()
-            .map_err(|e| StratumError::GitSync(format!("failed to get index: {}", e)))?;
+            .map_err(|e| LayertwineError::GitSync(format!("failed to get index: {}", e)))?;
 
         // Write all snapshot files to the working tree and stage them
         for snapshot_id in &checkpoint.baseline_snapshots {
             let snapshot = storage
                 .get_snapshot(snapshot_id)
-                .map_err(StratumError::Storage)?;
+                .map_err(LayertwineError::Storage)?;
 
             let content = storage
                 .get_file_content(snapshot.file.path_str(), &snapshot.file.base_hash)
-                .map_err(StratumError::Storage)?;
+                .map_err(LayertwineError::Storage)?;
 
             let file_path_in_repo = workdir.join(&snapshot.file.file_path);
             if let Some(parent) = file_path_in_repo.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| {
-                    StratumError::GitSync(format!("failed to create directories: {}", e))
+                    LayertwineError::GitSync(format!("failed to create directories: {}", e))
                 })?;
             }
             std::fs::write(&file_path_in_repo, &content)
-                .map_err(|e| StratumError::GitSync(format!("failed to write file: {}", e)))?;
+                .map_err(|e| LayertwineError::GitSync(format!("failed to write file: {}", e)))?;
 
             let repo_relative_path = snapshot.file.file_path.to_str().unwrap_or("");
             index.add_path(Path::new(repo_relative_path)).map_err(|e| {
-                StratumError::GitSync(format!("failed to add file to index: {}", e))
+                LayertwineError::GitSync(format!("failed to add file to index: {}", e))
             })?;
         }
 
         index
             .write()
-            .map_err(|e| StratumError::GitSync(format!("failed to write index: {}", e)))?;
+            .map_err(|e| LayertwineError::GitSync(format!("failed to write index: {}", e)))?;
 
         let tree_id = index
             .write_tree()
-            .map_err(|e| StratumError::GitSync(format!("failed to write tree: {}", e)))?;
+            .map_err(|e| LayertwineError::GitSync(format!("failed to write tree: {}", e)))?;
 
         let tree = git_repo
             .find_tree(tree_id)
-            .map_err(|e| StratumError::GitSync(format!("failed to find tree: {}", e)))?;
+            .map_err(|e| LayertwineError::GitSync(format!("failed to find tree: {}", e)))?;
 
-        let author_sig = git2::Signature::now(checkpoint.metadata.author.as_str(), "stratum@local")
-            .map_err(|e| StratumError::GitSync(format!("failed to create signature: {}", e)))?;
+        let author_sig =
+            git2::Signature::now(checkpoint.metadata.author.as_str(), "layertwine@local").map_err(
+                |e| LayertwineError::GitSync(format!("failed to create signature: {}", e)),
+            )?;
 
         let parent_commit = git_repo
             .head()
@@ -201,7 +203,7 @@ impl GitBridge {
                     &tree,
                     &[parent],
                 )
-                .map_err(|e| StratumError::GitSync(format!("failed to commit: {}", e)))?
+                .map_err(|e| LayertwineError::GitSync(format!("failed to commit: {}", e)))?
         } else {
             git_repo
                 .commit(
@@ -212,7 +214,7 @@ impl GitBridge {
                     &tree,
                     &[] as &[&git2::Commit],
                 )
-                .map_err(|e| StratumError::GitSync(format!("failed to commit: {}", e)))?
+                .map_err(|e| LayertwineError::GitSync(format!("failed to commit: {}", e)))?
         };
 
         let git_commit_hash = git_commit.to_string();
@@ -233,7 +235,7 @@ impl GitBridge {
         branch_name: &str,
     ) -> Result<SyncInfo> {
         let git_repo = git2::Repository::open(git_repo_path)
-            .map_err(|e| StratumError::GitSync(format!("failed to open git repo: {}", e)))?;
+            .map_err(|e| LayertwineError::GitSync(format!("failed to open git repo: {}", e)))?;
 
         let git_head = git_repo.head().ok();
         let git_head_commit = git_head.as_ref().and_then(|h| h.peel_to_commit().ok());
@@ -319,11 +321,11 @@ impl GitBridge {
         )?;
 
         let git_repo = git2::Repository::open(git_repo_path)
-            .map_err(|e| StratumError::GitSync(format!("failed to open git repo: {}", e)))?;
+            .map_err(|e| LayertwineError::GitSync(format!("failed to open git repo: {}", e)))?;
 
         // Find the remote
         let mut remote = git_repo.find_remote(remote_name).map_err(|e| {
-            StratumError::GitSync(format!("failed to find remote '{}': {}", remote_name, e))
+            LayertwineError::GitSync(format!("failed to find remote '{}': {}", remote_name, e))
         })?;
 
         // Build the refspec: refs/heads/<branch>
@@ -338,7 +340,10 @@ impl GitBridge {
                 Some(&mut push_options),
             )
             .map_err(|e| {
-                StratumError::GitSync(format!("failed to push to remote '{}': {}", remote_name, e))
+                LayertwineError::GitSync(format!(
+                    "failed to push to remote '{}': {}",
+                    remote_name, e
+                ))
             })?;
 
         Ok(git_hash)
@@ -349,10 +354,10 @@ impl GitBridge {
     /// Fetches the remote refs, then initializes from the fetched remote tracking branch.
     pub fn fetch_from_remote(git_repo_path: &Path, remote_name: &str) -> Result<()> {
         let git_repo = git2::Repository::open(git_repo_path)
-            .map_err(|e| StratumError::GitSync(format!("failed to open git repo: {}", e)))?;
+            .map_err(|e| LayertwineError::GitSync(format!("failed to open git repo: {}", e)))?;
 
         let mut remote = git_repo.find_remote(remote_name).map_err(|e| {
-            StratumError::GitSync(format!("failed to find remote '{}': {}", remote_name, e))
+            LayertwineError::GitSync(format!("failed to find remote '{}': {}", remote_name, e))
         })?;
 
         let mut fetch_options = git2::FetchOptions::new();
@@ -363,7 +368,7 @@ impl GitBridge {
                 None,
             )
             .map_err(|e| {
-                StratumError::GitSync(format!(
+                LayertwineError::GitSync(format!(
                     "failed to fetch from remote '{}': {}",
                     remote_name, e
                 ))
@@ -416,18 +421,20 @@ where
 
                     storage
                         .store_file_node(&file_node, &content)
-                        .map_err(StratumError::Storage)?;
+                        .map_err(LayertwineError::Storage)?;
 
                     let diff = LineDiff::new(vec![]);
                     let delta = Delta::new(file_node.clone(), diff, SourceType::Backup);
 
-                    storage.store_delta(&delta).map_err(StratumError::Storage)?;
+                    storage
+                        .store_delta(&delta)
+                        .map_err(LayertwineError::Storage)?;
 
                     let snapshot = Snapshot::new_initial(file_node, delta.id);
 
                     storage
                         .store_snapshot(&snapshot, &content)
-                        .map_err(StratumError::Storage)?;
+                        .map_err(LayertwineError::Storage)?;
 
                     snapshots.push(snapshot);
                 }
@@ -534,7 +541,7 @@ mod tests {
             &git_path,
             &mut checkpoint_repo,
             "main",
-            "push from stratum",
+            "push from layertwine",
         );
 
         assert!(result.is_ok(), "push_to_git failed: {:?}", result.err());

@@ -158,5 +158,11 @@ pub trait MetadataStore {
 }
 
 /// Combined checkpoint persistence trait (for auto-persist in CheckpointRepo)
-pub trait CheckpointPersist: CheckpointStore + BranchStore + MetadataStore + SnapshotStore + Send + Sync {}
-impl<T: CheckpointStore + BranchStore + MetadataStore + SnapshotStore + Send + Sync> CheckpointPersist for T {}
+pub trait CheckpointPersist:
+    CheckpointStore + BranchStore + MetadataStore + SnapshotStore + Send + Sync
+{
+}
+impl<T: CheckpointStore + BranchStore + MetadataStore + SnapshotStore + Send + Sync>
+    CheckpointPersist for T
+{
+}

@@ -5,6 +5,7 @@
 
 use crate::checkpoint::types::Checkpoint;
 use crate::core::types::CheckpointId;
+use smallvec::SmallVec;
 use std::collections::BTreeMap;
 
 /// Time index mapping creation timestamps to checkpoint IDs
@@ -15,7 +16,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Default)]
 pub struct TimeIndex {
     /// Timestamp -> CheckpointId (ordered by timestamp)
-    entries: BTreeMap<i64, Vec<CheckpointId>>,
+    entries: BTreeMap<i64, SmallVec<[CheckpointId; 2]>>,
 }
 
 impl TimeIndex {
@@ -28,10 +29,7 @@ impl TimeIndex {
 
     /// Index a checkpoint by its creation time
     pub fn insert(&mut self, cp: &Checkpoint) {
-        self.entries
-            .entry(cp.created_at)
-            .or_default()
-            .push(cp.id);
+        self.entries.entry(cp.created_at).or_default().push(cp.id);
     }
 
     /// Remove a checkpoint from the index

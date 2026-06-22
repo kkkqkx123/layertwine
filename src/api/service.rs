@@ -2,17 +2,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::backup::backup_repo::BackupRepo;
-use crate::checkpoint::types::Checkpoint;
 use crate::checkpoint::repo::CheckpointRepo;
-use crate::config::{CompactOptions, StratumConfig};
+use crate::checkpoint::types::Checkpoint;
+use crate::config::{CompactOptions, LayertwineConfig};
 use crate::core::delta::Delta;
 use crate::core::file_node::FileNode;
 use crate::core::snapshot::Snapshot;
 use crate::core::types::LineDiff;
 use crate::core::types::{
-    AgentInstanceId, ContentId, DiffOp, PartitionType, SnapshotId, SourceType,
+    AgentInstanceId, CheckpointId, ContentId, DiffOp, PartitionType, SnapshotId, SourceType,
 };
-use crate::error::{Result as StratumResult, StratumError};
+use crate::error::{LayertwineError, Result as LayertwineResult};
 use crate::git_sync::gc::collect_garbage;
 use crate::git_sync::git_bridge::GitBridge;
 use crate::layered::StateMachine;
@@ -33,7 +33,7 @@ pub struct ServiceConfig {
 impl Default for ServiceConfig {
     fn default() -> Self {
         ServiceConfig {
-            db_path: ".stratum/stratum.db".into(),
+            db_path: ".layertwine/layertwine.db".into(),
         }
     }
 }
@@ -57,9 +57,30 @@ pub trait ApiService: Send + Sync {
     fn merge(&self, req: MergeRequest) -> ApiResult<MergeResponse>;
     fn backup(&self, req: BackupRequest) -> ApiResult<BackupResponse>;
     fn restore(&self, req: RestoreRequest) -> ApiResult<RestoreResponse>;
+
+    // ── Checkpoint restore APIs ──
+
+    /// Restore files/state from a checkpoint (full or selective by source filter)
+    fn checkpoint_restore(
+        &self,
+        req: CheckpointRestoreRequest,
+    ) -> ApiResult<CheckpointRestoreResponse>;
+    /// Restore files/state from the nearest checkpoint to a target time
+    fn checkpoint_restore_by_time(
+        &self,
+        req: CheckpointRestoreByTimeRequest,
+    ) -> ApiResult<CheckpointRestoreResponse>;
+    /// Diff two checkpoints (snapshot-level comparison)
+    fn checkpoint_diff(&self, req: CheckpointDiffRequest) -> ApiResult<CheckpointDiffResponse>;
+    /// Rollback staged partition to a checkpoint baseline
+    fn checkpoint_rollback(
+        &self,
+        req: CheckpointRollbackRequest,
+    ) -> ApiResult<CheckpointRollbackResponse>;
+
     fn gc(&self, _req: GcRequest) -> ApiResult<GcResponse>;
     /// Compact the database — WAL checkpoint truncation + freelist reclamation.
-    /// Uses the maintenance config from `StratumConfig` by default.
+    /// Uses the maintenance config from `LayertwineConfig` by default.
     /// Pass `vacuum_full: true` in the request to force a full VACUUM.
     fn compact(&self, req: CompactRequest) -> ApiResult<CompactResponse>;
     fn push(&self, req: PushRequest) -> ApiResult<PushResponse>;
@@ -82,34 +103,35 @@ pub trait ApiService: Send + Sync {
 
 // ── Helpers ──
 
-fn open_storage(db_path: &str) -> StratumResult<Arc<SqliteStorage>> {
+fn open_storage(db_path: &str) -> LayertwineResult<Arc<SqliteStorage>> {
     let path = Path::new(db_path);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| StratumError::General(format!("failed to create db directory: {}", e)))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            LayertwineError::General(format!("failed to create db directory: {}", e))
+        })?;
     }
-    let storage = SqliteStorage::new_full(path).map_err(StratumError::Storage)?;
+    let storage = SqliteStorage::new_full(path).map_err(LayertwineError::Storage)?;
     Ok(Arc::new(storage))
 }
 
-fn load_checkpoint_repo(storage: &SqliteStorage) -> StratumResult<CheckpointRepo> {
+fn load_checkpoint_repo(storage: &SqliteStorage) -> LayertwineResult<CheckpointRepo> {
     let persist: Box<dyn CheckpointPersist> = Box::new(storage.share());
     CheckpointRepo::load(persist)
 }
 
-fn map_error(e: StratumError) -> ApiError {
+fn map_error(e: LayertwineError) -> ApiError {
     match e {
-        StratumError::Storage(se) => ApiError::storage(se.to_string()),
-        StratumError::Engine(s) => ApiError::engine(s),
-        StratumError::StateMachine(s) => ApiError::state_machine(s),
-        StratumError::Checkpoint(s) => ApiError::checkpoint(s),
-        StratumError::Restore(s) => ApiError::checkpoint(format!("restore: {}", s)),
-        StratumError::Transaction(s) => ApiError::checkpoint(format!("transaction: {}", s)),
-        StratumError::Integrity(s) => ApiError::checkpoint(format!("integrity: {}", s)),
-        StratumError::GitSync(s) => ApiError::git_sync(s),
-        StratumError::Gc(s) => ApiError::gc(s),
-        StratumError::NotFound(s) => ApiError::not_found(s),
-        StratumError::Cli {
+        LayertwineError::Storage(se) => ApiError::storage(se.to_string()),
+        LayertwineError::Engine(s) => ApiError::engine(s),
+        LayertwineError::StateMachine(s) => ApiError::state_machine(s),
+        LayertwineError::Checkpoint(s) => ApiError::checkpoint(s),
+        LayertwineError::Restore(s) => ApiError::checkpoint(format!("restore: {}", s)),
+        LayertwineError::Transaction(s) => ApiError::checkpoint(format!("transaction: {}", s)),
+        LayertwineError::Integrity(s) => ApiError::checkpoint(format!("integrity: {}", s)),
+        LayertwineError::GitSync(s) => ApiError::git_sync(s),
+        LayertwineError::Gc(s) => ApiError::gc(s),
+        LayertwineError::NotFound(s) => ApiError::not_found(s),
+        LayertwineError::Cli {
             context,
             suggestion,
         } => ApiError {
@@ -118,8 +140,8 @@ fn map_error(e: StratumError) -> ApiError {
             suggestion,
             details: None,
         },
-        StratumError::Serialization(s) => ApiError::internal(format!("serialization: {}", s)),
-        StratumError::General(s) => ApiError::general(s),
+        LayertwineError::Serialization(s) => ApiError::internal(format!("serialization: {}", s)),
+        LayertwineError::General(s) => ApiError::general(s),
     }
 }
 
@@ -154,17 +176,17 @@ pub struct ApiServiceImpl {
 }
 
 impl ApiServiceImpl {
-    /// Open an existing stratum repository
+    /// Open an existing layertwine repository
     pub fn open(config: ServiceConfig) -> ApiResult<Self> {
         let storage = open_storage(&config.db_path).map_err(map_error)?;
         let state_machine = StateMachine::new(storage.clone());
 
         // Load config via priority chain:
-        //   defaults → ~/.config/stratum.toml → <binary-dir>/stratum.toml → <db-dir>/stratum.toml
+        //   defaults → ~/.config/layertwine.toml → <binary-dir>/layertwine.toml → <db-dir>/layertwine.toml
         let db_dir = Path::new(&config.db_path)
             .parent()
             .unwrap_or(Path::new("."));
-        let strat_cfg = StratumConfig::load_with_priority(db_dir).unwrap_or_default();
+        let strat_cfg = LayertwineConfig::load_with_priority(db_dir).unwrap_or_default();
         let maintenance_cfg = strat_cfg.maintenance;
 
         // Load checkpoint repo
@@ -185,7 +207,7 @@ impl ApiServiceImpl {
         let snapshot = self
             .storage
             .get_snapshot(snapshot_id)
-            .map_err(|e| map_error(StratumError::Storage(e)))?;
+            .map_err(|e| map_error(LayertwineError::Storage(e)))?;
         crate::layered::transition::reconstruct_text(self.storage.as_ref(), &snapshot)
             .map_err(map_error)
     }
@@ -232,18 +254,18 @@ impl ApiServiceImpl {
         let staged_partition = self
             .storage
             .get_partition(&staged_pid)
-            .map_err(|e| map_error(StratumError::Storage(e)))?;
+            .map_err(|e| map_error(LayertwineError::Storage(e)))?;
         let staged_snapshot = self
             .storage
             .get_snapshot(&staged_partition.current_snapshot)
-            .map_err(|e| map_error(StratumError::Storage(e)))?;
+            .map_err(|e| map_error(LayertwineError::Storage(e)))?;
 
         let new_text = self.reconstruct_text_from_id(&staged_partition.current_snapshot)?;
         let old_text = self.last_checkpoint_text();
         let staged_deltas = self
             .storage
             .get_deltas(&staged_snapshot.deltas)
-            .map_err(|e| map_error(StratumError::Storage(e)))?;
+            .map_err(|e| map_error(LayertwineError::Storage(e)))?;
         let file_path = staged_deltas
             .last()
             .map(|d| d.file.path_str().to_string())
@@ -272,7 +294,7 @@ impl ApiServiceImpl {
         let checkpoint = self
             .storage
             .get_checkpoint(&cp_id)
-            .map_err(|e| map_error(StratumError::Storage(e)))?;
+            .map_err(|e| map_error(LayertwineError::Storage(e)))?;
 
         // "After" text from the checkpoint's baseline snapshot
         let new_snapshot_id = checkpoint
@@ -282,12 +304,12 @@ impl ApiServiceImpl {
         let new_snapshot = self
             .storage
             .get_snapshot(new_snapshot_id)
-            .map_err(|e| map_error(StratumError::Storage(e)))?;
+            .map_err(|e| map_error(LayertwineError::Storage(e)))?;
         let new_text = self.reconstruct_text_from_id(new_snapshot_id)?;
         let new_deltas = self
             .storage
             .get_deltas(&new_snapshot.deltas)
-            .map_err(|e| map_error(StratumError::Storage(e)))?;
+            .map_err(|e| map_error(LayertwineError::Storage(e)))?;
         let file_path = new_deltas
             .last()
             .map(|d| d.file.path_str().to_string())
@@ -331,12 +353,12 @@ impl ApiServiceImpl {
         let snapshot = self
             .storage
             .get_snapshot(&partition.current_snapshot)
-            .map_err(|e| map_error(StratumError::Storage(e)))?;
+            .map_err(|e| map_error(LayertwineError::Storage(e)))?;
         let new_text = self.reconstruct_text_from_id(&partition.current_snapshot)?;
         let partition_deltas = self
             .storage
             .get_deltas(&snapshot.deltas)
-            .map_err(|e| map_error(StratumError::Storage(e)))?;
+            .map_err(|e| map_error(LayertwineError::Storage(e)))?;
         let file_path = partition_deltas
             .last()
             .map(|d| d.file.path_str().to_string())
@@ -383,10 +405,10 @@ impl ApiService for ApiServiceImpl {
                 branch: "main".into(),
             })
         } else {
-            let file_node = FileNode::new(PathBuf::from(".stratum/init"), b"");
+            let file_node = FileNode::new(PathBuf::from(".layertwine/init"), b"");
             storage
                 .store_file_node(&file_node, b"")
-                .map_err(|e| map_error(StratumError::Storage(e)))?;
+                .map_err(|e| map_error(LayertwineError::Storage(e)))?;
             let empty_diff = Delta::new(
                 file_node.clone(),
                 crate::core::types::LineDiff::new(vec![]),
@@ -394,11 +416,11 @@ impl ApiService for ApiServiceImpl {
             );
             storage
                 .store_delta(&empty_diff)
-                .map_err(|e| map_error(StratumError::Storage(e)))?;
+                .map_err(|e| map_error(LayertwineError::Storage(e)))?;
             let initial_snapshot = Snapshot::new_initial(file_node, empty_diff.id);
             storage
                 .store_snapshot(&initial_snapshot, b"")
-                .map_err(|e| map_error(StratumError::Storage(e)))?;
+                .map_err(|e| map_error(LayertwineError::Storage(e)))?;
 
             let manual_partition = crate::layered::manual::ensure_manual_partition(
                 storage.as_ref(),
@@ -427,7 +449,7 @@ impl ApiService for ApiServiceImpl {
         let partitions = self
             .storage
             .list_partitions()
-            .map_err(|e| map_error(StratumError::Storage(e)))?;
+            .map_err(|e| map_error(LayertwineError::Storage(e)))?;
         let infos = partitions
             .iter()
             .map(|p| {
@@ -486,7 +508,7 @@ impl ApiService for ApiServiceImpl {
                 let file_node = FileNode::new(PathBuf::from(&req.file), content.as_bytes());
                 self.storage
                     .store_file_node(&file_node, content.as_bytes())
-                    .map_err(|e| map_error(StratumError::Storage(e)))?;
+                    .map_err(|e| map_error(LayertwineError::Storage(e)))?;
                 let delta = Delta::new(
                     file_node,
                     crate::core::types::LineDiff::new(vec![]),
@@ -494,14 +516,14 @@ impl ApiService for ApiServiceImpl {
                 );
                 self.storage
                     .store_delta(&delta)
-                    .map_err(|e| map_error(StratumError::Storage(e)))?;
+                    .map_err(|e| map_error(LayertwineError::Storage(e)))?;
                 let snapshot = Snapshot::new_initial(
                     FileNode::new(PathBuf::from(&req.file), content.as_bytes()),
                     delta.id,
                 );
                 self.storage
                     .store_snapshot(&snapshot, content.as_bytes())
-                    .map_err(|e| map_error(StratumError::Storage(e)))?;
+                    .map_err(|e| map_error(LayertwineError::Storage(e)))?;
                 snapshot.id
             }
         };
@@ -564,42 +586,23 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
+    /// Convenience wrapper: approve agent, then merge all integrated → unified → staged.
+    /// Uses `approve_agent`, `merge_to_unified` (auto-detect all), `merge_to_staged`.
     fn approve(&self, req: ApproveRequest) -> ApiResult<ApproveResponse> {
-        let agent_instance = AgentInstanceId(req.agent_id.clone());
+        let approve_resp = self.approve_agent(ApproveAgentRequest {
+            agent_id: req.agent_id.clone(),
+            integrated_name: Some(req.agent_id.clone()),
+        })?;
 
-        let integrated_id = crate::layered::integrated::merge_agent_to_feature(
-            self.storage.as_ref(),
-            &agent_instance,
-            &req.agent_id,
-        )
-        .map(|r| r.snapshot_id)
-        .map_err(map_error)?;
-
-        let integration_names: Vec<String> = self
-            .storage
-            .list_partitions()
-            .map_err(|e| map_error(StratumError::Storage(e)))?
-            .into_iter()
-            .filter_map(|p| match &p.partition_type {
-                PartitionType::Integrated(name) => Some(name.clone()),
-                _ => None,
+        let merge_to_staged_resp = self
+            .merge_to_unified(MergeToUnifiedRequest {
+                integration_names: None,
             })
-            .collect();
-
-        if !integration_names.is_empty() {
-            crate::layered::unified::move_integrated_to_unified(
-                self.storage.as_ref(),
-                &integration_names,
-            )
-            .map_err(map_error)?;
-        }
-
-        let staged_id = crate::layered::staged::merge_unified_to_staged(self.storage.as_ref())
-            .map_err(map_error)?;
+            .and_then(|_| self.merge_to_staged(MergeToStagedRequest {}))?;
 
         Ok(ApproveResponse {
-            integrated_snapshot_id: snapshot_id_to_hex(&integrated_id),
-            staged_snapshot_id: snapshot_id_to_hex(&staged_id),
+            integrated_snapshot_id: approve_resp.integrated_snapshot_id,
+            staged_snapshot_id: merge_to_staged_resp.staged_snapshot_id,
         })
     }
 
@@ -611,7 +614,7 @@ impl ApiService for ApiServiceImpl {
         let staged_partition = self
             .storage
             .get_partition(&staged_pid)
-            .map_err(|e| map_error(StratumError::Storage(e)))?;
+            .map_err(|e| map_error(LayertwineError::Storage(e)))?;
         let current_snapshot_id = staged_partition.current_snapshot;
 
         // Commit using checkpoint repo
@@ -622,6 +625,17 @@ impl ApiService for ApiServiceImpl {
         let cp_id = checkpoint_repo
             .commit_single(current_snapshot_id, &req.message, author)
             .map_err(map_error)?;
+
+        // Propagate snapshot source from storage to the checkpoint
+        if let Ok(snapshot) = self.storage.get_snapshot(&current_snapshot_id) {
+            let source = if !snapshot.source.is_empty() {
+                snapshot.source.clone()
+            } else {
+                format!("file://{}", snapshot.file.path_str())
+            };
+            let _ = checkpoint_repo.set_snapshot_source(&cp_id, current_snapshot_id, source);
+            let _ = checkpoint_repo.sync_checkpoint(&cp_id);
+        }
 
         Ok(CommitResponse {
             checkpoint_id: cp_id.to_hex(),
@@ -641,10 +655,7 @@ impl ApiService for ApiServiceImpl {
         let total = checkpoints.len();
 
         Ok(LogResponse {
-            checkpoints: checkpoints
-                .into_iter()
-                .map(checkpoint_to_info)
-                .collect(),
+            checkpoints: checkpoints.into_iter().map(checkpoint_to_info).collect(),
             total,
         })
     }
@@ -713,7 +724,7 @@ impl ApiService for ApiServiceImpl {
         let branches = self
             .storage
             .list_branches()
-            .map_err(|e| map_error(StratumError::Storage(e)))?;
+            .map_err(|e| map_error(LayertwineError::Storage(e)))?;
         let checkpoint_repo = self
             .checkpoint_repo
             .read()
@@ -753,7 +764,7 @@ impl ApiService for ApiServiceImpl {
         for snapshot_id in &snapshot_ids {
             self.storage
                 .update_pointer(&staged_pid, snapshot_id)
-                .map_err(|e| map_error(StratumError::Storage(e)))?;
+                .map_err(|e| map_error(LayertwineError::Storage(e)))?;
         }
 
         let msg = req.message.clone().unwrap_or_else(|| "merge".into());
@@ -775,9 +786,9 @@ impl ApiService for ApiServiceImpl {
         })?;
 
         let backup_path = Path::new(&self.db_path).parent().unwrap_or(Path::new("."));
-        let backup_db_path = backup_path.join("stratum-backup.db");
+        let backup_db_path = backup_path.join("layertwine-backup.db");
         let backup_repo =
-            BackupRepo::new(&backup_db_path).map_err(|e| map_error(StratumError::Storage(e)))?;
+            BackupRepo::new(&backup_db_path).map_err(|e| map_error(LayertwineError::Storage(e)))?;
 
         let backup_id = backup_repo
             .backup_snapshot(self.storage.as_ref(), snapshot_id, req.label.clone())
@@ -796,9 +807,9 @@ impl ApiService for ApiServiceImpl {
         })?;
 
         let backup_path = Path::new(&self.db_path).parent().unwrap_or(Path::new("."));
-        let backup_db_path = backup_path.join("stratum-backup.db");
+        let backup_db_path = backup_path.join("layertwine-backup.db");
         let backup_repo =
-            BackupRepo::new(&backup_db_path).map_err(|e| map_error(StratumError::Storage(e)))?;
+            BackupRepo::new(&backup_db_path).map_err(|e| map_error(LayertwineError::Storage(e)))?;
 
         let backup = backup_repo.get_backup(&backup_id).map_err(map_error)?;
 
@@ -806,7 +817,7 @@ impl ApiService for ApiServiceImpl {
         for delta in &backup.deltas {
             self.storage
                 .store_delta(delta)
-                .map_err(|e| map_error(StratumError::Storage(e)))?;
+                .map_err(|e| map_error(LayertwineError::Storage(e)))?;
         }
 
         let restore_file = backup
@@ -819,6 +830,203 @@ impl ApiService for ApiServiceImpl {
             backup_id: req.backup_id,
             file: restore_file,
             deltas_restored: delta_count,
+        })
+    }
+
+    // ── Checkpoint restore implementations ──
+
+    fn checkpoint_restore(
+        &self,
+        req: CheckpointRestoreRequest,
+    ) -> ApiResult<CheckpointRestoreResponse> {
+        let cp_id = CheckpointId::from_hex(&req.checkpoint_id).ok_or_else(|| {
+            ApiError::invalid_params(format!("invalid checkpoint ID '{}'", req.checkpoint_id))
+        })?;
+
+        let checkpoint_repo = self
+            .checkpoint_repo
+            .read()
+            .map_err(|e| ApiError::internal(format!("Failed to acquire lock: {}", e)))?;
+
+        let chk_req = crate::checkpoint::restore::RestoreRequest {
+            checkpoint_id: Some(cp_id),
+            source_filter: req.source_filter.clone(),
+            time_range: None,
+        };
+
+        let resp = checkpoint_repo.restore(&chk_req).map_err(map_error)?;
+
+        // Translate Checkpoint → CheckpointInfo (the original is fine for CheckpointInfo usage,
+        // but restore response also includes full snapshot contents)
+        let cp_info = CheckpointInfo {
+            id: resp.checkpoint.id.to_hex(),
+            author: resp.checkpoint.metadata.author.clone(),
+            message: resp.checkpoint.metadata.message.clone(),
+            parents: resp.checkpoint.parents.iter().map(|p| p.to_hex()).collect(),
+            snapshots: resp
+                .checkpoint
+                .baseline_snapshots
+                .iter()
+                .map(|s| s.to_hex())
+                .collect(),
+            created_at: resp.checkpoint.created_at,
+            git_anchor: resp.checkpoint.metadata.git_anchor.clone(),
+        };
+
+        let snapshots: Vec<RestoredSnapshotInfo> = resp
+            .snapshots
+            .into_iter()
+            .map(|(snap_id, content, source)| {
+                let content_type = content.content_type().to_string();
+                let content_hex = hex::encode(content.to_bytes());
+                let effective_source = if !source.is_empty() {
+                    source
+                } else {
+                    resp.checkpoint
+                        .snapshot_sources
+                        .get(&snap_id)
+                        .cloned()
+                        .unwrap_or_default()
+                };
+                RestoredSnapshotInfo {
+                    snapshot_id: snap_id.to_hex(),
+                    source: effective_source,
+                    content_hex,
+                    content_type,
+                }
+            })
+            .collect();
+
+        let ancestry: Vec<String> = resp.ancestry.iter().map(|id| id.to_hex()).collect();
+
+        Ok(CheckpointRestoreResponse {
+            checkpoint: cp_info,
+            snapshots,
+            ancestry,
+        })
+    }
+
+    fn checkpoint_restore_by_time(
+        &self,
+        req: CheckpointRestoreByTimeRequest,
+    ) -> ApiResult<CheckpointRestoreResponse> {
+        let checkpoint_repo = self
+            .checkpoint_repo
+            .read()
+            .map_err(|e| ApiError::internal(format!("Failed to acquire lock: {}", e)))?;
+
+        let resp = checkpoint_repo
+            .restore_by_time(
+                req.target_time,
+                req.source_filter
+                    .as_ref()
+                    .map(|v| v.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
+                    .as_deref(),
+            )
+            .map_err(map_error)?;
+
+        let cp_info = CheckpointInfo {
+            id: resp.checkpoint.id.to_hex(),
+            author: resp.checkpoint.metadata.author.clone(),
+            message: resp.checkpoint.metadata.message.clone(),
+            parents: resp.checkpoint.parents.iter().map(|p| p.to_hex()).collect(),
+            snapshots: resp
+                .checkpoint
+                .baseline_snapshots
+                .iter()
+                .map(|s| s.to_hex())
+                .collect(),
+            created_at: resp.checkpoint.created_at,
+            git_anchor: resp.checkpoint.metadata.git_anchor.clone(),
+        };
+
+        let snapshots: Vec<RestoredSnapshotInfo> = resp
+            .snapshots
+            .into_iter()
+            .map(|(snap_id, content, source)| {
+                let content_type = content.content_type().to_string();
+                let content_hex = hex::encode(content.to_bytes());
+                let effective_source = if !source.is_empty() {
+                    source
+                } else {
+                    resp.checkpoint
+                        .snapshot_sources
+                        .get(&snap_id)
+                        .cloned()
+                        .unwrap_or_default()
+                };
+                RestoredSnapshotInfo {
+                    snapshot_id: snap_id.to_hex(),
+                    source: effective_source,
+                    content_hex,
+                    content_type,
+                }
+            })
+            .collect();
+
+        let ancestry: Vec<String> = resp.ancestry.iter().map(|id| id.to_hex()).collect();
+
+        Ok(CheckpointRestoreResponse {
+            checkpoint: cp_info,
+            snapshots,
+            ancestry,
+        })
+    }
+
+    fn checkpoint_diff(&self, req: CheckpointDiffRequest) -> ApiResult<CheckpointDiffResponse> {
+        let from_id = CheckpointId::from_hex(&req.from_id).ok_or_else(|| {
+            ApiError::invalid_params(format!("invalid from_id '{}'", req.from_id))
+        })?;
+        let to_id = CheckpointId::from_hex(&req.to_id)
+            .ok_or_else(|| ApiError::invalid_params(format!("invalid to_id '{}'", req.to_id)))?;
+
+        let checkpoint_repo = self
+            .checkpoint_repo
+            .read()
+            .map_err(|e| ApiError::internal(format!("Failed to acquire lock: {}", e)))?;
+
+        let diff = checkpoint_repo
+            .diff_checkpoints(&from_id, &to_id)
+            .map_err(map_error)?;
+
+        Ok(CheckpointDiffResponse {
+            from_id: diff.from_id.to_hex(),
+            to_id: diff.to_id.to_hex(),
+            added: diff.added.iter().map(|id| id.to_hex()).collect(),
+            removed: diff.removed.iter().map(|id| id.to_hex()).collect(),
+            modified: diff.modified.iter().map(|id| id.to_hex()).collect(),
+            total_changes: diff.total_changes(),
+        })
+    }
+
+    fn checkpoint_rollback(
+        &self,
+        req: CheckpointRollbackRequest,
+    ) -> ApiResult<CheckpointRollbackResponse> {
+        let cp_id = CheckpointId::from_hex(&req.checkpoint_id).ok_or_else(|| {
+            ApiError::invalid_params(format!("invalid checkpoint ID '{}'", req.checkpoint_id))
+        })?;
+
+        let checkpoint_repo = self
+            .checkpoint_repo
+            .read()
+            .map_err(|e| ApiError::internal(format!("Failed to acquire lock: {}", e)))?;
+
+        let snapshot_ids = checkpoint_repo.rollback_to(&cp_id).map_err(map_error)?;
+
+        // Update staged partition to point to the first baseline snapshot from the rollback target
+        let staged_pid = crate::layered::staged::staged_partition_id();
+        if let Some(first_snap) = snapshot_ids.first() {
+            self.storage
+                .update_pointer(&staged_pid, first_snap)
+                .map_err(|e| map_error(LayertwineError::Storage(e)))?;
+        }
+
+        let hex_ids: Vec<String> = snapshot_ids.iter().map(|id| id.to_hex()).collect();
+
+        Ok(CheckpointRollbackResponse {
+            checkpoint_id: req.checkpoint_id,
+            snapshot_ids: hex_ids,
         })
     }
 
@@ -843,7 +1051,7 @@ impl ApiService for ApiServiceImpl {
         let report = self
             .storage
             .run_maintenance_with(&opts)
-            .map_err(|e| map_error(crate::error::StratumError::Storage(e)))?;
+            .map_err(|e| map_error(crate::error::LayertwineError::Storage(e)))?;
         Ok(CompactResponse {
             wal_checkpointed: report.wal_checkpointed,
             freelist_before: report.freelist_before,
@@ -856,7 +1064,7 @@ impl ApiService for ApiServiceImpl {
 
     fn push(&self, req: PushRequest) -> ApiResult<PushResponse> {
         let remote = req.remote.unwrap_or_else(|| "origin".into());
-        let message = req.message.unwrap_or_else(|| "sync from stratum".into());
+        let message = req.message.unwrap_or_else(|| "sync from layertwine".into());
 
         let mut repo = load_checkpoint_repo(self.storage.as_ref()).map_err(map_error)?;
         let branch_name = repo.current_branch_name().to_string();

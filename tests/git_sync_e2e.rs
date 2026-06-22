@@ -2,21 +2,21 @@
 //!
 //! Each test creates a temporary directory, initialises a real git repository,
 //! exercises `GitBridge` methods, and verifies results by inspecting the
-//! actual git repository (via libgit2) and the stratum storage.
+//! actual git repository (via libgit2) and the layertwine storage.
 
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use stratum::checkpoint::repo::CheckpointRepo;
-use stratum::core::delta::Delta;
-use stratum::core::file_node::FileNode;
-use stratum::core::snapshot::Snapshot;
-use stratum::core::types::{CheckpointId, LineDiff, SnapshotId, SourceType};
-use stratum::error::Result;
-use stratum::git_sync::GitBridge;
-use stratum::git_sync::SyncStatus;
-use stratum::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
-use stratum::storage::SqliteStorage;
+use layertwine::checkpoint::repo::CheckpointRepo;
+use layertwine::core::delta::Delta;
+use layertwine::core::file_node::FileNode;
+use layertwine::core::snapshot::Snapshot;
+use layertwine::core::types::{CheckpointId, LineDiff, SnapshotId, SourceType};
+use layertwine::error::Result;
+use layertwine::git_sync::GitBridge;
+use layertwine::git_sync::SyncStatus;
+use layertwine::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
+use layertwine::storage::SqliteStorage;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -25,7 +25,7 @@ use stratum::storage::SqliteStorage;
 /// Minimum git user config required for libgit2 to create commits.
 static GIT_USER: LazyLock<(String, String)> = LazyLock::new(|| {
     let name = std::env::var("GIT_AUTHOR_NAME").unwrap_or_else(|_| "E2E Test".into());
-    let email = std::env::var("GIT_AUTHOR_EMAIL").unwrap_or_else(|_| "e2e@stratum.test".into());
+    let email = std::env::var("GIT_AUTHOR_EMAIL").unwrap_or_else(|_| "e2e@layertwine.test".into());
     (name, email)
 });
 
@@ -46,10 +46,10 @@ fn init_git_repo(path: &Path) -> git2::Repository {
     repo
 }
 
-/// Create stratum storage + checkpoint repo with a dummy root checkpoint.
-fn create_stratum_state() -> Result<(SqliteStorage, CheckpointRepo, SnapshotId)> {
+/// Create layertwine storage + checkpoint repo with a dummy root checkpoint.
+fn create_layertwine_state() -> Result<(SqliteStorage, CheckpointRepo, SnapshotId)> {
     let storage = SqliteStorage::new_in_memory()?;
-    let file_node = FileNode::new(PathBuf::from(".stratum_root"), b"root");
+    let file_node = FileNode::new(PathBuf::from(".layertwine_root"), b"root");
     let delta = Delta::new(file_node.clone(), LineDiff::new(vec![]), SourceType::Manual);
     storage.store_delta(&delta)?;
     let snapshot = Snapshot::new_initial(file_node, delta.id);
@@ -58,7 +58,7 @@ fn create_stratum_state() -> Result<(SqliteStorage, CheckpointRepo, SnapshotId)>
     Ok((storage, checkpoint_repo, snapshot.id))
 }
 
-/// Store a file in stratum storage (without git).
+/// Store a file in layertwine storage (without git).
 fn store_file(storage: &SqliteStorage, rel_path: &str, content: &[u8]) -> Result<SnapshotId> {
     let file_node = FileNode::new(PathBuf::from(rel_path), content);
     storage.store_file_node(&file_node, content)?;
@@ -96,7 +96,7 @@ fn commit_snapshot(
         .expect("checkpoint commit failed")
 }
 
-/// Make a direct git commit (bypassing stratum).
+/// Make a direct git commit (bypassing layertwine).
 fn git_commit_file(repo: &git2::Repository, rel_path: &str, content: &[u8], msg: &str) {
     let workdir = repo.workdir().unwrap().to_path_buf();
     let full_path = workdir.join(rel_path);
@@ -126,7 +126,7 @@ fn add_remote(repo: &git2::Repository, name: &str, url: &Path) {
         .expect("failed to add remote");
 }
 
-/// Combined fixture: creates a git repo, initialises stratum from it.
+/// Combined fixture: creates a git repo, initialises layertwine from it.
 struct GitSyncFixture {
     _dir: tempfile::TempDir,
     git_repo_path: PathBuf,
@@ -141,7 +141,8 @@ impl GitSyncFixture {
         let git_path = dir.path().join("repo");
         std::fs::create_dir_all(&git_path).unwrap();
         let git_repo = init_git_repo(&git_path);
-        let (storage, mut checkpoint_repo, _root) = create_stratum_state().expect("stratum state");
+        let (storage, mut checkpoint_repo, _root) =
+            create_layertwine_state().expect("layertwine state");
         GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "HEAD")
             .expect("init_from_git");
         GitSyncFixture {
@@ -165,7 +166,7 @@ fn test_e2e_init_from_git_basic() {
     std::fs::create_dir_all(&git_path).unwrap();
     let repo = init_git_repo(&git_path);
 
-    let (storage, mut checkpoint_repo, _root) = create_stratum_state().unwrap();
+    let (storage, mut checkpoint_repo, _root) = create_layertwine_state().unwrap();
     GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "HEAD")
         .expect("init_from_git should succeed");
 
@@ -201,7 +202,7 @@ fn test_e2e_init_from_git_metadata() {
     let expected_author = commit.author().name().unwrap_or("").to_string();
     let expected_msg = commit.message().unwrap_or("").trim().to_string();
 
-    let (storage, mut checkpoint_repo, _root) = create_stratum_state().unwrap();
+    let (storage, mut checkpoint_repo, _root) = create_layertwine_state().unwrap();
     GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "HEAD").unwrap();
 
     let head_id = checkpoint_repo.current_branch_head();
@@ -236,7 +237,7 @@ fn test_e2e_init_from_git_multiple_files() {
     repo.commit(Some("HEAD"), &sig, &sig, "multi-file", &tree, &[])
         .unwrap();
 
-    let (storage, mut checkpoint_repo, _root) = create_stratum_state().unwrap();
+    let (storage, mut checkpoint_repo, _root) = create_layertwine_state().unwrap();
     GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "HEAD").unwrap();
 
     let head_id = checkpoint_repo.current_branch_head();
@@ -286,7 +287,7 @@ fn test_e2e_init_from_git_subdirectories() {
     repo.commit(Some("HEAD"), &sig, &sig, "subdirs", &tree, &[])
         .unwrap();
 
-    let (storage, mut checkpoint_repo, _root) = create_stratum_state().unwrap();
+    let (storage, mut checkpoint_repo, _root) = create_layertwine_state().unwrap();
     GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "HEAD").unwrap();
 
     let head_id = checkpoint_repo.current_branch_head();
@@ -309,7 +310,7 @@ fn test_e2e_init_from_git_invalid_ref_fails() {
     std::fs::create_dir_all(&git_path).unwrap();
     init_git_repo(&git_path);
 
-    let (storage, mut checkpoint_repo, _root) = create_stratum_state().unwrap();
+    let (storage, mut checkpoint_repo, _root) = create_layertwine_state().unwrap();
     let result = GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "nonexistent");
     assert!(result.is_err(), "should fail with invalid ref");
 }
@@ -325,7 +326,7 @@ fn test_e2e_push_to_git_basic() {
     std::fs::create_dir_all(&git_path).unwrap();
     let repo = init_git_repo(&git_path);
 
-    let (storage, mut checkpoint_repo, _root) = create_stratum_state().unwrap();
+    let (storage, mut checkpoint_repo, _root) = create_layertwine_state().unwrap();
     let snap_id = store_file(&storage, "pushed.txt", b"pushed content\n").unwrap();
     commit_snapshot(&mut checkpoint_repo, snap_id, "prep push");
 
@@ -334,7 +335,7 @@ fn test_e2e_push_to_git_basic() {
         &git_path,
         &mut checkpoint_repo,
         "main",
-        "stratum push",
+        "layertwine push",
     )
     .expect("push_to_git should succeed");
 
@@ -349,7 +350,7 @@ fn test_e2e_push_to_git_updates_anchor() {
     std::fs::create_dir_all(&git_path).unwrap();
     let _repo = init_git_repo(&git_path);
 
-    let (storage, mut checkpoint_repo, _root) = create_stratum_state().unwrap();
+    let (storage, mut checkpoint_repo, _root) = create_layertwine_state().unwrap();
     let snap_id = store_file(&storage, "data.txt", b"data\n").unwrap();
     commit_snapshot(&mut checkpoint_repo, snap_id, "prep");
 
@@ -374,12 +375,12 @@ fn test_e2e_roundtrip_sync() {
     std::fs::create_dir_all(&git_path).unwrap();
     let repo = init_git_repo(&git_path);
 
-    let (storage, mut checkpoint_repo, _root) = create_stratum_state().unwrap();
+    let (storage, mut checkpoint_repo, _root) = create_layertwine_state().unwrap();
 
     // Phase 1: init_from_git
     GitBridge::init_from_git(&git_path, &storage, &mut checkpoint_repo, "HEAD").unwrap();
 
-    // Phase 2: add a new file in stratum
+    // Phase 2: add a new file in layertwine
     let snap_id = store_file(&storage, "roundtrip.txt", b"roundtrip content\n").unwrap();
     commit_snapshot(&mut checkpoint_repo, snap_id, "add roundtrip.txt");
 
@@ -389,7 +390,7 @@ fn test_e2e_roundtrip_sync() {
         &git_path,
         &mut checkpoint_repo,
         "main",
-        "stratum roundtrip",
+        "layertwine roundtrip",
     )
     .unwrap();
 
@@ -452,15 +453,15 @@ fn test_e2e_compare_status_divergent() {
     let mut fixture = GitSyncFixture::new();
 
     // To produce Divergent, we need:
-    //   1. A stratum checkpoint with a git_anchor (by pushing to git)
+    //   1. A layertwine checkpoint with a git_anchor (by pushing to git)
     //   2. A git commit on a path that diverges from that anchor
     //
     // Strategy: after push_to_git, reset git HEAD to the anchor's parent
     // and make a conflicting git commit.
 
-    // Step 1: make a stratum commit and push it to git
-    let snap_id = store_file(&fixture.storage, "diverged.txt", b"stratum\n").unwrap();
-    commit_snapshot(&mut fixture.checkpoint_repo, snap_id, "stratum prep");
+    // Step 1: make a layertwine commit and push it to git
+    let snap_id = store_file(&fixture.storage, "diverged.txt", b"layertwine\n").unwrap();
+    commit_snapshot(&mut fixture.checkpoint_repo, snap_id, "layertwine prep");
 
     // This creates a git commit and sets git_anchor on the current checkpoint
     GitBridge::push_to_git(
@@ -468,7 +469,7 @@ fn test_e2e_compare_status_divergent() {
         &fixture.git_repo_path,
         &mut fixture.checkpoint_repo,
         "main",
-        "stratum push for divergence",
+        "layertwine push for divergence",
     )
     .expect("push_to_git");
 
@@ -533,7 +534,7 @@ fn test_e2e_push_to_remote() {
     let _bare_repo = create_bare_remote(&bare_path);
     add_remote(&repo, "origin", &bare_path);
 
-    let (storage, mut checkpoint_repo, _root) = create_stratum_state().unwrap();
+    let (storage, mut checkpoint_repo, _root) = create_layertwine_state().unwrap();
     let snap_id = store_file(&storage, "remote_test.txt", b"remote\n").unwrap();
     commit_snapshot(&mut checkpoint_repo, snap_id, "prep remote");
 
@@ -594,7 +595,7 @@ fn test_e2e_gc_protects_git_anchored_checkpoints() {
     );
 
     // Protected as branch head + git_anchor
-    let protected = stratum::git_sync::collect_protected_checkpoints(&fixture.checkpoint_repo);
+    let protected = layertwine::git_sync::collect_protected_checkpoints(&fixture.checkpoint_repo);
     assert!(
         protected.contains(&head_id),
         "branch head with git_anchor should be protected"
@@ -606,7 +607,7 @@ fn test_e2e_gc_protects_git_anchored_checkpoints() {
         .branches
         .retain(|b| b.name != "main");
     let protected_after =
-        stratum::git_sync::collect_protected_checkpoints(&fixture.checkpoint_repo);
+        layertwine::git_sync::collect_protected_checkpoints(&fixture.checkpoint_repo);
     assert!(
         protected_after.contains(&head_id),
         "checkpoint with git_anchor should still be protected even without a branch"

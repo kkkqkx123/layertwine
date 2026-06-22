@@ -189,7 +189,7 @@ def main():
     # 生成可读的文本报告
     report_file = results_dir / "benchmark_report.txt"
     with open(report_file, 'w', encoding='utf-8') as f:
-        f.write("Stratum Benchmark Results Report\n")
+        f.write("Layertwine Benchmark Results Report\n")
         f.write("=" * 80 + "\n")
         f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Total Benchmarks: {len(results)}\n\n")

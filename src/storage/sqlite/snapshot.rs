@@ -37,14 +37,12 @@ fn row_to_snapshot(row: &Row) -> Result<Snapshot, rusqlite::Error> {
     let content_blob: Option<Vec<u8>> = row.get(10).ok();
     let compression_str: String = row.get(11).unwrap_or_else(|_| "none".to_string());
 
-    let content = content_blob.map(|bytes| {
-        match content_type.as_str() {
-            "json" => SnapshotContent::JsonMetadata(
-                serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
-            ),
-            "structured" => SnapshotContent::Structured(bytes),
-            _ => SnapshotContent::FileContent(bytes),
-        }
+    let content = content_blob.map(|bytes| match content_type.as_str() {
+        "json" => SnapshotContent::JsonMetadata(
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        ),
+        "structured" => SnapshotContent::Structured(bytes),
+        _ => SnapshotContent::FileContent(bytes),
     });
 
     let compression = match compression_str.as_str() {
@@ -112,10 +110,7 @@ impl SnapshotStore for SqliteStorage {
         let parents_json = serde_json::to_vec(&snapshot.parents)?;
 
         let (content_type, content_blob) = match &snapshot.content {
-            Some(sc) => (
-                sc.content_type().to_string(),
-                Some(sc.to_bytes()),
-            ),
+            Some(sc) => (sc.content_type().to_string(), Some(sc.to_bytes())),
             None => ("file".to_string(), None),
         };
 

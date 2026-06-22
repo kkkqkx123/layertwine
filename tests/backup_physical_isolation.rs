@@ -3,14 +3,14 @@
 //! This test demonstrates that backups are completely independent from core storage,
 //! following the design requirement for complete physical isolation.
 
+use layertwine::backup::backup_repo::BackupRepo;
+use layertwine::core::delta::Delta;
+use layertwine::core::file_node::FileNode;
+use layertwine::core::snapshot::Snapshot;
+use layertwine::core::types::{LineDiff, SnapshotId, SourceType};
+use layertwine::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
+use layertwine::storage::SqliteStorage;
 use std::path::PathBuf;
-use stratum::backup::backup_repo::BackupRepo;
-use stratum::core::delta::Delta;
-use stratum::core::file_node::FileNode;
-use stratum::core::snapshot::Snapshot;
-use stratum::core::types::{LineDiff, SnapshotId, SourceType};
-use stratum::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
-use stratum::storage::SqliteStorage;
 
 fn create_snapshot_in_core(
     store: &SqliteStorage,
@@ -167,7 +167,7 @@ fn test_physical_isolation_complete_independence() {
 
     // All backups should still be accessible
     let all_backups = backup_repo
-        .query_backups(&stratum::backup::backup_snapshot::BackupFilter::new())
+        .query_backups(&layertwine::backup::backup_snapshot::BackupFilter::new())
         .unwrap();
     assert_eq!(all_backups.len(), 5);
 

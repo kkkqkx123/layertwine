@@ -1,10 +1,10 @@
 use crate::checkpoint::branch::Branch;
-use crate::checkpoint::types::{Checkpoint, CheckpointMetadata};
 use crate::checkpoint::dag::CheckpointDag;
 use crate::checkpoint::time_index::TimeIndex;
+use crate::checkpoint::types::{Checkpoint, CheckpointMetadata};
 use crate::core::snapshot::Snapshot;
 use crate::core::types::{CheckpointId, SnapshotId};
-use crate::error::{Result, StratumError};
+use crate::error::{LayertwineError, Result};
 use crate::storage::repository::CheckpointPersist;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -129,9 +129,8 @@ impl CheckpointRepo {
             .position(|b| b.name == current_branch_name)
             .unwrap_or(0);
 
-        let time_index = TimeIndex::from_checkpoints(
-            &checkpoints.values().cloned().collect::<Vec<_>>(),
-        );
+        let time_index =
+            TimeIndex::from_checkpoints(&checkpoints.values().cloned().collect::<Vec<_>>());
 
         // Load snapshots referenced by all checkpoints from storage
         let mut snapshots = HashMap::new();
@@ -209,14 +208,14 @@ impl CheckpointRepo {
     pub fn get_checkpoint(&self, id: &CheckpointId) -> Result<&Checkpoint> {
         self.checkpoints
             .get(id)
-            .ok_or_else(|| StratumError::NotFound(format!("checkpoint {} not found", id)))
+            .ok_or_else(|| LayertwineError::NotFound(format!("checkpoint {} not found", id)))
     }
 
     /// Getting variable references
     pub fn get_checkpoint_mut(&mut self, id: &CheckpointId) -> Result<&mut Checkpoint> {
         self.checkpoints
             .get_mut(id)
-            .ok_or_else(|| StratumError::NotFound(format!("checkpoint {} not found", id)))
+            .ok_or_else(|| LayertwineError::NotFound(format!("checkpoint {} not found", id)))
     }
 
     /// Commit: Packages the current state of staged as a Checkpoint.
@@ -234,7 +233,7 @@ impl CheckpointRepo {
         author: &str,
     ) -> Result<CheckpointId> {
         if snapshot_ids.is_empty() {
-            return Err(StratumError::Checkpoint(
+            return Err(LayertwineError::Checkpoint(
                 "cannot commit with empty snapshot list".to_string(),
             ));
         }
@@ -243,11 +242,11 @@ impl CheckpointRepo {
 
         // Check if there are actual changes compared to current head
         let current_cp = self.checkpoints.get(&current_head).ok_or_else(|| {
-            StratumError::NotFound(format!("checkpoint {} not found", current_head))
+            LayertwineError::NotFound(format!("checkpoint {} not found", current_head))
         })?;
 
         if current_cp.baseline_snapshots == snapshot_ids {
-            return Err(StratumError::Checkpoint(
+            return Err(LayertwineError::Checkpoint(
                 "no changes to commit (same snapshot IDs as current head)".to_string(),
             ));
         }
@@ -309,7 +308,7 @@ impl CheckpointRepo {
     /// Auto-persists the new branch to storage.
     pub fn create_branch(&mut self, name: &str) -> Result<()> {
         if self.branches.iter().any(|b| b.name == name) {
-            return Err(StratumError::Checkpoint(format!(
+            return Err(LayertwineError::Checkpoint(format!(
                 "branch '{}' already exists",
                 name
             )));
@@ -327,13 +326,13 @@ impl CheckpointRepo {
     /// Auto-persists the new branch to storage.
     pub fn create_branch_from(&mut self, name: &str, from_checkpoint: CheckpointId) -> Result<()> {
         if !self.checkpoints.contains_key(&from_checkpoint) {
-            return Err(StratumError::NotFound(format!(
+            return Err(LayertwineError::NotFound(format!(
                 "checkpoint {} not found",
                 from_checkpoint
             )));
         }
         if self.branches.iter().any(|b| b.name == name) {
-            return Err(StratumError::Checkpoint(format!(
+            return Err(LayertwineError::Checkpoint(format!(
                 "branch '{}' already exists",
                 name
             )));
@@ -353,7 +352,7 @@ impl CheckpointRepo {
             .branches
             .iter()
             .position(|b| b.name == name)
-            .ok_or_else(|| StratumError::NotFound(format!("branch '{}' not found", name)))?;
+            .ok_or_else(|| LayertwineError::NotFound(format!("branch '{}' not found", name)))?;
 
         self.current_branch = idx;
         if let Some(storage) = &self.storage {
@@ -372,7 +371,7 @@ impl CheckpointRepo {
         self.branches
             .iter()
             .position(|b| b.name == name)
-            .ok_or_else(|| StratumError::NotFound(format!("branch '{}' not found", name)))
+            .ok_or_else(|| LayertwineError::NotFound(format!("branch '{}' not found", name)))
     }
 
     /// Get the head of the specified branch
@@ -395,7 +394,7 @@ impl CheckpointRepo {
         author: &str,
     ) -> Result<CheckpointId> {
         if snapshot_ids.is_empty() {
-            return Err(StratumError::Checkpoint(
+            return Err(LayertwineError::Checkpoint(
                 "cannot merge with empty snapshot list".to_string(),
             ));
         }
@@ -487,7 +486,7 @@ impl CheckpointRepo {
         if let Some(cp) = self.checkpoints.remove(id) {
             self.time_index.remove(&cp);
         } else {
-            return Err(StratumError::NotFound(format!(
+            return Err(LayertwineError::NotFound(format!(
                 "checkpoint {} not found",
                 id
             )));
@@ -539,7 +538,7 @@ impl CheckpointRepo {
         }
 
         if result.last().map(|cp| &cp.id) != Some(target) {
-            return Err(StratumError::NotFound(format!(
+            return Err(LayertwineError::NotFound(format!(
                 "checkpoint {} is not an ancestor of current head",
                 target
             )));
@@ -554,11 +553,9 @@ impl CheckpointRepo {
             return Ok(snap.clone());
         }
         if let Some(storage) = &self.storage {
-            return storage
-                .get_snapshot(snap_id)
-                .map_err(StratumError::from);
+            return storage.get_snapshot(snap_id).map_err(LayertwineError::from);
         }
-        Err(StratumError::NotFound(format!(
+        Err(LayertwineError::NotFound(format!(
             "Snapshot {} not found",
             snap_id
         )))
@@ -582,9 +579,10 @@ impl CheckpointRepo {
         snap_id: SnapshotId,
         source: String,
     ) -> Result<()> {
-        let cp = self.checkpoints.get_mut(cp_id).ok_or_else(|| {
-            StratumError::NotFound(format!("checkpoint {} not found", cp_id))
-        })?;
+        let cp = self
+            .checkpoints
+            .get_mut(cp_id)
+            .ok_or_else(|| LayertwineError::NotFound(format!("checkpoint {} not found", cp_id)))?;
         cp.snapshot_sources.insert(snap_id, source);
         Ok(())
     }

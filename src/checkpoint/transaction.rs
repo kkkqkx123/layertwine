@@ -3,12 +3,12 @@
 //! Atomic multi-snapshot commit with rollback support.
 //! Ensures Checkpoint + Snapshot consistency through transaction wrapping.
 
-use crate::checkpoint::types::{Checkpoint, CheckpointMetadata};
 use crate::checkpoint::repo::CheckpointRepo;
-use crate::core::snapshot::{Snapshot, SnapshotContent};
+use crate::checkpoint::types::{Checkpoint, CheckpointMetadata};
 use crate::core::file_node::FileNode;
+use crate::core::snapshot::{Snapshot, SnapshotContent};
 use crate::core::types::{CheckpointId, ContentId, SnapshotId};
-use crate::error::{Result, StratumError};
+use crate::error::{LayertwineError, Result};
 use std::collections::HashMap;
 
 /// Transaction status
@@ -39,10 +39,7 @@ pub struct CheckpointTransaction {
 
 impl CheckpointTransaction {
     /// Create a new transaction
-    pub fn new(
-        metadata: CheckpointMetadata,
-        parents: Vec<CheckpointId>,
-    ) -> Self {
+    pub fn new(metadata: CheckpointMetadata, parents: Vec<CheckpointId>) -> Self {
         CheckpointTransaction {
             snapshots_to_commit: Vec::new(),
             checkpoint_metadata: metadata,
@@ -54,11 +51,7 @@ impl CheckpointTransaction {
     /// Add a snapshot to the transaction (builder pattern).
     ///
     /// The snapshot ID is computed from source + content hash.
-    pub fn add_snapshot(
-        mut self,
-        source: &str,
-        content: SnapshotContent,
-    ) -> Self {
+    pub fn add_snapshot(mut self, source: &str, content: SnapshotContent) -> Self {
         let snap_id = Self::compute_snapshot_id(source, &content);
         self.snapshots_to_commit
             .push((snap_id, content, source.to_string()));
@@ -99,7 +92,7 @@ impl CheckpointTransaction {
     /// In-memory state changes are reverted on error.
     pub fn commit(mut self, repo: &mut CheckpointRepo) -> Result<CheckpointId> {
         if self.snapshots_to_commit.is_empty() {
-            return Err(StratumError::Transaction(
+            return Err(LayertwineError::Transaction(
                 "Cannot commit empty transaction".to_string(),
             ));
         }
@@ -175,10 +168,7 @@ impl CheckpointRepo {
         content: &SnapshotContent,
         source: &str,
     ) -> Result<Snapshot> {
-        let file_node = FileNode::new(
-            std::path::PathBuf::from(source),
-            &content.to_bytes(),
-        );
+        let file_node = FileNode::new(std::path::PathBuf::from(source), &content.to_bytes());
         let mut snap = Snapshot::new_with_content(
             file_node,
             content.clone(),
@@ -227,8 +217,8 @@ impl CheckpointRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::ContentId;
     use crate::checkpoint::types::CheckpointMetadata;
+    use crate::core::types::ContentId;
 
     fn dummy_snap_id(n: u8) -> SnapshotId {
         ContentId::from_content(&[n; 8])
@@ -307,7 +297,9 @@ mod tests {
     fn test_repo_transaction_with_metadata() {
         let snap1 = dummy_snap_id(1);
         let mut repo = CheckpointRepo::new_single(snap1);
-        let txn = repo.transaction_with_metadata("agent-1", "custom metadata").unwrap();
+        let txn = repo
+            .transaction_with_metadata("agent-1", "custom metadata")
+            .unwrap();
         assert!(txn.is_open());
     }
 

@@ -1,6 +1,6 @@
-# Stratum HTTP API 使用指南
+# Layertwine HTTP API 使用指南
 
-> Stratum 提供基于 REST/JSON 的 HTTP API，通过 Axum 实现，适用于多 Agent 协同编辑场景的远程调用。
+> Layertwine 提供基于 REST/JSON 的 HTTP API，通过 Axum 实现，适用于多 Agent 协同编辑场景的远程调用。
 
 ## 启动服务
 
@@ -8,10 +8,10 @@
 
 | 变量               | 默认值               | 说明                           |
 | ------------------ | -------------------- | ------------------------------ |
-| `STRATUM_MODE`     | `cli`                | 运行时模式，设为 `http` 启动   |
-| `STRATUM_DB_PATH`  | `.stratum/stratum.db` | SQLite 数据库文件路径          |
-| `STRATUM_HTTP_ADDR`| `127.0.0.1:8080`     | HTTP 服务器绑定地址与端口       |
-| `STRATUM_GIT_REPO` | 无                   | Git 仓库路径（用于 Git 同步操作） |
+| `LAYERTWINE_MODE`     | `cli`                | 运行时模式，设为 `http` 启动   |
+| `LAYERTWINE_DB_PATH`  | `.layertwine/layertwine.db` | SQLite 数据库文件路径          |
+| `LAYERTWINE_HTTP_ADDR`| `127.0.0.1:8080`     | HTTP 服务器绑定地址与端口       |
+| `LAYERTWINE_GIT_REPO` | 无                   | Git 仓库路径（用于 Git 同步操作） |
 
 ### 启动命令
 
@@ -20,10 +20,10 @@
 cargo run --features http
 
 # 以 HTTP 模式运行
-STRATUM_MODE=http STRATUM_DB_PATH=/path/to/stratum.db cargo run --features http
+LAYERTWINE_MODE=http LAYERTWINE_DB_PATH=/path/to/layertwine.db cargo run --features http
 
 # 自定义绑定地址
-STRATUM_MODE=http STRATUM_HTTP_ADDR=0.0.0.0:9090 cargo run --features http
+LAYERTWINE_MODE=http LAYERTWINE_HTTP_ADDR=0.0.0.0:9090 cargo run --features http
 ```
 
 ---
@@ -94,13 +94,13 @@ http://127.0.0.1:8080
 
 ### 1. 初始化仓库 — `POST /api/v1/init`
 
-初始化新的 Stratum 仓库，可选从 Git 仓库导入基线。
+初始化新的 Layertwine 仓库，可选从 Git 仓库导入基线。
 
 **请求体：**
 
 ```json
 {
-  "db_path": ".stratum/stratum.db",
+  "db_path": ".layertwine/layertwine.db",
   "git_repo": null,
   "git_ref": null
 }
@@ -108,7 +108,7 @@ http://127.0.0.1:8080
 
 | 字段       | 类型           | 说明                                      |
 | ---------- | -------------- | ----------------------------------------- |
-| `db_path`  | string (可选)  | 数据库路径，默认 `.stratum/stratum.db`    |
+| `db_path`  | string (可选)  | 数据库路径，默认 `.layertwine/layertwine.db`    |
 | `git_repo` | string (可选)  | Git 仓库路径，指定后从 Git 初始化         |
 | `git_ref`  | string (可选)  | Git 引用（如 `HEAD`、分支名），配合 `git_repo` 使用 |
 
@@ -118,7 +118,7 @@ http://127.0.0.1:8080
 {
   "success": true,
   "data": {
-    "db_path": ".stratum/stratum.db",
+    "db_path": ".layertwine/layertwine.db",
     "manual_partition_id": "<uuid>",
     "staged_partition_id": "<uuid>",
     "branch": "main"
@@ -552,7 +552,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/merge \
 
 ### 13. 备份快照 — `POST /api/v1/backup`
 
-将指定快照备份到独立存储（默认写入 `stratum-backup.db`）。
+将指定快照备份到独立存储（默认写入 `layertwine-backup.db`）。
 
 **请求体：**
 
@@ -675,7 +675,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/gc
 {
   "remote": "origin",
   "git_repo": "/path/to/repo",
-  "message": "sync from stratum"
+  "message": "sync from layertwine"
 }
 ```
 
@@ -683,7 +683,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/gc
 | --------- | -------------- | --------------------------------------------- |
 | `remote`  | string (可选)  | Git 远程名称，默认 `origin`                   |
 | `git_repo`| string (必需)  | Git 仓库路径                                  |
-| `message` | string (可选)  | Git 提交信息，默认 `"sync from stratum"`      |
+| `message` | string (可选)  | Git 提交信息，默认 `"sync from layertwine"`      |
 
 **响应：**
 
@@ -709,7 +709,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/push \
 
 ### 17. 从 Git 拉取 — `POST /api/v1/pull`
 
-从 Git 远程仓库拉取并导入最新提交为 Stratum 检查点。
+从 Git 远程仓库拉取并导入最新提交为 Layertwine 检查点。
 
 **请求体：**
 
@@ -853,18 +853,18 @@ curl -X POST http://127.0.0.1:8080/api/v1/init \
   -H 'Content-Type: application/json' \
   -d '{"git_repo":"/path/to/repo","git_ref":"main"}'
 
-# 2. 在 Stratum 中编辑
+# 2. 在 Layertwine 中编辑
 curl -X POST http://127.0.0.1:8080/api/v1/edit \
   -H 'Content-Type: application/json' \
   -d '{"file":"src/lib.rs","content":"// new code"}'
 curl -X POST http://127.0.0.1:8080/api/v1/commit \
   -H 'Content-Type: application/json' \
-  -d '{"message":"Stratum 编辑"}'
+  -d '{"message":"Layertwine 编辑"}'
 
 # 3. 推送检查点到 Git
 curl -X POST http://127.0.0.1:8080/api/v1/push \
   -H 'Content-Type: application/json' \
-  -d '{"git_repo":"/path/to/repo","message":"从 Stratum 同步"}'
+  -d '{"git_repo":"/path/to/repo","message":"从 Layertwine 同步"}'
 
 # 4. 从 Git 拉取更新
 curl -X POST http://127.0.0.1:8080/api/v1/pull \
@@ -936,8 +936,8 @@ curl http://127.0.0.1:8080/api/v1/branches
 
 HTTP 模式下的配置通过环境变量和 TOML 配置文件共同管理。
 
-- `STRATUM_MODE=http` — 启用 HTTP 模式
-- `STRATUM_DB_PATH` — 指定 SQLite 数据库路径
-- `STRATUM_HTTP_ADDR` — 指定监听地址
+- `LAYERTWINE_MODE=http` — 启用 HTTP 模式
+- `LAYERTWINE_DB_PATH` — 指定 SQLite 数据库路径
+- `LAYERTWINE_HTTP_ADDR` — 指定监听地址
 
-数据库维护配置（WAL checkpoint、vacuum 等）通过 `stratum.toml` 配置，详情见配置参考文档。
+数据库维护配置（WAL checkpoint、vacuum 等）通过 `layertwine.toml` 配置，详情见配置参考文档。

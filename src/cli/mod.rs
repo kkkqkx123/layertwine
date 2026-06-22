@@ -49,9 +49,11 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 Err(code) => return code,
             };
             let resp = service.status();
-            print_status_from_response(&resp, format);
-            // print_status_from_response handles both Ok/Err internally
-            Ok(())
+            match &resp {
+                Ok(r) => println!("{}", format_status_response(r, format)),
+                Err(e) => eprintln!("error reading status: {}", e),
+            }
+            resp.map(|_| ())
         }
         Commands::Edit { file, content } => {
             let service = match open_service(&cli) {
@@ -125,27 +127,6 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 }
             }
         }
-        Commands::Approve { agent_id } => {
-            let service = match open_service(&cli) {
-                Ok(s) => s,
-                Err(code) => return code,
-            };
-            let resp = service.approve(ApproveRequest {
-                agent_id: agent_id.clone(),
-            });
-            if let Ok(ref r) = resp {
-                println!(
-                    "Approved agent '{}' -> integrated snapshot {}",
-                    agent_id,
-                    &r.integrated_snapshot_id[..12]
-                );
-                println!(
-                    "Merged to staged -> snapshot {}",
-                    &r.staged_snapshot_id[..12]
-                );
-            }
-            resp.map(|_| ())
-        }
         Commands::Commit { message, author } => {
             let service = match open_service(&cli) {
                 Ok(s) => s,
@@ -173,7 +154,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 count: Some(*count),
             });
             if let Ok(ref r) = resp {
-                print_log_from_response(r, format);
+                println!("{}", format_log_response(r, format));
             }
             resp.map(|_| ())
         }
@@ -186,7 +167,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 BranchCommands::List => {
                     let resp = service.branch_list();
                     if let Ok(ref r) = resp {
-                        print_branches_from_response(r, format);
+                        println!("{}", format_branches_response(r, format));
                     }
                     resp.map(|_| ())
                 }
@@ -274,13 +255,12 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 Ok(s) => s,
                 Err(code) => return code,
             };
-            eprint!("  Compacting database ... ");
-            let _ = std::io::Write::flush(&mut std::io::stderr());
+            print_progress("Compacting database");
             let resp = service.compact(CompactRequest {
                 vacuum_full: if *vacuum_full { Some(true) } else { None },
             });
             if let Ok(ref r) = resp {
-                eprintln!("done");
+                print_done();
                 println!("{}", r.message);
                 if r.vacuum_performed {
                     println!(
@@ -296,11 +276,10 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 Ok(s) => s,
                 Err(code) => return code,
             };
-            eprint!("  Running garbage collection ... ");
-            let _ = std::io::Write::flush(&mut std::io::stderr());
+            print_progress("Running garbage collection");
             let resp = service.gc(GcRequest {});
             if let Ok(ref r) = resp {
-                eprintln!("done");
+                print_done();
                 println!(
                     "GC complete: {} checkpoints removed, {} snapshots freed, {} bytes",
                     r.removed_checkpoints, r.removed_snapshots, r.freed_bytes
@@ -323,15 +302,14 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 Ok(s) => s,
                 Err(code) => return code,
             };
-            eprint!("  Pushing to Git ... ");
-            let _ = std::io::Write::flush(&mut std::io::stderr());
+            print_progress("Pushing to Git");
             let resp = service.push(PushRequest {
                 remote: Some(remote.clone()),
                 git_repo,
                 message: Some(message.clone()),
             });
             if let Ok(ref r) = resp {
-                eprintln!("done");
+                print_done();
                 println!(
                     "Pushed to remote '{}' (commit: {})",
                     r.remote, r.git_commit_hash
@@ -352,7 +330,7 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 target_id: target_id.clone(),
             });
             if let Ok(ref r) = resp {
-                print_show_from_response(r, format);
+                println!("{}", format_show_response(r, format));
             }
             resp.map(|_| ())
         }
@@ -368,18 +346,211 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 Ok(s) => s,
                 Err(code) => return code,
             };
-            eprint!("  Pulling from Git remote ... ");
-            let _ = std::io::Write::flush(&mut std::io::stderr());
+            print_progress("Pulling from Git remote");
             let resp = service.pull(PullRequest {
                 remote: Some(remote.clone()),
                 git_repo,
                 git_ref: Some(git_ref.clone()),
             });
             if let Ok(ref r) = resp {
-                eprintln!("done");
+                print_done();
                 println!("Pulled from remote '{}' ref '{}'", r.remote, r.git_ref);
             }
             resp.map(|_| ())
+        }
+        Commands::Checkpoint { action } => {
+            let service = match open_service(&cli) {
+                Ok(s) => s,
+                Err(code) => return code,
+            };
+            match action {
+                CheckpointCommands::Restore {
+                    checkpoint_id,
+                    source_filter,
+                } => {
+                    let resp = service.checkpoint_restore(CheckpointRestoreRequest {
+                        checkpoint_id: checkpoint_id.clone(),
+                        source_filter: source_filter.clone(),
+                    });
+                    if let Ok(ref r) = resp {
+                        println!(
+                            "Restored checkpoint {}{}",
+                            &r.checkpoint.id[..12],
+                            r.checkpoint
+                                .git_anchor
+                                .as_ref()
+                                .map(|g| format!(" (git: {})", g))
+                                .unwrap_or_default()
+                        );
+                        println!("  Message: {}", r.checkpoint.message);
+                        println!("  Snapshots: {}", r.snapshots.len());
+                        for snap in &r.snapshots {
+                            println!(
+                                "    {} [{}] (source: {})",
+                                &snap.snapshot_id[..12],
+                                snap.content_type,
+                                snap.source
+                            );
+                        }
+                    }
+                    resp.map(|_| ())
+                }
+                CheckpointCommands::RestoreByTime {
+                    target_time,
+                    source_filter,
+                } => {
+                    let resp = service.checkpoint_restore_by_time(CheckpointRestoreByTimeRequest {
+                        target_time: *target_time,
+                        source_filter: source_filter.clone(),
+                    });
+                    if let Ok(ref r) = resp {
+                        println!(
+                            "Restored checkpoint {} (nearest to {})",
+                            &r.checkpoint.id[..12],
+                            *target_time
+                        );
+                        println!("  Message: {}", r.checkpoint.message);
+                        println!("  Snapshots: {}", r.snapshots.len());
+                    }
+                    resp.map(|_| ())
+                }
+                CheckpointCommands::Diff { from_id, to_id } => {
+                    let resp = service.checkpoint_diff(CheckpointDiffRequest {
+                        from_id: from_id.clone(),
+                        to_id: to_id.clone(),
+                    });
+                    if let Ok(ref r) = resp {
+                        println!(
+                            "Diff {} -> {} ({} changes)",
+                            &r.from_id[..12],
+                            &r.to_id[..12],
+                            r.total_changes
+                        );
+                        if !r.added.is_empty() {
+                            println!("  Added ({}):", r.added.len());
+                            for id in &r.added {
+                                println!("    + {}", &id[..12]);
+                            }
+                        }
+                        if !r.modified.is_empty() {
+                            println!("  Modified ({}):", r.modified.len());
+                            for id in &r.modified {
+                                println!("    ~ {}", &id[..12]);
+                            }
+                        }
+                        if !r.removed.is_empty() {
+                            println!("  Removed ({}):", r.removed.len());
+                            for id in &r.removed {
+                                println!("    - {}", &id[..12]);
+                            }
+                        }
+                    }
+                    resp.map(|_| ())
+                }
+                CheckpointCommands::Rollback { checkpoint_id } => {
+                    let resp = service.checkpoint_rollback(CheckpointRollbackRequest {
+                        checkpoint_id: checkpoint_id.clone(),
+                    });
+                    if let Ok(ref r) = resp {
+                        println!(
+                            "Rolled back staged to checkpoint {}",
+                            &r.checkpoint_id[..12]
+                        );
+                        println!(
+                            "  Staged snapshots reset to: {}",
+                            r.snapshot_ids.first().map(|s| &s[..12]).unwrap_or("(none)")
+                        );
+                    }
+                    resp.map(|_| ())
+                }
+            }
+        }
+        Commands::Approval { action } => {
+            let service = match open_service(&cli) {
+                Ok(s) => s,
+                Err(code) => return code,
+            };
+            match action {
+                ApprovalCommands::List => {
+                    let resp = service.list_pending_approvals();
+                    if let Ok(ref r) = resp {
+                        if r.approvals.is_empty() {
+                            println!("No pending approvals.");
+                        } else {
+                            println!("Pending approvals ({}):", r.total);
+                            println!("{:-<72}", "");
+                            println!(
+                                "{:<24} {:<32} {:<20} History",
+                                "Agent ID", "Partition", "Current Snapshot"
+                            );
+                            println!("{:-<72}", "");
+                            for a in &r.approvals {
+                                println!(
+                                    "{:<24} {:<32} {:<20} {} snapshots",
+                                    a.agent_id,
+                                    a.partition_name,
+                                    &a.current_snapshot[..12],
+                                    a.history_len
+                                );
+                            }
+                        }
+                    }
+                    resp.map(|_| ())
+                }
+                ApprovalCommands::Approve {
+                    agent_id,
+                    integrated_name,
+                } => {
+                    let resp = service.approve_agent(ApproveAgentRequest {
+                        agent_id: agent_id.clone(),
+                        integrated_name: integrated_name.clone(),
+                    });
+                    if let Ok(ref r) = resp {
+                        println!(
+                            "Approved agent '{}' -> integrated snapshot {}",
+                            r.agent_id,
+                            &r.integrated_snapshot_id[..12]
+                        );
+                    }
+                    resp.map(|_| ())
+                }
+                ApprovalCommands::Reject { agent_id } => {
+                    let resp = service.reject_agent(RejectAgentRequest {
+                        agent_id: agent_id.clone(),
+                    });
+                    if let Ok(ref r) = resp {
+                        println!(
+                            "Rejected agent '{}' -> rolled back to {}",
+                            r.agent_id,
+                            &r.baseline_snapshot_id[..12]
+                        );
+                    }
+                    resp.map(|_| ())
+                }
+                ApprovalCommands::MergeToUnified { names } => {
+                    let resp = service.merge_to_unified(MergeToUnifiedRequest {
+                        integration_names: names.clone(),
+                    });
+                    if let Ok(ref r) = resp {
+                        println!(
+                            "Merged {} integration(s) to unified -> snapshot {}",
+                            r.merged_count,
+                            &r.unified_snapshot_id[..12]
+                        );
+                    }
+                    resp.map(|_| ())
+                }
+                ApprovalCommands::MergeToStaged => {
+                    let resp = service.merge_to_staged(MergeToStagedRequest {});
+                    if let Ok(ref r) = resp {
+                        println!(
+                            "Merged unified to staged -> snapshot {}",
+                            &r.staged_snapshot_id[..12]
+                        );
+                    }
+                    resp.map(|_| ())
+                }
+            }
         }
     };
 
