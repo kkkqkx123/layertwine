@@ -6,7 +6,7 @@
 pub mod service;
 pub mod types;
 
-pub use service::{ApiService, ApiServiceImpl, ServiceConfig};
+pub use service::{ApiService, ServiceConfig};
 pub use types::*;
 
 #[cfg(feature = "http")]

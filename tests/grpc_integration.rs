@@ -12,7 +12,8 @@ use std::sync::Arc;
 
 use layertwine::api::rpc::layertwine_proto;
 use layertwine::api::rpc::LayertwineGrpc;
-use layertwine::api::{ApiServiceImpl, ServiceConfig};
+use layertwine::api::service::ApiService;
+use layertwine::api::ServiceConfig;
 use tonic::Request;
 
 use layertwine_proto::layertwine_server::Layertwine;
@@ -22,10 +23,10 @@ mod common;
 // ── Helper to create a LayertwineGrpc with temp DB ──
 
 fn setup_grpc(db_path: &str) -> LayertwineGrpc {
-    let api = ApiServiceImpl::open(ServiceConfig {
+    let api = ApiService::open(ServiceConfig {
         db_path: db_path.to_string(),
     })
-    .expect("failed to create ApiServiceImpl");
+    .expect("failed to create ApiService");
     LayertwineGrpc::new(Arc::new(api))
 }
 

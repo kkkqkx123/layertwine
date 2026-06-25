@@ -4,7 +4,7 @@ pub mod output;
 use std::io::Read;
 use std::sync::Arc;
 
-use crate::api::service::{ApiService, ApiServiceImpl, ServiceConfig};
+use crate::api::service::{ApiService, ServiceConfig};
 use crate::api::types::*;
 use crate::error::exit_codes;
 
@@ -26,10 +26,10 @@ pub fn run_with_cli(cli: Cli) -> i32 {
 
     let result = match &cli.command {
         Commands::Init { git_ref } => {
-            let service = match ApiServiceImpl::open(ServiceConfig {
+            let service = match ApiService::open(ServiceConfig {
                 db_path: cli.db_path.clone(),
             }) {
-                Ok(s) => Arc::new(s) as Arc<dyn ApiService>,
+                Ok(s) => Arc::new(s),
                 Err(e) => {
                     eprintln!("error: {}", e);
                     return exit_codes::GENERAL_ERROR;
@@ -563,8 +563,8 @@ pub fn run_with_cli(cli: Cli) -> i32 {
     }
 }
 
-fn open_service(cli: &Cli) -> std::result::Result<Arc<dyn ApiService>, i32> {
-    match ApiServiceImpl::open(ServiceConfig {
+fn open_service(cli: &Cli) -> std::result::Result<Arc<ApiService>, i32> {
+    match ApiService::open(ServiceConfig {
         db_path: cli.db_path.clone(),
     }) {
         Ok(s) => Ok(Arc::new(s)),

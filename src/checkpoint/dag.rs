@@ -47,8 +47,10 @@ impl CheckpointDag {
         true
     }
 
-    /// Add edge without cycle check (internal use)
-    fn add_edge_unchecked(&mut self, parent: CheckpointId, child: CheckpointId) {
+    /// Add edge without cycle check
+    ///
+    /// Used internally and for fast DAG rebuild from trusted data.
+    pub(crate) fn add_edge_unchecked(&mut self, parent: CheckpointId, child: CheckpointId) {
         self.nodes.entry(parent).or_default();
         self.nodes.entry(child).or_default();
 

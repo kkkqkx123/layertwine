@@ -1,11 +1,11 @@
 use crate::checkpoint::branch::Branch;
 use crate::checkpoint::types::Checkpoint;
 use crate::core::types::{CheckpointId, ContentId, SnapshotId};
-use crate::storage::repository::{BranchStore, CheckpointStore};
+use crate::storage::repository::CheckpointPersist;
 use crate::storage::sqlite::connection::SqliteStorage;
 use crate::StorageResult;
 
-impl CheckpointStore for SqliteStorage {
+impl CheckpointPersist for SqliteStorage {
     fn store_checkpoint(&self, checkpoint: &Checkpoint) -> StorageResult<()> {
         let conn = self.conn.lock();
         let parents_json = serde_json::to_vec(&checkpoint.parents)
@@ -125,9 +125,7 @@ impl CheckpointStore for SqliteStorage {
         }
         Ok(())
     }
-}
 
-impl BranchStore for SqliteStorage {
     fn store_branch(&self, branch: &Branch) -> StorageResult<()> {
         let conn = self.conn.lock();
         conn.execute(

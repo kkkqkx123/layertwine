@@ -16,8 +16,7 @@ use crate::core::types::{CheckpointId, PartitionId, PartitionType, SnapshotId, S
 use crate::engine::diff::diff_to_line_diff;
 use crate::error::{LayertwineError, Result};
 use crate::storage::repository::{
-    BranchStore, CheckpointStore, DeltaStore, FileNodeStore, MetadataStore, PartitionStore,
-    SnapshotStore,
+    CheckpointPersist, DeltaStore, FileNodeStore, PartitionStore, SnapshotStore,
 };
 
 /// Validation result for staged before commit
@@ -186,11 +185,10 @@ where
 /// Submit staged as Checkpoint
 ///
 /// 1. Get staged partition current snapshot
-/// 2. Get current branch head from BranchStore
+/// 2. Get current branch head from CheckpointPersist
 /// 3. Build a Checkpoint with the snapshot as baseline
-/// 4. Store the checkpoint via CheckpointStore
-/// 5. Update branch head via BranchStore
-/// 6. Return the new CheckpointId
+/// 4. Store the checkpoint and update branch head via CheckpointPersist
+/// 5. Return the new CheckpointId
 ///
 /// Note: DAG is built dynamically from Checkpoint relationships and is not persisted.
 pub fn commit_staged_to_checkpoint<S>(
@@ -200,7 +198,7 @@ pub fn commit_staged_to_checkpoint<S>(
     author: &str,
 ) -> Result<CheckpointId>
 where
-    S: SnapshotStore + PartitionStore + CheckpointStore + BranchStore + MetadataStore,
+    S: SnapshotStore + PartitionStore + CheckpointPersist,
 {
     // 1. Get staged partition
     let staged_pid = staged_partition_id();

@@ -12,8 +12,7 @@ use crate::layered::integrated;
 use crate::layered::staged;
 use crate::layered::unified;
 use crate::storage::repository::{
-    BranchStore, CheckpointStore, DeltaStore, FileNodeStore, MetadataStore, PartitionStore,
-    SnapshotStore,
+    CheckpointPersist, DeltaStore, FileNodeStore, PartitionStore, SnapshotStore,
 };
 
 /// Development scenario 1: Single feature with single agent
@@ -32,13 +31,7 @@ pub fn develop_single_feature<S>(
     edit_fn: impl FnOnce(&str) -> Result<String>,
 ) -> Result<SnapshotId>
 where
-    S: SnapshotStore
-        + DeltaStore
-        + FileNodeStore
-        + PartitionStore
-        + BranchStore
-        + MetadataStore
-        + CheckpointStore,
+    S: DeltaStore + FileNodeStore + PartitionStore + CheckpointPersist,
 {
     // 1. Get current baseline
     let baseline = get_current_baseline(storage)?;
@@ -93,13 +86,7 @@ pub fn develop_feature_with_collaboration<S>(
     agents: Vec<(AgentInstanceId, impl FnOnce(&str) -> Result<String>)>,
 ) -> Result<SnapshotId>
 where
-    S: SnapshotStore
-        + DeltaStore
-        + FileNodeStore
-        + PartitionStore
-        + BranchStore
-        + MetadataStore
-        + CheckpointStore,
+    S: DeltaStore + FileNodeStore + PartitionStore + CheckpointPersist,
 {
     if agents.is_empty() {
         return Err(crate::error::LayertwineError::General(
@@ -157,13 +144,7 @@ where
 /// Multiple features are merged into unified, then to staged.
 pub fn merge_multiple_features<S>(storage: &S, feature_names: &[String]) -> Result<SnapshotId>
 where
-    S: SnapshotStore
-        + DeltaStore
-        + FileNodeStore
-        + PartitionStore
-        + BranchStore
-        + MetadataStore
-        + CheckpointStore,
+    S: DeltaStore + FileNodeStore + PartitionStore + CheckpointPersist,
 {
     if feature_names.is_empty() {
         return Err(crate::error::LayertwineError::General(

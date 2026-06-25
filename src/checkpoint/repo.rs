@@ -29,6 +29,8 @@ pub struct CheckpointRepo {
     pub(crate) storage: Option<Box<dyn CheckpointPersist>>,
     /// Time index for fast time-based checkpoint queries
     pub time_index: TimeIndex,
+    /// Checkpoints deleted since last sync — cleaned from storage in sync_all()
+    deleted_checkpoints: HashSet<CheckpointId>,
 }
 
 impl CheckpointRepo {
@@ -56,6 +58,7 @@ impl CheckpointRepo {
             snapshots: HashMap::new(),
             storage: None,
             time_index,
+            deleted_checkpoints: HashSet::new(),
         }
     }
 
@@ -71,15 +74,12 @@ impl CheckpointRepo {
     ///
     /// DAG is built dynamically from checkpoint relationships, not loaded from storage.
     pub fn load(storage: Box<dyn CheckpointPersist>) -> Result<Self> {
-        let checkpoints: HashMap<CheckpointId, Checkpoint> = storage
+        let mut checkpoints: HashMap<CheckpointId, Checkpoint> = storage
             .list_checkpoints()?
             .into_iter()
             .map(|cp| (cp.id, cp))
             .collect();
         let mut branches = storage.list_branches()?;
-
-        // Build DAG dynamically from checkpoints
-        let checkpoint_dag = Self::build_dag_from_checkpoints(&checkpoints);
 
         // Initialize with root when storage is empty
         if checkpoints.is_empty() {
@@ -88,47 +88,19 @@ impl CheckpointRepo {
             let root_id = root.id;
 
             storage.store_checkpoint(&root)?;
-            let mut checkpoints = HashMap::new();
-            let mut time_index = TimeIndex::new();
-            time_index.insert(&root);
             checkpoints.insert(root_id, root);
-
-            let mut checkpoint_dag = CheckpointDag::new();
-            checkpoint_dag.add_node(root_id);
 
             let main_branch = Branch::new("main", root_id);
             storage.store_branch(&main_branch)?;
             branches.push(main_branch);
 
             storage.store_metadata("current_branch", "main")?;
-
-            let current_branch_name = storage
-                .load_metadata("current_branch")?
-                .unwrap_or_else(|| "main".to_string());
-            let current_branch = branches
-                .iter()
-                .position(|b| b.name == current_branch_name)
-                .unwrap_or(0);
-
-            return Ok(CheckpointRepo {
-                branches,
-                current_branch,
-                checkpoint_dag,
-                checkpoints,
-                snapshots: HashMap::new(),
-                storage: Some(storage),
-                time_index,
-            });
         }
 
-        let current_branch_name = storage
-            .load_metadata("current_branch")?
-            .unwrap_or_else(|| "main".to_string());
-        let current_branch = branches
-            .iter()
-            .position(|b| b.name == current_branch_name)
-            .unwrap_or(0);
+        // Build DAG dynamically from checkpoint relationships (not persisted)
+        let checkpoint_dag = Self::build_dag_from_checkpoints(&checkpoints);
 
+        // Build time index from all checkpoints
         let time_index =
             TimeIndex::from_checkpoints(&checkpoints.values().cloned().collect::<Vec<_>>());
 
@@ -145,6 +117,15 @@ impl CheckpointRepo {
             }
         }
 
+        // Resolve current branch
+        let current_branch_name = storage
+            .load_metadata("current_branch")?
+            .unwrap_or_else(|| "main".to_string());
+        let current_branch = branches
+            .iter()
+            .position(|b| b.name == current_branch_name)
+            .unwrap_or(0);
+
         Ok(CheckpointRepo {
             branches,
             current_branch,
@@ -153,6 +134,7 @@ impl CheckpointRepo {
             snapshots,
             storage: Some(storage),
             time_index,
+            deleted_checkpoints: HashSet::new(),
         })
     }
 
@@ -166,11 +148,13 @@ impl CheckpointRepo {
     fn build_dag_from_checkpoints(
         checkpoints: &HashMap<CheckpointId, Checkpoint>,
     ) -> CheckpointDag {
+        // Use unchecked edge insertion: checkpoint parent relationships stored in
+        // SQLite are inherently acyclic, so cycle detection (BFS) is unnecessary.
         let mut dag = CheckpointDag::new();
         for (id, cp) in checkpoints {
             dag.add_node(*id);
             for parent in &cp.parents {
-                dag.add_edge(*parent, *id);
+                dag.add_edge_unchecked(*parent, *id);
             }
         }
         dag
@@ -188,11 +172,18 @@ impl CheckpointRepo {
 
     /// Persist the full current state (all checkpoints, branches, current_branch metadata).
     ///
+    /// Also cleans up any checkpoints that were deleted in memory from the storage backend.
+    ///
     /// DAG is not persisted; it is rebuilt dynamically from checkpoint relationships.
-    pub fn sync_all(&self) -> Result<()> {
+    pub fn sync_all(&mut self) -> Result<()> {
         if let Some(storage) = &self.storage {
             for cp in self.checkpoints.values() {
                 storage.store_checkpoint(cp)?;
+            }
+            // Clean up deletions
+            for deleted_id in self.deleted_checkpoints.drain() {
+                // Ignore "not found" errors — already deleted is fine
+                let _ = storage.delete_checkpoint(&deleted_id);
             }
             for branch in &self.branches {
                 storage.store_branch(branch)?;
@@ -255,24 +246,20 @@ impl CheckpointRepo {
         let cp = Checkpoint::new(snapshot_ids, vec![current_head], metadata);
         let cp_id = cp.id;
 
-        self.checkpoints.insert(cp_id, cp);
+        // Use &cp before moving it into the map (avoids redundant HashMap lookup)
+        self.time_index.insert(&cp);
         self.checkpoint_dag.add_node(cp_id);
         self.checkpoint_dag.add_edge(current_head, cp_id);
         self.current_branch_mut().set_head(cp_id);
 
-        // Update time index
-        if let Some(new_cp) = self.checkpoints.get(&cp_id) {
-            self.time_index.insert(new_cp);
-        }
-
         // Auto-persist (DAG is not persisted)
         if let Some(storage) = &self.storage {
-            if let Some(cp) = self.checkpoints.get(&cp_id) {
-                storage.store_checkpoint(cp)?;
-            }
+            storage.store_checkpoint(&cp)?;
             let branch = &self.branches[self.current_branch];
             storage.update_branch_head(&branch.name, &cp_id)?;
         }
+
+        self.checkpoints.insert(cp_id, cp);
 
         Ok(cp_id)
     }
@@ -405,25 +392,21 @@ impl CheckpointRepo {
         let cp = Checkpoint::new(snapshot_ids, vec![current_head, source_head], metadata);
         let cp_id = cp.id;
 
-        self.checkpoints.insert(cp_id, cp);
+        // Use &cp before moving it into the map (avoids redundant HashMap lookup)
+        self.time_index.insert(&cp);
         self.checkpoint_dag.add_node(cp_id);
         self.checkpoint_dag.add_edge(current_head, cp_id);
         self.checkpoint_dag.add_edge(source_head, cp_id);
         self.current_branch_mut().set_head(cp_id);
 
-        // Update time index
-        if let Some(merge_cp) = self.checkpoints.get(&cp_id) {
-            self.time_index.insert(merge_cp);
-        }
-
         // Auto-persist (DAG is not persisted)
         if let Some(storage) = &self.storage {
-            if let Some(cp) = self.checkpoints.get(&cp_id) {
-                storage.store_checkpoint(cp)?;
-            }
+            storage.store_checkpoint(&cp)?;
             let branch = &self.branches[self.current_branch];
             storage.update_branch_head(&branch.name, &cp_id)?;
         }
+
+        self.checkpoints.insert(cp_id, cp);
 
         Ok(cp_id)
     }
@@ -485,6 +468,7 @@ impl CheckpointRepo {
     pub fn remove_checkpoint(&mut self, id: &CheckpointId) -> Result<()> {
         if let Some(cp) = self.checkpoints.remove(id) {
             self.time_index.remove(&cp);
+            self.deleted_checkpoints.insert(*id);
         } else {
             return Err(LayertwineError::NotFound(format!(
                 "checkpoint {} not found",

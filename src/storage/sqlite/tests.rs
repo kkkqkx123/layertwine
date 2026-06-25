@@ -7,7 +7,7 @@ use crate::core::types::{
     CheckpointId, ContentId, DiffOp, Hunk, PartitionType, SnapshotId, SourceType,
 };
 use crate::storage::repository::{
-    BranchStore, CheckpointStore, DeltaStore, FileNodeStore, PartitionStore, SnapshotStore,
+    CheckpointPersist, DeltaStore, FileNodeStore, PartitionStore, SnapshotStore,
 };
 use crate::storage::sqlite::connection::SqliteStorage;
 use crate::StorageResult;

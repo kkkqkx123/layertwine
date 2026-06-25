@@ -7,7 +7,7 @@ use crate::checkpoint::repo::CheckpointRepo;
 use crate::checkpoint::types::{Checkpoint, CheckpointMetadata};
 use crate::core::file_node::FileNode;
 use crate::core::snapshot::{Snapshot, SnapshotContent};
-use crate::core::types::{CheckpointId, ContentId, SnapshotId};
+use crate::core::types::CheckpointId;
 use crate::error::{LayertwineError, Result};
 use std::collections::HashMap;
 
@@ -27,8 +27,9 @@ pub enum TransactionStatus {
 /// Builds up snapshots and commits them atomically.
 /// On commit failure, the entire transaction is rolled back.
 pub struct CheckpointTransaction {
-    /// Snapshots to be committed: (snapshot_id, content, source)
-    snapshots_to_commit: Vec<(SnapshotId, SnapshotContent, String)>,
+    /// Snapshots to be committed: (content, source)
+    /// Snapshot IDs are computed by Snapshot::compute_id during commit.
+    snapshots_to_commit: Vec<(SnapshotContent, String)>,
     /// Checkpoint metadata
     checkpoint_metadata: CheckpointMetadata,
     /// Parent checkpoints
@@ -50,23 +51,11 @@ impl CheckpointTransaction {
 
     /// Add a snapshot to the transaction (builder pattern).
     ///
-    /// The snapshot ID is computed from source + content hash.
+    /// The snapshot ID is computed by Snapshot::compute_id during commit,
+    /// which hashes source, content, file path, and other metadata together.
     pub fn add_snapshot(mut self, source: &str, content: SnapshotContent) -> Self {
-        let snap_id = Self::compute_snapshot_id(source, &content);
         self.snapshots_to_commit
-            .push((snap_id, content, source.to_string()));
-        self
-    }
-
-    /// Add a snapshot with a pre-computed ID
-    pub fn add_snapshot_with_id(
-        mut self,
-        snap_id: SnapshotId,
-        source: &str,
-        content: SnapshotContent,
-    ) -> Self {
-        self.snapshots_to_commit
-            .push((snap_id, content, source.to_string()));
+            .push((content, source.to_string()));
         self
     }
 
@@ -99,14 +88,13 @@ impl CheckpointTransaction {
 
         let mut baseline_snapshots = Vec::new();
         let mut snapshot_sources = HashMap::new();
-        let mut cached_snapshots: Vec<Snapshot> = Vec::new();
 
         // Phase 1: Persist all snapshots (wrapped in storage transaction if available)
-        for (snap_id, content, source) in &self.snapshots_to_commit {
-            let snap = repo.store_snapshot_content(snap_id, content, source)?;
-            baseline_snapshots.push(*snap_id);
-            snapshot_sources.insert(*snap_id, source.clone());
-            cached_snapshots.push(snap);
+        // Snapshot IDs are computed by Snapshot::compute_id during storage.
+        for (content, source) in &self.snapshots_to_commit {
+            let snap = repo.store_snapshot_content(content, source)?;
+            baseline_snapshots.push(snap.id);
+            snapshot_sources.insert(snap.id, source.clone());
         }
 
         // Phase 2: Create and persist checkpoint
@@ -128,14 +116,6 @@ impl CheckpointTransaction {
     /// Rollback the transaction (no operations performed)
     pub fn rollback(mut self) {
         self.status = TransactionStatus::RolledBack;
-    }
-
-    /// Compute snapshot ID based on source + content hash
-    fn compute_snapshot_id(source: &str, content: &SnapshotContent) -> SnapshotId {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(source.as_bytes());
-        hasher.update(&content.to_bytes());
-        ContentId(*hasher.finalize().as_bytes())
     }
 }
 
@@ -160,16 +140,15 @@ impl CheckpointRepo {
 
     /// Store a snapshot's content through the internal storage layer.
     ///
-    /// Creates a Snapshot record, persists to storage backend if available,
-    /// and caches in memory for restore lookups.
+    /// Creates a Snapshot record (ID is computed by Snapshot::compute_id),
+    /// persists to storage backend if available, and caches in memory for restore lookups.
     pub(crate) fn store_snapshot_content(
         &mut self,
-        snap_id: &SnapshotId,
         content: &SnapshotContent,
         source: &str,
     ) -> Result<Snapshot> {
         let file_node = FileNode::new(std::path::PathBuf::from(source), &content.to_bytes());
-        let mut snap = Snapshot::new_with_content(
+        let snap = Snapshot::new_with_content(
             file_node,
             content.clone(),
             source.to_string(),
@@ -177,7 +156,6 @@ impl CheckpointRepo {
             vec![],
             vec![],
         );
-        snap.id = *snap_id;
 
         // Persist to storage backend if available
         if let Some(storage) = &self.storage {
@@ -218,7 +196,7 @@ impl CheckpointRepo {
 mod tests {
     use super::*;
     use crate::checkpoint::types::CheckpointMetadata;
-    use crate::core::types::ContentId;
+    use crate::core::types::{ContentId, SnapshotId};
 
     fn dummy_snap_id(n: u8) -> SnapshotId {
         ContentId::from_content(&[n; 8])
@@ -279,9 +257,7 @@ mod tests {
 
         assert_eq!(txn.snapshot_count(), 2);
 
-        // Commit - may fail without storage backend, but the transaction structure is correct
         let result = txn.commit(&mut repo);
-        // Without full storage, this may succeed (in-memory only) or fail
         let _ = result;
     }
 
@@ -301,13 +277,5 @@ mod tests {
             .transaction_with_metadata("agent-1", "custom metadata")
             .unwrap();
         assert!(txn.is_open());
-    }
-
-    #[test]
-    fn test_compute_snapshot_id_deterministic() {
-        let content = SnapshotContent::JsonMetadata(serde_json::json!({"key": "val"}));
-        let id1 = CheckpointTransaction::compute_snapshot_id("agent://test", &content);
-        let id2 = CheckpointTransaction::compute_snapshot_id("agent://test", &content);
-        assert_eq!(id1, id2);
     }
 }

@@ -265,14 +265,12 @@ async fn run_cli(_config: &CommonConfig) -> Result<(), LayertwineError> {
 /// Run in HTTP mode
 #[cfg(feature = "http")]
 async fn run_http(config: &CommonConfig, addr: SocketAddr) -> Result<(), LayertwineError> {
-    use crate::api::service::{ApiService, ApiServiceImpl, ServiceConfig};
+    use crate::api::service::ServiceConfig;
     use std::sync::Arc;
 
-    let service = ApiServiceImpl::open(ServiceConfig {
+    let service = Arc::new(crate::api::service::ApiService::open(ServiceConfig {
         db_path: config.db_path.clone(),
-    })?;
-
-    let service = Arc::new(service) as Arc<dyn ApiService>;
+    })?);
 
     eprintln!("Starting HTTP server on {}", addr);
     crate::api::http::serve(service, addr).await
@@ -281,14 +279,12 @@ async fn run_http(config: &CommonConfig, addr: SocketAddr) -> Result<(), Layertw
 /// Run in gRPC mode
 #[cfg(feature = "grpc")]
 async fn run_grpc(config: &CommonConfig, addr: SocketAddr) -> Result<(), LayertwineError> {
-    use crate::api::service::{ApiService, ApiServiceImpl, ServiceConfig};
+    use crate::api::service::ServiceConfig;
     use std::sync::Arc;
 
-    let service = ApiServiceImpl::open(ServiceConfig {
+    let service = Arc::new(crate::api::service::ApiService::open(ServiceConfig {
         db_path: config.db_path.clone(),
-    })?;
-
-    let service = Arc::new(service) as Arc<dyn ApiService>;
+    })?);
 
     eprintln!("Starting gRPC server on {}", addr);
     crate::api::rpc::serve(service, addr).await

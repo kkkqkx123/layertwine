@@ -114,7 +114,7 @@ impl CheckpointRepo {
             .copied()
             .collect();
 
-        let snapshots = self.load_selected_snapshot_contents(&filtered_snapshots)?;
+        let snapshots = self.load_all_snapshot_contents(&filtered_snapshots)?;
 
         Ok(RestoreResponse {
             checkpoint: cp.clone(),
@@ -310,14 +310,6 @@ impl CheckpointRepo {
                 Ok((*id, content, source))
             })
             .collect()
-    }
-
-    /// Load snapshot contents for selected snapshot IDs
-    fn load_selected_snapshot_contents(
-        &self,
-        snap_ids: &[SnapshotId],
-    ) -> Result<Vec<(SnapshotId, SnapshotContent, String)>> {
-        self.load_all_snapshot_contents(snap_ids)
     }
 }
 

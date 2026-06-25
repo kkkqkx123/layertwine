@@ -16,7 +16,7 @@ use crate::core::layer::Layer;
 use crate::core::partition::Partition;
 use crate::core::types::{CheckpointId, LayerType, PartitionId, PartitionType, SnapshotId};
 use crate::error::{LayertwineError, Result};
-use crate::storage::repository::{BranchStore, CheckpointStore, LayerStore, PartitionStore};
+use crate::storage::repository::{CheckpointPersist, LayerStore, PartitionStore};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -68,7 +68,7 @@ pub struct StateMachine<S> {
 
 impl<S> StateMachine<S>
 where
-    S: PartitionStore + BranchStore + CheckpointStore + LayerStore,
+    S: PartitionStore + CheckpointPersist + LayerStore,
 {
     /// Creating a new state machine instance
     pub fn new(storage: Arc<S>) -> Self {

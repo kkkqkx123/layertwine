@@ -259,6 +259,27 @@ pub struct CheckpointRollbackResponse {
     pub snapshot_ids: Vec<String>,
 }
 
+/// Restore checkpoint and apply to working directory
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointRestoreApplyRequest {
+    pub checkpoint_id: String,
+    /// Optional source filter (e.g. ["file://src/**"])
+    /// Defaults to all file:// sources if not set.
+    pub source_filter: Option<Vec<String>>,
+    /// Whether to update the staged partition pointer after restore
+    pub update_staged: bool,
+    /// Whether to skip writing files (just update staged partition)
+    pub skip_write: bool,
+}
+
+/// Result of applying a restore to the working directory
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointRestoreApplyResponse {
+    pub checkpoint_id: String,
+    pub files_written: Vec<String>,
+    pub staged_updated: bool,
+}
+
 // ── Push/Pull types ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

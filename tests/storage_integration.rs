@@ -21,7 +21,7 @@ use layertwine::core::types::{
     AgentInstanceId, ContentId, DiffOp, Hunk, LayerType, LineDiff, PartitionType, SourceType,
 };
 use layertwine::storage::repository::{
-    AtomicOps, BranchStore, CheckpointStore, DeltaStore, FileNodeStore, LayerStore, MetadataStore,
+    AtomicOps, CheckpointPersist, DeltaStore, FileNodeStore, LayerStore, MetadataStore,
     PartitionStore, SnapshotStore,
 };
 use layertwine::storage::SqliteStorage;

@@ -19,23 +19,23 @@ use crate::api::types::*;
 
 /// Shared application state
 struct AppState {
-    service: Arc<dyn ApiService>,
+    service: Arc<ApiService>,
 }
 
 /// Start the HTTP server
 ///
 /// ```no_run
 /// use std::sync::Arc;
-/// use layertwine::api::service::{ApiService, ApiServiceImpl, ServiceConfig};
+/// use layertwine::api::service::{ApiService, ServiceConfig};
 /// use layertwine::api::http;
 ///
 /// # async fn example() {
-/// let service = ApiServiceImpl::open(ServiceConfig::default()).unwrap();
+/// let service = ApiService::open(ServiceConfig::default()).unwrap();
 /// http::serve(Arc::new(service), "127.0.0.1:8080".parse().unwrap()).await.unwrap();
 /// # }
 /// ```
 pub async fn serve(
-    service: Arc<dyn ApiService>,
+    service: Arc<ApiService>,
     addr: SocketAddr,
 ) -> Result<(), crate::error::LayertwineError> {
     let state = Arc::new(AppState { service });

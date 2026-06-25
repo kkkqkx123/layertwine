@@ -17,8 +17,7 @@ use crate::git_sync::gc::collect_garbage;
 use crate::git_sync::git_bridge::GitBridge;
 use crate::layered::StateMachine;
 use crate::storage::repository::{
-    BranchStore, CheckpointPersist, CheckpointStore, DeltaStore, FileNodeStore, PartitionStore,
-    SnapshotStore,
+    CheckpointPersist, DeltaStore, FileNodeStore, PartitionStore, SnapshotStore,
 };
 use crate::storage::SqliteStorage;
 
@@ -38,68 +37,7 @@ impl Default for ServiceConfig {
     }
 }
 
-/// Unified API service trait
-///
-/// All operations are synchronous (the underlying storage layer is synchronous).
-/// HTTP/gRPC transport layers should wrap calls in `tokio::task::spawn_blocking`.
-pub trait ApiService: Send + Sync {
-    fn init(&self, req: InitRequest) -> ApiResult<InitResponse>;
-    fn status(&self) -> ApiResult<StatusResponse>;
-    fn edit(&self, req: EditRequest) -> ApiResult<EditResponse>;
-    fn agent_edit(&self, req: AgentEditRequest) -> ApiResult<EditResponse>;
-    fn agent_submit(&self, req: AgentSubmitRequest) -> ApiResult<SubmitResponse>;
-    fn approve(&self, req: ApproveRequest) -> ApiResult<ApproveResponse>;
-    fn commit(&self, req: CommitRequest) -> ApiResult<CommitResponse>;
-    fn log(&self, req: LogRequest) -> ApiResult<LogResponse>;
-    fn branch_create(&self, req: BranchCreateRequest) -> ApiResult<BranchCreateResponse>;
-    fn branch_switch(&self, req: BranchSwitchRequest) -> ApiResult<BranchSwitchResponse>;
-    fn branch_list(&self) -> ApiResult<BranchListResponse>;
-    fn merge(&self, req: MergeRequest) -> ApiResult<MergeResponse>;
-    fn backup(&self, req: BackupRequest) -> ApiResult<BackupResponse>;
-    fn restore(&self, req: RestoreRequest) -> ApiResult<RestoreResponse>;
 
-    // ── Checkpoint restore APIs ──
-
-    /// Restore files/state from a checkpoint (full or selective by source filter)
-    fn checkpoint_restore(
-        &self,
-        req: CheckpointRestoreRequest,
-    ) -> ApiResult<CheckpointRestoreResponse>;
-    /// Restore files/state from the nearest checkpoint to a target time
-    fn checkpoint_restore_by_time(
-        &self,
-        req: CheckpointRestoreByTimeRequest,
-    ) -> ApiResult<CheckpointRestoreResponse>;
-    /// Diff two checkpoints (snapshot-level comparison)
-    fn checkpoint_diff(&self, req: CheckpointDiffRequest) -> ApiResult<CheckpointDiffResponse>;
-    /// Rollback staged partition to a checkpoint baseline
-    fn checkpoint_rollback(
-        &self,
-        req: CheckpointRollbackRequest,
-    ) -> ApiResult<CheckpointRollbackResponse>;
-
-    fn gc(&self, _req: GcRequest) -> ApiResult<GcResponse>;
-    /// Compact the database — WAL checkpoint truncation + freelist reclamation.
-    /// Uses the maintenance config from `LayertwineConfig` by default.
-    /// Pass `vacuum_full: true` in the request to force a full VACUUM.
-    fn compact(&self, req: CompactRequest) -> ApiResult<CompactResponse>;
-    fn push(&self, req: PushRequest) -> ApiResult<PushResponse>;
-    fn pull(&self, req: PullRequest) -> ApiResult<PullResponse>;
-    fn show(&self, req: ShowRequest) -> ApiResult<ShowResponse>;
-
-    // ── Approval-specific APIs ──
-
-    /// List all pending agent approvals
-    fn list_pending_approvals(&self) -> ApiResult<ListPendingApprovalsResponse>;
-    /// Approve a single agent submission (moves to integrated)
-    fn approve_agent(&self, req: ApproveAgentRequest) -> ApiResult<ApproveAgentResponse>;
-    /// Reject a single agent submission (rolls back to baseline)
-    fn reject_agent(&self, req: RejectAgentRequest) -> ApiResult<RejectAgentResponse>;
-    /// Merge all integrated partitions into unified
-    fn merge_to_unified(&self, req: MergeToUnifiedRequest) -> ApiResult<MergeToUnifiedResponse>;
-    /// Merge unified into staged
-    fn merge_to_staged(&self, req: MergeToStagedRequest) -> ApiResult<MergeToStagedResponse>;
-}
 
 // ── Helpers ──
 
@@ -161,13 +99,13 @@ fn checkpoint_to_info(cp: &Checkpoint) -> CheckpointInfo {
     }
 }
 
-// ── ApiServiceImpl ──
+// ── ApiService ──
 
-/// Default implementation of ApiService
+/// Default implementation of the layertwine service.
 ///
 /// Wraps StateMachine and SqliteStorage, providing a structured API
 /// that all transport layers (CLI, HTTP, gRPC) can use.
-pub struct ApiServiceImpl {
+pub struct ApiService {
     storage: Arc<SqliteStorage>,
     state_machine: StateMachine<SqliteStorage>,
     checkpoint_repo: Arc<std::sync::RwLock<CheckpointRepo>>,
@@ -175,7 +113,7 @@ pub struct ApiServiceImpl {
     maintenance_cfg: crate::config::MaintenanceConfig,
 }
 
-impl ApiServiceImpl {
+impl ApiService {
     /// Open an existing layertwine repository
     pub fn open(config: ServiceConfig) -> ApiResult<Self> {
         let storage = open_storage(&config.db_path).map_err(map_error)?;
@@ -193,7 +131,7 @@ impl ApiServiceImpl {
         let persist: Box<dyn CheckpointPersist> = Box::new(storage.share());
         let checkpoint_repo = CheckpointRepo::load(persist).map_err(map_error)?;
 
-        Ok(ApiServiceImpl {
+        Ok(ApiService {
             storage,
             state_machine,
             checkpoint_repo: Arc::new(std::sync::RwLock::new(checkpoint_repo)),
@@ -379,10 +317,8 @@ impl ApiServiceImpl {
             }],
         })
     }
-}
 
-impl ApiService for ApiServiceImpl {
-    fn init(&self, req: InitRequest) -> ApiResult<InitResponse> {
+    pub fn init(&self, req: InitRequest) -> ApiResult<InitResponse> {
         let db_path = req.db_path.clone().unwrap_or_else(|| self.db_path.clone());
         let storage = open_storage(&db_path).map_err(map_error)?;
 
@@ -445,7 +381,7 @@ impl ApiService for ApiServiceImpl {
         }
     }
 
-    fn status(&self) -> ApiResult<StatusResponse> {
+    pub fn status(&self) -> ApiResult<StatusResponse> {
         let partitions = self
             .storage
             .list_partitions()
@@ -472,10 +408,10 @@ impl ApiService for ApiServiceImpl {
         Ok(StatusResponse { partitions: infos })
     }
 
-    fn edit(&self, req: EditRequest) -> ApiResult<EditResponse> {
+    pub fn edit(&self, req: EditRequest) -> ApiResult<EditResponse> {
         let content = req.content.as_deref().ok_or_else(|| {
             ApiError::invalid_params(
-                "edit content is required (provide via -c/--content or pipe via stdin)",
+                "edit content is required (provide via -c/--content or pipe via stdin)"
             )
         })?;
         let snapshot_id =
@@ -493,7 +429,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn agent_edit(&self, req: AgentEditRequest) -> ApiResult<EditResponse> {
+    pub fn agent_edit(&self, req: AgentEditRequest) -> ApiResult<EditResponse> {
         let agent_instance = AgentInstanceId(req.agent_id.clone());
         let content = req.content.as_deref().ok_or_else(|| {
             ApiError::invalid_params(
@@ -549,7 +485,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn agent_submit(&self, req: AgentSubmitRequest) -> ApiResult<SubmitResponse> {
+    pub fn agent_submit(&self, req: AgentSubmitRequest) -> ApiResult<SubmitResponse> {
         let agent_instance = AgentInstanceId(req.agent_id.clone());
 
         let staged_pid = crate::layered::staged::staged_partition_id();
@@ -588,7 +524,7 @@ impl ApiService for ApiServiceImpl {
 
     /// Convenience wrapper: approve agent, then merge all integrated → unified → staged.
     /// Uses `approve_agent`, `merge_to_unified` (auto-detect all), `merge_to_staged`.
-    fn approve(&self, req: ApproveRequest) -> ApiResult<ApproveResponse> {
+    pub fn approve(&self, req: ApproveRequest) -> ApiResult<ApproveResponse> {
         let approve_resp = self.approve_agent(ApproveAgentRequest {
             agent_id: req.agent_id.clone(),
             integrated_name: Some(req.agent_id.clone()),
@@ -606,7 +542,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn commit(&self, req: CommitRequest) -> ApiResult<CommitResponse> {
+    pub fn commit(&self, req: CommitRequest) -> ApiResult<CommitResponse> {
         let author = req.author.as_deref().unwrap_or("user");
 
         // Get staged partition
@@ -643,7 +579,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn log(&self, req: LogRequest) -> ApiResult<LogResponse> {
+    pub fn log(&self, req: LogRequest) -> ApiResult<LogResponse> {
         let count = req.count.unwrap_or(20);
 
         // Use checkpoint repo to get log for current branch
@@ -660,7 +596,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn branch_create(&self, req: BranchCreateRequest) -> ApiResult<BranchCreateResponse> {
+    pub fn branch_create(&self, req: BranchCreateRequest) -> ApiResult<BranchCreateResponse> {
         let mut checkpoint_repo = self
             .checkpoint_repo
             .write()
@@ -689,7 +625,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn branch_switch(&self, req: BranchSwitchRequest) -> ApiResult<BranchSwitchResponse> {
+    pub fn branch_switch(&self, req: BranchSwitchRequest) -> ApiResult<BranchSwitchResponse> {
         let _ = self
             .storage
             .get_branch(&req.name)
@@ -720,7 +656,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn branch_list(&self) -> ApiResult<BranchListResponse> {
+    pub fn branch_list(&self) -> ApiResult<BranchListResponse> {
         let branches = self
             .storage
             .list_branches()
@@ -745,7 +681,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn merge(&self, req: MergeRequest) -> ApiResult<MergeResponse> {
+    pub fn merge(&self, req: MergeRequest) -> ApiResult<MergeResponse> {
         let mut repo = load_checkpoint_repo(self.storage.as_ref()).map_err(map_error)?;
         let current_name = repo.current_branch_name().to_string();
 
@@ -780,7 +716,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn backup(&self, req: BackupRequest) -> ApiResult<BackupResponse> {
+    pub fn backup(&self, req: BackupRequest) -> ApiResult<BackupResponse> {
         let snapshot_id = ContentId::from_hex(&req.snapshot_id).ok_or_else(|| {
             ApiError::invalid_params(format!("invalid snapshot ID '{}'", req.snapshot_id))
         })?;
@@ -801,7 +737,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn restore(&self, req: RestoreRequest) -> ApiResult<RestoreResponse> {
+    pub fn restore(&self, req: RestoreRequest) -> ApiResult<RestoreResponse> {
         let backup_id = ContentId::from_hex(&req.backup_id).ok_or_else(|| {
             ApiError::invalid_params(format!("invalid backup ID '{}'", req.backup_id))
         })?;
@@ -835,7 +771,7 @@ impl ApiService for ApiServiceImpl {
 
     // ── Checkpoint restore implementations ──
 
-    fn checkpoint_restore(
+    pub fn checkpoint_restore(
         &self,
         req: CheckpointRestoreRequest,
     ) -> ApiResult<CheckpointRestoreResponse> {
@@ -906,7 +842,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn checkpoint_restore_by_time(
+    pub fn checkpoint_restore_by_time(
         &self,
         req: CheckpointRestoreByTimeRequest,
     ) -> ApiResult<CheckpointRestoreResponse> {
@@ -973,7 +909,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn checkpoint_diff(&self, req: CheckpointDiffRequest) -> ApiResult<CheckpointDiffResponse> {
+    pub fn checkpoint_diff(&self, req: CheckpointDiffRequest) -> ApiResult<CheckpointDiffResponse> {
         let from_id = CheckpointId::from_hex(&req.from_id).ok_or_else(|| {
             ApiError::invalid_params(format!("invalid from_id '{}'", req.from_id))
         })?;
@@ -999,7 +935,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn checkpoint_rollback(
+    pub fn checkpoint_rollback(
         &self,
         req: CheckpointRollbackRequest,
     ) -> ApiResult<CheckpointRollbackResponse> {
@@ -1030,7 +966,98 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn gc(&self, _req: GcRequest) -> ApiResult<GcResponse> {
+    pub fn checkpoint_restore_and_apply(
+        &self,
+        req: CheckpointRestoreApplyRequest,
+    ) -> ApiResult<CheckpointRestoreApplyResponse> {
+        // 1. Parse checkpoint ID
+        let cp_id = CheckpointId::from_hex(&req.checkpoint_id).ok_or_else(|| {
+            ApiError::invalid_params(format!("invalid checkpoint ID '{}'", req.checkpoint_id))
+        })?;
+
+        // 2. Build internal restore request
+        let chk_req = crate::checkpoint::restore::RestoreRequest {
+            checkpoint_id: Some(cp_id),
+            source_filter: req.source_filter.clone(),
+            time_range: None,
+        };
+
+        // 3. Execute restore (get snapshot data)
+        let checkpoint_repo = self
+            .checkpoint_repo
+            .read()
+            .map_err(|e| ApiError::internal(format!("Failed to acquire lock: {}", e)))?;
+
+        let resp = checkpoint_repo.restore(&chk_req).map_err(map_error)?;
+        drop(checkpoint_repo);
+
+        // 4. Write file contents to disk
+        let mut files_written: Vec<String> = Vec::new();
+        if !req.skip_write {
+            for (snap_id, content, source) in &resp.snapshots {
+                // Only restore file:// content — agent/graph state is managed
+                // externally by the application using branch isolation.
+                if !source.starts_with("file://") {
+                    continue;
+                }
+                let file_path_str = source.trim_start_matches("file://");
+                let path = std::path::PathBuf::from(file_path_str);
+
+                // Ensure parent directory exists
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        ApiError::storage(format!(
+                            "failed to create directory for {}: {}",
+                            file_path_str, e
+                        ))
+                    })?;
+                }
+
+                // Write file content
+                std::fs::write(&path, content.to_bytes()).map_err(|e| {
+                    ApiError::storage(format!(
+                        "failed to write {}: {}",
+                        file_path_str, e
+                    ))
+                })?;
+
+                files_written.push(file_path_str.to_string());
+
+                // 5. Update staged partition pointer if requested
+                if req.update_staged {
+                    let staged_pid = crate::layered::staged::staged_partition_id();
+                    let _ = self
+                        .storage
+                        .update_pointer(&staged_pid, snap_id)
+                        .map_err(|e| ApiError::storage(format!(
+                            "failed to update staged partition pointer: {}", e
+                        )));
+                }
+            }
+        } else if req.update_staged {
+            // skip_write=true but update_staged=true: update pointers without writing
+            for (snap_id, _content, source) in &resp.snapshots {
+                if !source.starts_with("file://") {
+                    continue;
+                }
+                let staged_pid = crate::layered::staged::staged_partition_id();
+                let _ = self
+                    .storage
+                    .update_pointer(&staged_pid, snap_id)
+                    .map_err(|e| ApiError::storage(format!(
+                        "failed to update staged partition pointer: {}", e
+                    )));
+            }
+        }
+
+        Ok(CheckpointRestoreApplyResponse {
+            checkpoint_id: req.checkpoint_id,
+            files_written,
+            staged_updated: req.update_staged,
+        })
+    }
+
+    pub fn gc(&self, _req: GcRequest) -> ApiResult<GcResponse> {
         let mut repo = load_checkpoint_repo(self.storage.as_ref()).map_err(map_error)?;
         let stats = collect_garbage(&mut repo).map_err(map_error)?;
         // remove_checkpoint auto-persists; sync any remaining state
@@ -1043,7 +1070,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn compact(&self, req: CompactRequest) -> ApiResult<CompactResponse> {
+    pub fn compact(&self, req: CompactRequest) -> ApiResult<CompactResponse> {
         let mut opts = CompactOptions::from(&self.maintenance_cfg);
         if let Some(vacuum_full) = req.vacuum_full {
             opts.vacuum_full = vacuum_full;
@@ -1062,7 +1089,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn push(&self, req: PushRequest) -> ApiResult<PushResponse> {
+    pub fn push(&self, req: PushRequest) -> ApiResult<PushResponse> {
         let remote = req.remote.unwrap_or_else(|| "origin".into());
         let message = req.message.unwrap_or_else(|| "sync from layertwine".into());
 
@@ -1087,7 +1114,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn pull(&self, req: PullRequest) -> ApiResult<PullResponse> {
+    pub fn pull(&self, req: PullRequest) -> ApiResult<PullResponse> {
         let remote = req.remote.unwrap_or_else(|| "origin".into());
         let git_ref = req.git_ref.unwrap_or_else(|| "HEAD".into());
 
@@ -1109,7 +1136,7 @@ impl ApiService for ApiServiceImpl {
         Ok(PullResponse { remote, git_ref })
     }
 
-    fn show(&self, req: ShowRequest) -> ApiResult<ShowResponse> {
+    pub fn show(&self, req: ShowRequest) -> ApiResult<ShowResponse> {
         match req.show_what.as_str() {
             "staged" => self.show_staged(),
             "checkpoint" => {
@@ -1133,7 +1160,7 @@ impl ApiService for ApiServiceImpl {
 
     // ── Approval-specific API implementations ──
 
-    fn list_pending_approvals(&self) -> ApiResult<ListPendingApprovalsResponse> {
+    pub fn list_pending_approvals(&self) -> ApiResult<ListPendingApprovalsResponse> {
         let pending = crate::layered::approval::list_pending_approvals(self.storage.as_ref())
             .map_err(map_error)?;
         let approvals: Vec<ApprovalInfo> = pending
@@ -1155,7 +1182,7 @@ impl ApiService for ApiServiceImpl {
         Ok(ListPendingApprovalsResponse { approvals, total })
     }
 
-    fn approve_agent(&self, req: ApproveAgentRequest) -> ApiResult<ApproveAgentResponse> {
+    pub fn approve_agent(&self, req: ApproveAgentRequest) -> ApiResult<ApproveAgentResponse> {
         let agent_instance = crate::core::types::AgentInstanceId(req.agent_id.clone());
         let integrated_name = req
             .integrated_name
@@ -1176,7 +1203,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn reject_agent(&self, req: RejectAgentRequest) -> ApiResult<RejectAgentResponse> {
+    pub fn reject_agent(&self, req: RejectAgentRequest) -> ApiResult<RejectAgentResponse> {
         let agent_instance = crate::core::types::AgentInstanceId(req.agent_id.clone());
         let baseline_snapshot_id =
             crate::layered::approval::reject_approval(self.storage.as_ref(), &agent_instance)
@@ -1188,7 +1215,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn merge_to_unified(&self, req: MergeToUnifiedRequest) -> ApiResult<MergeToUnifiedResponse> {
+    pub fn merge_to_unified(&self, req: MergeToUnifiedRequest) -> ApiResult<MergeToUnifiedResponse> {
         let names = req.integration_names.unwrap_or_else(|| {
             // Auto-detect all integrated partition names
             self.storage
@@ -1223,7 +1250,7 @@ impl ApiService for ApiServiceImpl {
         })
     }
 
-    fn merge_to_staged(&self, _req: MergeToStagedRequest) -> ApiResult<MergeToStagedResponse> {
+    pub fn merge_to_staged(&self, _req: MergeToStagedRequest) -> ApiResult<MergeToStagedResponse> {
         let staged_snapshot_id =
             crate::layered::staged::merge_unified_to_staged(self.storage.as_ref())
                 .map_err(map_error)?;

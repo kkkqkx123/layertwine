@@ -105,48 +105,6 @@ pub trait AtomicOps {
     }
 }
 
-/// Combined storage trait (full storage interface)
-pub trait Repository:
-    SnapshotStore
-    + DeltaStore
-    + PartitionStore
-    + FileNodeStore
-    + CheckpointStore
-    + BranchStore
-    + LayerStore
-    + MetadataStore
-    + AtomicOps
-{
-}
-
-/// Checkpoint storage trait
-pub trait CheckpointStore {
-    /// Store Checkpoint
-    fn store_checkpoint(&self, checkpoint: &Checkpoint) -> StorageResult<()>;
-    /// Get Checkpoint
-    fn get_checkpoint(&self, id: &CheckpointId) -> StorageResult<Checkpoint>;
-    /// Checkpoint exists
-    fn checkpoint_exists(&self, id: &CheckpointId) -> StorageResult<bool>;
-    /// List all checkpoints
-    fn list_checkpoints(&self) -> StorageResult<Vec<Checkpoint>>;
-    /// Delete Checkpoint
-    fn delete_checkpoint(&self, id: &CheckpointId) -> StorageResult<()>;
-}
-
-/// Branch storage trait
-pub trait BranchStore {
-    /// Store Branch
-    fn store_branch(&self, branch: &Branch) -> StorageResult<()>;
-    /// Get Branch by name
-    fn get_branch(&self, name: &str) -> StorageResult<Branch>;
-    /// Update Branch head
-    fn update_branch_head(&self, name: &str, head: &CheckpointId) -> StorageResult<()>;
-    /// List all branches
-    fn list_branches(&self) -> StorageResult<Vec<Branch>>;
-    /// Delete Branch
-    fn delete_branch(&self, name: &str) -> StorageResult<()>;
-}
-
 /// Metadata storage trait
 ///
 /// Used for storing repository-wide metadata such as current branch name.
@@ -157,12 +115,44 @@ pub trait MetadataStore {
     fn load_metadata(&self, key: &str) -> StorageResult<Option<String>>;
 }
 
-/// Combined checkpoint persistence trait (for auto-persist in CheckpointRepo)
-pub trait CheckpointPersist:
-    CheckpointStore + BranchStore + MetadataStore + SnapshotStore + Send + Sync
+/// Combined storage trait (full storage interface)
+pub trait Repository:
+    SnapshotStore
+    + DeltaStore
+    + PartitionStore
+    + FileNodeStore
+    + CheckpointPersist
+    + LayerStore
+    + AtomicOps
 {
 }
-impl<T: CheckpointStore + BranchStore + MetadataStore + SnapshotStore + Send + Sync>
-    CheckpointPersist for T
+
+/// Checkpoint & Branch persistence trait — unified interface for CheckpointRepo
+///
+/// Combines checkpoint, branch, metadata, and snapshot storage into a single trait.
+/// Storage backends (e.g. SQLite) implement this trait directly.
+pub trait CheckpointPersist:
+    MetadataStore + SnapshotStore + Send + Sync
 {
+    /// Store a checkpoint
+    fn store_checkpoint(&self, checkpoint: &Checkpoint) -> StorageResult<()>;
+    /// Get a checkpoint by ID
+    fn get_checkpoint(&self, id: &CheckpointId) -> StorageResult<Checkpoint>;
+    /// Check if a checkpoint exists
+    fn checkpoint_exists(&self, id: &CheckpointId) -> StorageResult<bool>;
+    /// List all checkpoints
+    fn list_checkpoints(&self) -> StorageResult<Vec<Checkpoint>>;
+    /// Delete a checkpoint
+    fn delete_checkpoint(&self, id: &CheckpointId) -> StorageResult<()>;
+
+    /// Store a branch
+    fn store_branch(&self, branch: &Branch) -> StorageResult<()>;
+    /// Get a branch by name
+    fn get_branch(&self, name: &str) -> StorageResult<Branch>;
+    /// Update a branch's head pointer
+    fn update_branch_head(&self, name: &str, head: &CheckpointId) -> StorageResult<()>;
+    /// List all branches
+    fn list_branches(&self) -> StorageResult<Vec<Branch>>;
+    /// Delete a branch
+    fn delete_branch(&self, name: &str) -> StorageResult<()>;
 }

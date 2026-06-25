@@ -1,7 +1,7 @@
 //! Fixture definitions and generation for E2E tests
 #![allow(dead_code, unused_imports, unused_variables)]
 
-use layertwine::api::{ApiService, ApiServiceImpl, ServiceConfig};
+use layertwine::api::{ApiService, ServiceConfig};
 use layertwine::core::file_node::FileNode;
 use layertwine::core::partition::Partition;
 use layertwine::core::snapshot::Snapshot;
@@ -35,7 +35,7 @@ pub struct TestEnvironment {
     pub git_repo: Option<PathBuf>,
     pub config: TestConfig,
     pub storage: SqliteStorage,
-    pub api: ApiServiceImpl,
+    pub api: ApiService,
 }
 
 impl TestEnvironment {
@@ -48,7 +48,7 @@ impl TestEnvironment {
         let storage = SqliteStorage::new_full(&db_path).expect("Failed to initialize storage");
 
         // Create API service
-        let api = ApiServiceImpl::open(ServiceConfig {
+        let api = ApiService::open(ServiceConfig {
             db_path: db_path.to_string_lossy().to_string(),
         })
         .expect("Failed to create API service");
