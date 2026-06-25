@@ -46,8 +46,7 @@ tests/
 ├── e2e/
 │   ├── mod.rs                      # Declares all 10 e2e sub-modules
 │   └── ...
-
-└── git_sync_e2e.rs                 # Git sync end-to-end tests
+└── ...
 ```
 
 **Unit tests:** `#[cfg(test)] mod tests` blocks inside `src/` (core, engine, storage, layered, checkpoint, backup, git_sync, api, cli).
