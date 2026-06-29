@@ -67,6 +67,23 @@ pub trait PartitionStore {
     fn get_partition_by_name(&self, name: &str) -> StorageResult<Partition>;
     /// List all partitions
     fn list_partitions(&self) -> StorageResult<Vec<Partition>>;
+
+    /// Reset partition to its baseline (first history entry).
+    ///
+    /// Sets current_snapshot to history[0] and truncates history to just that entry.
+    /// The default implementation uses `update_pointer` which appends to history;
+    /// backends that support history truncation (e.g., SQLite) should override this
+    /// for proper cleanup.
+    fn reset_partition_to_baseline(&self, partition_id: &PartitionId) -> StorageResult<()> {
+        let partition = self.get_partition(partition_id)?;
+        let baseline = partition.history.first().ok_or_else(|| {
+            crate::StorageError::NotFound(format!(
+                "partition {:?} has empty history",
+                partition_id
+            ))
+        })?;
+        self.update_pointer(partition_id, baseline)
+    }
 }
 
 /// File node storage trait

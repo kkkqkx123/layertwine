@@ -19,7 +19,7 @@ pub mod types;
 pub use branch::Branch;
 pub use dag::CheckpointDag;
 pub use repo::CheckpointRepo;
-pub use restore::{RestoreRequest, RestoreResponse};
+pub use restore::{RestoreApplyResult, RestoreRequest, RestoreResponse};
 pub use time_index::TimeIndex;
 pub use transaction::{CheckpointTransaction, TransactionStatus};
 pub use types::{Checkpoint, CheckpointBuilder, CheckpointDiff, CheckpointMetadata};

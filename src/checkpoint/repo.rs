@@ -31,14 +31,29 @@ pub struct CheckpointRepo {
     pub time_index: TimeIndex,
     /// Checkpoints deleted since last sync — cleaned from storage in sync_all()
     deleted_checkpoints: HashSet<CheckpointId>,
+    /// Branches deleted since last sync — cleaned from storage in sync_all()
+    deleted_branches: HashSet<String>,
+    /// Checkpoints modified in memory since last sync — only these are persisted in sync_all()
+    pub(crate) dirty_checkpoints: HashSet<CheckpointId>,
 }
 
 impl CheckpointRepo {
-    /// Create a new checkpoint repository with multi-file initialization support
-    pub fn new(initial_snapshots: Vec<SnapshotId>) -> Self {
+    /// Create the root checkpoint and main branch.
+    ///
+    /// Shared by both [`new`] and [`load`] to avoid code duplication.
+    fn create_root_checkpoint(
+        initial_snapshots: Vec<SnapshotId>,
+    ) -> (CheckpointId, Checkpoint, Branch) {
         let metadata = CheckpointMetadata::new("system", "root checkpoint");
         let root = Checkpoint::new(initial_snapshots, vec![], metadata);
         let root_id = root.id;
+        let main_branch = Branch::new("main", root_id);
+        (root_id, root, main_branch)
+    }
+
+    /// Create a new checkpoint repository with multi-file initialization support
+    pub fn new(initial_snapshots: Vec<SnapshotId>) -> Self {
+        let (root_id, root, main_branch) = Self::create_root_checkpoint(initial_snapshots);
 
         let mut dag = CheckpointDag::new();
         dag.add_node(root_id);
@@ -47,8 +62,6 @@ impl CheckpointRepo {
         let mut time_index = TimeIndex::new();
         time_index.insert(&root);
         checkpoints.insert(root_id, root);
-
-        let main_branch = Branch::new("main", root_id);
 
         CheckpointRepo {
             branches: vec![main_branch],
@@ -59,6 +72,8 @@ impl CheckpointRepo {
             storage: None,
             time_index,
             deleted_checkpoints: HashSet::new(),
+            deleted_branches: HashSet::new(),
+            dirty_checkpoints: HashSet::new(),
         }
     }
 
@@ -83,14 +98,12 @@ impl CheckpointRepo {
 
         // Initialize with root when storage is empty
         if checkpoints.is_empty() {
-            let metadata = CheckpointMetadata::new("system", "root checkpoint");
-            let root = Checkpoint::new(vec![CheckpointId::from_content(&[])], vec![], metadata);
-            let root_id = root.id;
+            let (_root_id, root, main_branch) =
+                Self::create_root_checkpoint(vec![]);
 
             storage.store_checkpoint(&root)?;
-            checkpoints.insert(root_id, root);
+            checkpoints.insert(root.id, root);
 
-            let main_branch = Branch::new("main", root_id);
             storage.store_branch(&main_branch)?;
             branches.push(main_branch);
 
@@ -135,12 +148,16 @@ impl CheckpointRepo {
             storage: Some(storage),
             time_index,
             deleted_checkpoints: HashSet::new(),
+            deleted_branches: HashSet::new(),
+            dirty_checkpoints: HashSet::new(),
         })
     }
 
     /// Attach a persistence backend to an existing in-memory repo.
     /// Subsequent mutations will auto-persist.
     pub fn attach_storage(&mut self, storage: Box<dyn CheckpointPersist>) {
+        // All in-memory checkpoints need to be persisted to the new backend
+        self.dirty_checkpoints = self.checkpoints.keys().copied().collect();
         self.storage = Some(storage);
     }
 
@@ -170,20 +187,29 @@ impl CheckpointRepo {
         Ok(())
     }
 
-    /// Persist the full current state (all checkpoints, branches, current_branch metadata).
+    /// Persist the full current state (all dirty checkpoints, branches, current_branch metadata).
     ///
-    /// Also cleans up any checkpoints that were deleted in memory from the storage backend.
+    /// Only checkpoints that were created or modified since the last sync are persisted.
+    /// Also cleans up any checkpoints and branches that were deleted in memory
+    /// from the storage backend.
     ///
     /// DAG is not persisted; it is rebuilt dynamically from checkpoint relationships.
     pub fn sync_all(&mut self) -> Result<()> {
         if let Some(storage) = &self.storage {
-            for cp in self.checkpoints.values() {
-                storage.store_checkpoint(cp)?;
+            // Persist only dirty (modified since last sync) checkpoints
+            for cp_id in self.dirty_checkpoints.drain() {
+                if let Some(cp) = self.checkpoints.get(&cp_id) {
+                    storage.store_checkpoint(cp)?;
+                }
             }
-            // Clean up deletions
+            // Clean up checkpoint deletions
             for deleted_id in self.deleted_checkpoints.drain() {
                 // Ignore "not found" errors — already deleted is fine
                 let _ = storage.delete_checkpoint(&deleted_id);
+            }
+            // Clean up branch deletions
+            for deleted_name in self.deleted_branches.drain() {
+                let _ = storage.delete_branch(&deleted_name);
             }
             for branch in &self.branches {
                 storage.store_branch(branch)?;
@@ -259,6 +285,7 @@ impl CheckpointRepo {
             storage.update_branch_head(&branch.name, &cp_id)?;
         }
 
+        self.dirty_checkpoints.insert(cp_id);
         self.checkpoints.insert(cp_id, cp);
 
         Ok(cp_id)
@@ -272,6 +299,41 @@ impl CheckpointRepo {
         author: &str,
     ) -> Result<CheckpointId> {
         self.commit(vec![snapshot_id], message, author)
+    }
+
+    /// Commit without the "no changes" guard.
+    ///
+    /// Unlike [`commit`], this allows creating a checkpoint with the same
+    /// snapshot IDs as the current head (e.g. for tagging or metadata-only commits).
+    /// Also allows empty snapshot lists for annotation-style commits.
+    ///
+    /// Returns the new checkpoint ID.
+    pub fn commit_allow_empty(
+        &mut self,
+        snapshot_ids: Vec<SnapshotId>,
+        message: &str,
+        author: &str,
+    ) -> Result<CheckpointId> {
+        let current_head = self.current_branch_head();
+        let metadata = CheckpointMetadata::new(author, message);
+        let cp = Checkpoint::new(snapshot_ids, vec![current_head], metadata);
+        let cp_id = cp.id;
+
+        self.time_index.insert(&cp);
+        self.checkpoint_dag.add_node(cp_id);
+        self.checkpoint_dag.add_edge(current_head, cp_id);
+        self.current_branch_mut().set_head(cp_id);
+
+        if let Some(storage) = &self.storage {
+            storage.store_checkpoint(&cp)?;
+            let branch = &self.branches[self.current_branch];
+            storage.update_branch_head(&branch.name, &cp_id)?;
+        }
+
+        self.dirty_checkpoints.insert(cp_id);
+        self.checkpoints.insert(cp_id, cp);
+
+        Ok(cp_id)
     }
 
     // Branching out.
@@ -361,6 +423,23 @@ impl CheckpointRepo {
             .ok_or_else(|| LayertwineError::NotFound(format!("branch '{}' not found", name)))
     }
 
+    /// Delete a branch by name.
+    ///
+    /// Removes it from memory and immediately deletes from storage when a backend is attached.
+    /// When no storage backend is available, marks it for deferred cleanup in [`sync_all`].
+    pub fn remove_branch(&mut self, name: &str) -> Result<()> {
+        let idx = self.find_branch(name)?;
+        self.branches.remove(idx);
+        // Track for deferred sync only when no immediate storage is available
+        if self.storage.is_none() {
+            self.deleted_branches.insert(name.to_string());
+        }
+        if let Some(storage) = &self.storage {
+            storage.delete_branch(name)?;
+        }
+        Ok(())
+    }
+
     /// Get the head of the specified branch
     pub fn get_branch_head(&self, name: &str) -> Result<CheckpointId> {
         let idx = self.find_branch(name)?;
@@ -406,6 +485,7 @@ impl CheckpointRepo {
             storage.update_branch_head(&branch.name, &cp_id)?;
         }
 
+        self.dirty_checkpoints.insert(cp_id);
         self.checkpoints.insert(cp_id, cp);
 
         Ok(cp_id)
@@ -465,10 +545,17 @@ impl CheckpointRepo {
 
     /// Delete checkpoints
     /// Auto-persists the deletion (DAG is not persisted as it is rebuilt from checkpoints).
+    ///
+    /// When a storage backend is attached, the deletion is written immediately.
+    /// When no storage is attached, the deletion is tracked in `deleted_checkpoints`
+    /// so that a subsequent [`sync_all`] (after [`attach_storage`]) can clean it up.
     pub fn remove_checkpoint(&mut self, id: &CheckpointId) -> Result<()> {
         if let Some(cp) = self.checkpoints.remove(id) {
             self.time_index.remove(&cp);
-            self.deleted_checkpoints.insert(*id);
+            // Track deletion for deferred sync only when no immediate storage is available
+            if self.storage.is_none() {
+                self.deleted_checkpoints.insert(*id);
+            }
         } else {
             return Err(LayertwineError::NotFound(format!(
                 "checkpoint {} not found",
@@ -568,6 +655,7 @@ impl CheckpointRepo {
             .get_mut(cp_id)
             .ok_or_else(|| LayertwineError::NotFound(format!("checkpoint {} not found", cp_id)))?;
         cp.snapshot_sources.insert(snap_id, source);
+        self.dirty_checkpoints.insert(*cp_id);
         Ok(())
     }
 
@@ -874,5 +962,33 @@ mod tests {
 
         let result = repo.find_branch("nonexistent");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_commit_allow_empty_same_snapshot() {
+        let snap = dummy_snapshot_id(1);
+        let mut repo = CheckpointRepo::new_single(snap);
+
+        // Normal commit would fail with "no changes", but allow_empty should succeed
+        let cp_id = repo.commit_allow_empty(vec![snap], "tag commit", "user").unwrap();
+
+        let cp = repo.get_checkpoint(&cp_id).unwrap();
+        assert_eq!(cp.baseline_snapshots, vec![snap]);
+        assert_eq!(cp.metadata.message, "tag commit");
+        assert_eq!(repo.checkpoint_count(), 2);
+    }
+
+    #[test]
+    fn test_commit_allow_empty_zero_snapshots() {
+        let snap = dummy_snapshot_id(1);
+        let mut repo = CheckpointRepo::new_single(snap);
+
+        // Allow committing with empty snapshot list (annotation-style)
+        let cp_id = repo.commit_allow_empty(vec![], "annotation", "user").unwrap();
+
+        let cp = repo.get_checkpoint(&cp_id).unwrap();
+        assert!(cp.baseline_snapshots.is_empty());
+        assert_eq!(cp.metadata.message, "annotation");
+        assert_eq!(repo.checkpoint_count(), 2);
     }
 }

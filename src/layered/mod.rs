@@ -14,9 +14,9 @@ pub mod unified;
 
 use crate::core::layer::Layer;
 use crate::core::partition::Partition;
-use crate::core::types::{CheckpointId, LayerType, PartitionId, PartitionType, SnapshotId};
+use crate::core::types::{CheckpointId, PartitionId, PartitionType, SnapshotId};
 use crate::error::{LayertwineError, Result};
-use crate::storage::repository::{CheckpointPersist, LayerStore, PartitionStore};
+use crate::storage::repository::{AtomicOps, CheckpointPersist, LayerStore, PartitionStore};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -68,7 +68,7 @@ pub struct StateMachine<S> {
 
 impl<S> StateMachine<S>
 where
-    S: PartitionStore + CheckpointPersist + LayerStore,
+    S: PartitionStore + CheckpointPersist + LayerStore + AtomicOps,
 {
     /// Creating a new state machine instance
     pub fn new(storage: Arc<S>) -> Self {
@@ -82,12 +82,8 @@ where
 
     // Partition access methods -
 
-    /// Get the specified partition of the specified layer (read-only)
-    pub fn get_partition(
-        &self,
-        _layer: &crate::core::types::LayerType,
-        partition_id: &PartitionId,
-    ) -> Result<Partition> {
+    /// Get the specified partition (read-only)
+    pub fn get_partition(&self, partition_id: &PartitionId) -> Result<Partition> {
         self.storage
             .get_partition(partition_id)
             .map_err(LayertwineError::Storage)
@@ -96,9 +92,7 @@ where
     /// Getting or creating partitions
     pub fn get_or_create_partition(
         &self,
-        _layer: &LayerType,
         partition_id: &PartitionId,
-        _name: &str,
         partition: &Partition,
     ) -> Result<Partition> {
         // First try to get
@@ -202,18 +196,30 @@ where
 
     // Transaction support -
 
-    /// Execute operations within an intent of atomicity.
+    /// Execute operations with SAVEPOINT-based atomicity.
     ///
-    /// NOTE: The current implementation does NOT provide true SQLite savepoint
-    /// guarantees because `AtomicOps::with_atomic` acquires the Mutex lock, and
-    /// the closure's trait methods also try to acquire it, causing a deadlock.
-    /// See docs/plan/09-存储层重构与接口加固.md for the known issue.
-    /// For now this is a no-op wrapper that simply delegates to the closure.
+    /// Delegates to the storage backend's `AtomicOps::with_atomic`, which on SQLite
+    /// provides proper SAVEPOINT-based transaction guarantees. Uses `parking_lot::ReentrantMutex`
+    /// internally, so reentrant locking (calling other storage methods from within the closure)
+    /// is safe and does NOT deadlock.
     pub fn with_transaction<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(&S) -> Result<T>,
     {
-        f(&self.storage)
+        let result = std::cell::RefCell::new(None::<Result<T>>);
+
+        self.storage
+            .with_atomic(|s| {
+                result.borrow_mut().replace(f(s));
+                Ok(())
+            })
+            .map_err(LayertwineError::Storage)?;
+
+        result.into_inner().unwrap_or_else(|| {
+            Err(LayertwineError::Transaction(
+                "transaction did not produce a result".into(),
+            ))
+        })
     }
 }
 
@@ -232,7 +238,7 @@ mod tests {
     fn test_state_machine_new() {
         let storage = Arc::new(setup_storage_full());
         let sm = StateMachine::new(storage);
-        let result = sm.get_partition(&LayerType::ManualEdit, &uuid::Uuid::now_v7());
+        let result = sm.get_partition(&uuid::Uuid::now_v7());
         assert!(
             result.is_err(),
             "non-existent partition should return error"
@@ -324,7 +330,7 @@ mod tests {
         };
         storage.create_partition(&partition).unwrap();
 
-        let result = sm.get_partition(&LayerType::ManualEdit, &pid);
+        let result = sm.get_partition(&pid);
         assert!(result.is_ok());
         let retrieved = result.unwrap();
         assert_eq!(retrieved.id, pid);
@@ -346,11 +352,11 @@ mod tests {
             partition_type: PartitionType::Manual,
         };
 
-        let result = sm.get_or_create_partition(&LayerType::ManualEdit, &pid, "test", &partition);
+        let result = sm.get_or_create_partition(&pid, &partition);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().id, pid);
 
-        let result2 = sm.get_or_create_partition(&LayerType::ManualEdit, &pid, "test", &partition);
+        let result2 = sm.get_or_create_partition(&pid, &partition);
         assert!(result2.is_ok());
         assert_eq!(result2.unwrap().id, pid);
     }

@@ -69,7 +69,8 @@ pub async fn serve(
         // Maintenance
         .route("/api/v1/gc", post(handle_gc))
         .route("/api/v1/compact", post(handle_compact))
-        .route("/api/v1/push", post(handle_push))
+        .route("/api/v1/git-commit", post(handle_git_commit))
+        .route("/api/v1/clean", post(handle_clean))
         .route("/api/v1/pull", post(handle_pull))
         .route("/api/v1/show", get(handle_show))
         // Checkpoint restore operations
@@ -296,13 +297,23 @@ async fn handle_gc(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     }
 }
 
-async fn handle_push(
+async fn handle_git_commit(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<PushRequest>,
+    Json(req): Json<GitCommitRequest>,
 ) -> impl IntoResponse {
-    match state.service.push(req) {
+    match state.service.git_commit(req) {
         Ok(r) => ok_response(r).into_response(),
-        Err(e) => err_response::<PushResponse>(e).into_response(),
+        Err(e) => err_response::<GitCommitResponse>(e).into_response(),
+    }
+}
+
+async fn handle_clean(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CleanRequest>,
+) -> impl IntoResponse {
+    match state.service.clean(req) {
+        Ok(r) => ok_response(r).into_response(),
+        Err(e) => err_response::<CleanResponse>(e).into_response(),
     }
 }
 

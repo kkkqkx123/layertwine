@@ -19,14 +19,14 @@ fn create_test_delta(diff: LineDiff) -> Delta {
 
 #[test]
 fn test_apply_deltas_preserves_trailing_newline() {
-    // Test that trailing newline is NOT preserved (by design)
+    // Test that trailing newline IS preserved
     let content = "Hello, World!\nThis is a test file.\n";
     let delta = create_test_delta(LineDiff { hunks: vec![] });
 
     let result = apply_deltas(content, &[delta]).unwrap();
     assert_eq!(
-        result, "Hello, World!\nThis is a test file.",
-        "Trailing newline should be removed"
+        result, "Hello, World!\nThis is a test file.\n",
+        "Trailing newline should be preserved"
     );
 }
 
@@ -45,7 +45,7 @@ fn test_apply_deltas_without_trailing_newline() {
 
 #[test]
 fn test_apply_deltas_with_insert_and_trailing_newline() {
-    // Test that insert operations remove trailing newline
+    // Test that insert operations preserve trailing newline
     let content = "Line 1\nLine 2\n";
     let delta = create_test_delta(LineDiff {
         hunks: vec![Hunk {
@@ -62,14 +62,14 @@ fn test_apply_deltas_with_insert_and_trailing_newline() {
 
     let result = apply_deltas(content, &[delta]).unwrap();
     assert_eq!(
-        result, "Line 1\nInserted Line\nLine 2",
-        "Trailing newline should be removed after insert"
+        result, "Line 1\nInserted Line\nLine 2\n",
+        "Trailing newline should be preserved after insert"
     );
 }
 
 #[test]
 fn test_apply_deltas_with_delete_and_trailing_newline() {
-    // Test that delete operations remove trailing newline
+    // Test that delete operations preserve trailing newline
     let content = "Line 1\nLine 2\nLine 3\n";
     let delta = create_test_delta(LineDiff {
         hunks: vec![Hunk {
@@ -86,7 +86,7 @@ fn test_apply_deltas_with_delete_and_trailing_newline() {
 
     let result = apply_deltas(content, &[delta]).unwrap();
     assert_eq!(
-        result, "Line 1\nLine 3",
-        "Trailing newline should be removed after delete"
+        result, "Line 1\nLine 3\n",
+        "Trailing newline should be preserved after delete"
     );
 }

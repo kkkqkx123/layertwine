@@ -87,7 +87,6 @@ pub struct Snapshot {
 pub enum SnapshotCompression {
     #[default]
     None,
-    Gzip,
     Zstd,
 }
 
@@ -164,6 +163,17 @@ impl Snapshot {
         Snapshot::from_parent(self, delta_id, self.partition_type.clone())
     }
 
+    /// Create a merge snapshot from multiple parents.
+    ///
+    /// Convention: `parents[0]` MUST be the "destination" partition's current snapshot
+    /// (the partition being merged INTO). Its file, delta chain, content, and source
+    /// metadata are used as the baseline for the merge result.
+    ///
+    /// All downstream merge functions follow this convention:
+    ///   - merge_manual_to_staged:   [staged, manual]
+    ///   - move_agent_to_approval:   [approval, agent]
+    ///   - merge_agent_to_feature:   [baseline, approval, integrated]
+    ///   - merge_feature_to_unified: [unified, feature]
     pub fn merge(
         parents: Vec<&Snapshot>,
         delta_id: DeltaId,
@@ -244,21 +254,14 @@ impl Snapshot {
 
     /// Decompress the snapshot content if compressed
     pub fn decompress_content(&mut self) -> Result<()> {
-        match self.compression {
-            SnapshotCompression::Zstd => {
-                if let Some(SnapshotContent::Structured(ref bytes)) = self.content {
-                    let decompressed = zstd::decode_all(bytes.as_slice()).map_err(|e| {
-                        LayertwineError::Serialization(format!("zstd decompression failed: {}", e))
-                    })?;
-                    self.content = Some(SnapshotContent::from_bytes(&self.source, decompressed)?);
-                    self.compression = SnapshotCompression::None;
-                }
-            }
-            SnapshotCompression::Gzip => {
-                // Gzip decompression placeholder
+        if let SnapshotCompression::Zstd = self.compression {
+            if let Some(SnapshotContent::Structured(ref bytes)) = self.content {
+                let decompressed = zstd::decode_all(bytes.as_slice()).map_err(|e| {
+                    LayertwineError::Serialization(format!("zstd decompression failed: {}", e))
+                })?;
+                self.content = Some(SnapshotContent::from_bytes(&self.source, decompressed)?);
                 self.compression = SnapshotCompression::None;
             }
-            SnapshotCompression::None => {}
         }
         Ok(())
     }

@@ -146,6 +146,11 @@ where
         ))
     })?;
 
+    // If both point to the same snapshot, no merge needed
+    if agent_partition.current_snapshot == approval_partition.current_snapshot {
+        return Ok(approval_partition.current_snapshot);
+    }
+
     let agent_snapshot = storage
         .get_snapshot(&agent_partition.current_snapshot)
         .map_err(LayertwineError::Storage)?;
@@ -153,12 +158,25 @@ where
         .get_snapshot(&approval_partition.current_snapshot)
         .map_err(LayertwineError::Storage)?;
 
-    // Reconstructed text
-    let agent_text = crate::layered::transition::reconstruct_text(storage, &agent_snapshot)?;
-    let approval_text = crate::layered::transition::reconstruct_text(storage, &approval_snapshot)?;
+    // Find the merge base: first snapshot in approval history (common ancestor)
+    let baseline_id = approval_partition.history.first().ok_or_else(|| {
+        LayertwineError::StateMachine("approval partition has empty history".into())
+    })?;
+    let baseline_snapshot = storage
+        .get_snapshot(baseline_id)
+        .map_err(LayertwineError::Storage)?;
 
-    // Calculate the merge diff
-    let merge_diff = diff_to_line_diff(&approval_text, &agent_text);
+    // Reconstruct texts for three-way merge
+    let baseline_text = crate::layered::transition::reconstruct_text(storage, &baseline_snapshot)?;
+    let approval_text = crate::layered::transition::reconstruct_text(storage, &approval_snapshot)?;
+    let agent_text = crate::layered::transition::reconstruct_text(storage, &agent_snapshot)?;
+
+    // Three-way merge: base (common ancestor), ours (approval), theirs (agent)
+    let (merged_text, conflicts) =
+        crate::engine::merge::merge_texts(&baseline_text, &approval_text, &agent_text);
+    let has_conflicts = !conflicts.is_empty();
+
+    let merge_diff = diff_to_line_diff(&approval_text, &merged_text);
     if merge_diff.is_empty() {
         return Ok(approval_partition.current_snapshot);
     }
@@ -175,12 +193,12 @@ where
         .store_delta(&merge_delta)
         .map_err(LayertwineError::Storage)?;
 
-    // Create a merge snapshot
+    // Create a merge snapshot with conflict tracking
     let new_snapshot = Snapshot::merge(
         vec![&approval_snapshot, &agent_snapshot],
         merge_delta.id,
         PartitionType::Approval(agent_id.clone()).name(),
-        false,
+        has_conflicts,
     );
     storage
         .store_snapshot(&new_snapshot, b"")

@@ -4,6 +4,7 @@ use crate::storage::repository::PartitionStore;
 use crate::storage::sqlite::connection::SqliteStorage;
 use crate::StorageResult;
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 
 type PartitionRow = (Vec<u8>, String, Vec<u8>, Option<String>);
 
@@ -54,47 +55,32 @@ impl PartitionStore for SqliteStorage {
 
     fn get_partition(&self, id: &PartitionId) -> StorageResult<Partition> {
         let conn = self.conn.lock();
+        let id_bytes = id.as_bytes().to_vec();
         let mut stmt = conn.prepare(
             "SELECT id, name, current_snapshot, partition_type, partition_data, created_at, updated_at
              FROM partitions WHERE id = ?1"
         )?;
 
-        let partition = stmt.query_row(params![&id.as_bytes().to_vec()], |row| {
-            let id_bytes: Vec<u8> = row.get(0)?;
+        let (name, snap_arr, partition_type) = stmt.query_row(params![&id_bytes], |row| {
+            let _: Vec<u8> = row.get(0)?;
             let name: String = row.get(1)?;
             let snap_bytes: Vec<u8> = row.get(2)?;
             let mut snap_arr = [0u8; 32];
             snap_arr.copy_from_slice(&snap_bytes);
             let partition_data: Option<String> = row.get(4)?;
-
             let partition_type: PartitionType = partition_data
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or(PartitionType::Manual);
-
-            Ok((id_bytes, name, snap_arr, partition_type))
+            Ok((name, snap_arr, partition_type))
         })?;
 
-        let mut hist_stmt = conn.prepare(
-            "SELECT snapshot_id, seq FROM partition_history WHERE partition_id = ?1 ORDER BY seq",
-        )?;
-        let history: Vec<SnapshotId> = hist_stmt
-            .query_map(params![&id.as_bytes().to_vec()], |row| {
-                let snap_bytes: Vec<u8> = row.get(0)?;
-                let mut snap_arr = [0u8; 32];
-                snap_arr.copy_from_slice(&snap_bytes);
-                Ok(ContentId(snap_arr))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let (id_bytes, name, snap_arr, partition_type) = partition;
-        let actual_id = uuid::Uuid::from_slice(&id_bytes)
-            .map_err(|e| crate::StorageError::Serialization(e.to_string()))?;
+        let history = self.load_history(&conn, &id_bytes)?;
 
         Ok(Partition {
-            id: actual_id,
+            id: *id,
             name,
             current_snapshot: ContentId(snap_arr),
-            history: history.clone(),
+            history,
             partition_type,
         })
     }
@@ -126,17 +112,7 @@ impl PartitionStore for SqliteStorage {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or(PartitionType::Manual);
 
-        let mut hist_stmt = conn.prepare(
-            "SELECT snapshot_id, seq FROM partition_history WHERE partition_id = ?1 ORDER BY seq",
-        )?;
-        let history: Vec<SnapshotId> = hist_stmt
-            .query_map(params![&id_bytes], |row| {
-                let snap_bytes: Vec<u8> = row.get(0)?;
-                let mut snap_arr = [0u8; 32];
-                snap_arr.copy_from_slice(&snap_bytes);
-                Ok(ContentId(snap_arr))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+        let history = self.load_history(&conn, &id_bytes)?;
 
         Ok(Partition {
             id,
@@ -145,6 +121,39 @@ impl PartitionStore for SqliteStorage {
             history,
             partition_type,
         })
+    }
+
+    fn reset_partition_to_baseline(&self, partition_id: &PartitionId) -> StorageResult<()> {
+        let conn = self.conn.lock();
+        let now = chrono::Utc::now().timestamp_millis();
+
+        // Get the first history entry seq
+        let first_seq: i64 = conn.query_row(
+            "SELECT COALESCE(MIN(seq), 0) FROM partition_history WHERE partition_id = ?1",
+            params![&partition_id.as_bytes().to_vec()],
+            |row| row.get(0),
+        )?;
+        let first_snapshot: Vec<u8> = conn.query_row(
+            "SELECT snapshot_id FROM partition_history WHERE partition_id = ?1 AND seq = ?2",
+            params![&partition_id.as_bytes().to_vec(), first_seq],
+            |row| row.get(0),
+        )?;
+        let mut snap_arr = [0u8; 32];
+        snap_arr.copy_from_slice(&first_snapshot);
+
+        // Reset current_snapshot to baseline
+        conn.execute(
+            "UPDATE partitions SET current_snapshot = ?1, updated_at = ?2 WHERE id = ?3",
+            params![&first_snapshot, now, &partition_id.as_bytes().to_vec()],
+        )?;
+
+        // Delete all history except the first entry
+        conn.execute(
+            "DELETE FROM partition_history WHERE partition_id = ?1 AND seq > ?2",
+            params![&partition_id.as_bytes().to_vec(), first_seq],
+        )?;
+
+        Ok(())
     }
 
     fn list_partitions(&self) -> StorageResult<Vec<Partition>> {
@@ -164,7 +173,24 @@ impl PartitionStore for SqliteStorage {
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
-        let mut result = Vec::new();
+        // Batch load ALL history in one query instead of N separate queries
+        let mut hist_stmt = conn.prepare(
+            "SELECT partition_id, snapshot_id, seq FROM partition_history ORDER BY partition_id, seq",
+        )?;
+        let mut history_map: HashMap<Vec<u8>, Vec<SnapshotId>> = HashMap::new();
+        let history_rows = hist_stmt.query_map([], |row| {
+            let pid: Vec<u8> = row.get(0)?;
+            let sid: Vec<u8> = row.get(1)?;
+            Ok((pid, sid))
+        })?;
+        for row in history_rows {
+            let (pid, sid) = row?;
+            let mut snap_arr = [0u8; 32];
+            snap_arr.copy_from_slice(&sid);
+            history_map.entry(pid).or_default().push(ContentId(snap_arr));
+        }
+
+        let mut result = Vec::with_capacity(rows.len());
         for (id_bytes, name, snap_bytes, partition_data) in rows {
             let id = uuid::Uuid::from_slice(&id_bytes)
                 .map_err(|e| crate::StorageError::Serialization(e.to_string()))?;
@@ -176,23 +202,13 @@ impl PartitionStore for SqliteStorage {
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or(PartitionType::Manual);
 
-            let mut hist_stmt = conn.prepare(
-                "SELECT snapshot_id, seq FROM partition_history WHERE partition_id = ?1 ORDER BY seq",
-            )?;
-            let history: Vec<SnapshotId> = hist_stmt
-                .query_map(params![&id_bytes], |row| {
-                    let snap_bytes: Vec<u8> = row.get(0)?;
-                    let mut snap_arr = [0u8; 32];
-                    snap_arr.copy_from_slice(&snap_bytes);
-                    Ok(ContentId(snap_arr))
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
+            let history = history_map.remove(&id_bytes).unwrap_or_default();
 
             result.push(Partition {
                 id,
                 name,
                 current_snapshot: ContentId(snap_arr),
-                history: history.clone(),
+                history,
                 partition_type,
             });
         }
@@ -201,6 +217,37 @@ impl PartitionStore for SqliteStorage {
 }
 
 impl SqliteStorage {
+    /// Delete a partition and its history.
+    pub fn delete_partition(&self, id: &PartitionId) -> StorageResult<()> {
+        let conn = self.conn.lock();
+        // Delete history first (FK constraint)
+        conn.execute(
+            "DELETE FROM partition_history WHERE partition_id = ?1",
+            params![&id.as_bytes().to_vec()],
+        )?;
+        conn.execute(
+            "DELETE FROM partitions WHERE id = ?1",
+            params![&id.as_bytes().to_vec()],
+        )?;
+        Ok(())
+    }
+
+    /// Load partition history for a given partition ID.
+    fn load_history(&self, conn: &Connection, partition_id: &[u8]) -> StorageResult<Vec<SnapshotId>> {
+        let mut hist_stmt = conn.prepare(
+            "SELECT snapshot_id, seq FROM partition_history WHERE partition_id = ?1 ORDER BY seq",
+        )?;
+        let history: Vec<SnapshotId> = hist_stmt
+            .query_map(params![partition_id], |row| {
+                let snap_bytes: Vec<u8> = row.get(0)?;
+                let mut snap_arr = [0u8; 32];
+                snap_arr.copy_from_slice(&snap_bytes);
+                Ok(ContentId(snap_arr))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(history)
+    }
+
     fn update_pointer_internal(
         conn: &Connection,
         partition_id: &PartitionId,

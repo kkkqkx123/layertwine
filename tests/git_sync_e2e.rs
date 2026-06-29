@@ -115,17 +115,6 @@ fn git_commit_file(repo: &git2::Repository, rel_path: &str, content: &[u8], msg:
         .unwrap();
 }
 
-/// Create a bare repository (acts as a "remote").
-fn create_bare_remote(path: &Path) -> git2::Repository {
-    git2::Repository::init_bare(path).expect("bare repo init failed")
-}
-
-/// Add a remote to an existing git repo.
-fn add_remote(repo: &git2::Repository, name: &str, url: &Path) {
-    repo.remote(name, url.as_os_str().to_str().unwrap())
-        .expect("failed to add remote");
-}
-
 /// Combined fixture: creates a git repo, initialises layertwine from it.
 struct GitSyncFixture {
     _dir: tempfile::TempDir,
@@ -517,66 +506,6 @@ fn test_e2e_compare_status_divergent() {
         "expected Divergent status after reset + divergent commit, got {:?}",
         info.status
     );
-}
-
-// ---------------------------------------------------------------------------
-// Tests: remote operations
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_e2e_push_to_remote() {
-    let dir = tempfile::tempdir().unwrap();
-    let git_path = dir.path().join("repo");
-    std::fs::create_dir_all(&git_path).unwrap();
-    let repo = init_git_repo(&git_path);
-
-    let bare_path = dir.path().join("remote.git");
-    let _bare_repo = create_bare_remote(&bare_path);
-    add_remote(&repo, "origin", &bare_path);
-
-    let (storage, mut checkpoint_repo, _root) = create_layertwine_state().unwrap();
-    let snap_id = store_file(&storage, "remote_test.txt", b"remote\n").unwrap();
-    commit_snapshot(&mut checkpoint_repo, snap_id, "prep remote");
-
-    let hash = GitBridge::push_to_remote(
-        &storage,
-        &git_path,
-        &mut checkpoint_repo,
-        "main",
-        "origin",
-        "push to remote",
-    )
-    .expect("push_to_remote should succeed");
-
-    assert!(!hash.is_empty(), "should return git hash");
-
-    // Verify the bare remote received the commit
-    let remote_repo = git2::Repository::open(&bare_path).unwrap();
-    let remote_ref = remote_repo
-        .find_reference("refs/heads/main")
-        .expect("remote should have main branch");
-    let remote_commit = remote_ref.peel_to_commit().unwrap();
-    assert_eq!(
-        remote_commit.id().to_string(),
-        hash,
-        "remote HEAD should match returned hash"
-    );
-}
-
-#[test]
-fn test_e2e_fetch_from_remote() {
-    let dir = tempfile::tempdir().unwrap();
-    let git_path_a = dir.path().join("repo_a");
-    let git_path_b = dir.path().join("repo_b");
-    std::fs::create_dir_all(&git_path_a).unwrap();
-    std::fs::create_dir_all(&git_path_b).unwrap();
-
-    let repo_a = init_git_repo(&git_path_a);
-    let _repo_b = init_git_repo(&git_path_b);
-    add_remote(&repo_a, "origin", &git_path_b);
-
-    let result = GitBridge::fetch_from_remote(&git_path_a, "origin");
-    assert!(result.is_ok(), "fetch_from_remote should succeed");
 }
 
 // ---------------------------------------------------------------------------

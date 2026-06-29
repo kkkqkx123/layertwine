@@ -121,6 +121,20 @@ impl LayerType {
             LayerType::Staged => "staged",
         }
     }
+
+    /// Reverse lookup: convert a DB string back to a LayerType variant.
+    /// Returns `None` for unknown strings.
+    pub fn from_name(s: &str) -> Option<Self> {
+        match s {
+            "manual_edit" => Some(LayerType::ManualEdit),
+            "agent_edit" => Some(LayerType::AgentEdit),
+            "approval" => Some(LayerType::Approval),
+            "integrated" => Some(LayerType::Integrated),
+            "unified" => Some(LayerType::Unified),
+            "staged" => Some(LayerType::Staged),
+            _ => None,
+        }
+    }
 }
 
 /// Partition type

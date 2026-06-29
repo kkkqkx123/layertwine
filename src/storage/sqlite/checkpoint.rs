@@ -92,23 +92,53 @@ impl CheckpointPersist for SqliteStorage {
 
     fn list_checkpoints(&self) -> StorageResult<Vec<Checkpoint>> {
         let conn = self.conn.lock();
-        let mut stmt = conn.prepare("SELECT id FROM checkpoints ORDER BY created_at DESC")?;
-        let ids: Vec<Vec<u8>> = stmt
-            .query_map([], |row| row.get(0))
+        let mut stmt = conn.prepare(
+            "SELECT id, parents, snapshot_ids, author, message, git_anchor, created_at, snapshot_sources \
+             FROM checkpoints ORDER BY created_at DESC",
+        )?;
+
+        let checkpoints = stmt
+            .query_map([], |row| {
+                let id_bytes: Vec<u8> = row.get(0)?;
+                let mut id_arr = [0u8; 32];
+                id_arr.copy_from_slice(&id_bytes);
+
+                let parents_json: Vec<u8> = row.get(1)?;
+                let parents: Vec<CheckpointId> = serde_json::from_slice(&parents_json)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+
+                let snap_ids_json: Vec<u8> = row.get(2)?;
+                let baseline_snapshots: Vec<SnapshotId> = serde_json::from_slice(&snap_ids_json)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+
+                let author: String = row.get(3)?;
+                let message: String = row.get(4)?;
+                let git_anchor: Option<String> = row.get(5)?;
+                let created_at: i64 = row.get(6)?;
+                let snapshot_sources_json: Option<String> = row.get(7)?;
+                let snapshot_sources: std::collections::HashMap<SnapshotId, String> =
+                    snapshot_sources_json
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                        .unwrap_or_default();
+
+                Ok(Checkpoint {
+                    id: ContentId(id_arr),
+                    parents,
+                    baseline_snapshots,
+                    metadata: crate::checkpoint::types::CheckpointMetadata {
+                        author,
+                        message,
+                        git_anchor,
+                    },
+                    created_at,
+                    snapshot_sources,
+                })
+            })
             .map_err(crate::StorageError::Database)?
             .filter_map(|r| r.ok())
             .collect();
 
-        let mut result = Vec::new();
-        drop(stmt);
-        drop(conn);
-        for id_bytes in ids {
-            let mut id_arr = [0u8; 32];
-            id_arr.copy_from_slice(&id_bytes);
-            let id = ContentId(id_arr);
-            result.push(self.get_checkpoint(&id)?);
-        }
-        Ok(result)
+        Ok(checkpoints)
     }
 
     fn delete_checkpoint(&self, id: &CheckpointId) -> StorageResult<()> {

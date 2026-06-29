@@ -30,7 +30,8 @@ service Layertwine {
     // Maintenance
     rpc Gc(Empty) returns (GcResponse);
     rpc Compact(CompactRequest) returns (CompactResponse);
-    rpc Push(PushRequest) returns (PushResponse);
+    rpc GitCommit(GitCommitRequest) returns (GitCommitResponse);
+    rpc Clean(CleanRequest) returns (CleanResponse);
     rpc Pull(PullRequest) returns (PullResponse);
 
     // Show / diff display
@@ -198,6 +199,7 @@ message RestoreResponse {
     string backup_id = 1;
     string file = 2;
     uint32 deltas_restored = 3;
+    string merged_snapshot_id = 4;
 }
 
 message GcResponse {
@@ -207,15 +209,28 @@ message GcResponse {
     bool delta_chain_depth_triggered = 4;
 }
 
-message PushRequest {
-    optional string remote = 1;
-    string git_repo = 2;
-    optional string message = 3;
+message GitCommitRequest {
+    string git_repo = 1;
+    optional string message = 2;
 }
 
-message PushResponse {
-    string remote = 1;
-    string git_commit_hash = 2;
+message GitCommitResponse {
+    string git_commit_hash = 1;
+}
+
+message CleanRequest {
+    optional string branch = 1;
+    optional string layer = 2;
+    bool all = 3;
+}
+
+message CleanResponse {
+    uint32 removed_branches = 1;
+    uint32 removed_checkpoints = 2;
+    uint32 removed_snapshots = 3;
+    uint32 removed_deltas = 4;
+    uint32 removed_layers = 5;
+    string message = 6;
 }
 
 message PullRequest {

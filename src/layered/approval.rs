@@ -5,10 +5,8 @@
 
 use crate::core::partition::Partition;
 use crate::core::types::{AgentInstanceId, PartitionId, PartitionType, SnapshotId};
-use crate::error::StorageError;
 use crate::error::{LayertwineError, Result};
 use crate::storage::repository::PartitionStore;
-use rusqlite::params;
 
 /// ID of the Agent partition in the approval layer via UUIDv5
 pub fn approval_agent_partition_id(agent_id: &AgentInstanceId) -> PartitionId {
@@ -55,6 +53,11 @@ pub fn list_approval_partitions<S: PartitionStore>(storage: &S) -> Result<Vec<Pa
 /// List pending approval partitions — those that have more than 1 history entry
 /// (indicating the agent has submitted changes that haven't been processed yet).
 ///
+/// State convention: a partition's "state" is determined by `history.len()`:
+///   - `history.len() == 1`:  baseline only → no pending changes
+///   - `history.len()  > 1`:  agent has submitted (via `move_agent_to_approval`)
+///                            but not yet approved (merged into integrated) or rejected.
+///
 /// A "pending" approval partition has been updated by `move_agent_to_approval`
 /// but not yet approved (merged into integrated) or rejected (rolled back).
 pub fn list_pending_approvals<S: PartitionStore>(storage: &S) -> Result<Vec<Partition>> {
@@ -66,7 +69,11 @@ pub fn list_pending_approvals<S: PartitionStore>(storage: &S) -> Result<Vec<Part
 ///
 /// This undoes the agent's contribution by restoring the approval partition pointer
 /// to the first snapshot in its history (the base state before agent edits were merged).
-pub fn reject_approval<S: PartitionStore + 'static>(
+///
+/// Uses `PartitionStore::reset_partition_to_baseline` which handles history truncation
+/// correctly on backends that support it (e.g., SQLite), and falls back to a pointer-only
+/// reset on other backends.
+pub fn reject_approval<S: PartitionStore>(
     storage: &S,
     agent_id: &AgentInstanceId,
 ) -> Result<SnapshotId> {
@@ -78,45 +85,15 @@ pub fn reject_approval<S: PartitionStore + 'static>(
         ))
     })?;
 
-    let base_snapshot = partition.history.first().ok_or_else(|| {
+    let base_snapshot = *partition.history.first().ok_or_else(|| {
         LayertwineError::StateMachine("approval partition has empty history".into())
     })?;
 
-    // Try to use direct SQL update if storage is SqliteStorage
-    // We need to use Any for downcast since PartitionStore doesn't provide is_sqlite method
-    let any_storage: &dyn std::any::Any = storage;
+    storage
+        .reset_partition_to_baseline(&pid)
+        .map_err(LayertwineError::Storage)?;
 
-    if let Some(sql_storage) = any_storage.downcast_ref::<crate::storage::SqliteStorage>() {
-        // Direct SQL update that doesn't add to history and resets history to just baseline
-        let conn = sql_storage.conn.lock();
-
-        let now = chrono::Utc::now().timestamp_millis();
-        conn.execute(
-            "UPDATE partitions SET current_snapshot = ?1, updated_at = ?2 WHERE id = ?3",
-            params![&base_snapshot.0.to_vec(), now, &pid.as_bytes().to_vec()],
-        )
-        .map_err(|e| LayertwineError::Storage(StorageError::Database(e)))?;
-
-        // Delete all history except the first (baseline)
-        conn.execute(
-            "DELETE FROM partition_history
-             WHERE partition_id = ?1 AND seq > (
-                 SELECT seq FROM partition_history
-                 WHERE partition_id = ?1 ORDER BY seq ASC LIMIT 1
-             )",
-            params![&pid.as_bytes().to_vec()],
-        )
-        .map_err(|e| LayertwineError::Storage(StorageError::Database(e)))?;
-
-        Ok(*base_snapshot)
-    } else {
-        // Fall back to update_pointer for other storage implementations
-        storage
-            .update_pointer(&pid, base_snapshot)
-            .map_err(LayertwineError::Storage)?;
-
-        Ok(*base_snapshot)
-    }
+    Ok(base_snapshot)
 }
 
 #[cfg(test)]

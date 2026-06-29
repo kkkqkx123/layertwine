@@ -17,7 +17,8 @@ use crate::git_sync::gc::collect_garbage;
 use crate::git_sync::git_bridge::GitBridge;
 use crate::layered::StateMachine;
 use crate::storage::repository::{
-    CheckpointPersist, DeltaStore, FileNodeStore, PartitionStore, SnapshotStore,
+    AtomicOps, CheckpointPersist, DeltaStore, FileNodeStore, LayerStore, PartitionStore,
+    SnapshotStore,
 };
 use crate::storage::SqliteStorage;
 
@@ -111,6 +112,7 @@ pub struct ApiService {
     checkpoint_repo: Arc<std::sync::RwLock<CheckpointRepo>>,
     db_path: String,
     maintenance_cfg: crate::config::MaintenanceConfig,
+    backup_repo: Arc<BackupRepo>,
 }
 
 impl ApiService {
@@ -131,12 +133,20 @@ impl ApiService {
         let persist: Box<dyn CheckpointPersist> = Box::new(storage.share());
         let checkpoint_repo = CheckpointRepo::load(persist).map_err(map_error)?;
 
+        // Open backup repo (dedicated SQLite DB for physical isolation)
+        let backup_db_path = db_dir.join("layertwine-backup.db");
+        let backup_repo = Arc::new(
+            BackupRepo::new(&backup_db_path)
+                .map_err(|e| map_error(LayertwineError::Storage(e)))?,
+        );
+
         Ok(ApiService {
             storage,
             state_machine,
             checkpoint_repo: Arc::new(std::sync::RwLock::new(checkpoint_repo)),
             db_path: config.db_path,
             maintenance_cfg,
+            backup_repo,
         })
     }
 
@@ -393,8 +403,8 @@ impl ApiService {
                     PartitionType::Manual => "manual_edit",
                     PartitionType::Agent(_) => "agent_edit",
                     PartitionType::Approval(_) => "approval",
-                    PartitionType::Integrated(_) => "approval",
-                    PartitionType::Unified => "approval",
+                    PartitionType::Integrated(_) => "integrated",
+                    PartitionType::Unified => "unified",
                     PartitionType::Staged => "staged",
                 };
                 PartitionInfo {
@@ -721,12 +731,8 @@ impl ApiService {
             ApiError::invalid_params(format!("invalid snapshot ID '{}'", req.snapshot_id))
         })?;
 
-        let backup_path = Path::new(&self.db_path).parent().unwrap_or(Path::new("."));
-        let backup_db_path = backup_path.join("layertwine-backup.db");
-        let backup_repo =
-            BackupRepo::new(&backup_db_path).map_err(|e| map_error(LayertwineError::Storage(e)))?;
-
-        let backup_id = backup_repo
+        let backup_id = self
+            .backup_repo
             .backup_snapshot(self.storage.as_ref(), snapshot_id, req.label.clone())
             .map_err(map_error)?;
 
@@ -742,19 +748,26 @@ impl ApiService {
             ApiError::invalid_params(format!("invalid backup ID '{}'", req.backup_id))
         })?;
 
-        let backup_path = Path::new(&self.db_path).parent().unwrap_or(Path::new("."));
-        let backup_db_path = backup_path.join("layertwine-backup.db");
-        let backup_repo =
-            BackupRepo::new(&backup_db_path).map_err(|e| map_error(LayertwineError::Storage(e)))?;
+        let backup = self.backup_repo.get_backup(&backup_id).map_err(map_error)?;
 
-        let backup = backup_repo.get_backup(&backup_id).map_err(map_error)?;
+        // Write back the file content to core storage so the base is available for reconstruction
+        self.storage
+            .store_file_node(&backup.file, &backup.file_content)
+            .map_err(|e| map_error(LayertwineError::Storage(e)))?;
 
+        // Store deltas back to core storage
         let delta_count = backup.deltas.len();
         for delta in &backup.deltas {
             self.storage
                 .store_delta(delta)
                 .map_err(|e| map_error(LayertwineError::Storage(e)))?;
         }
+
+        // Perform 3-way merge of backup into staged partition
+        let merged_id = self
+            .backup_repo
+            .merge_to_staged(&backup_id, self.storage.as_ref())
+            .map_err(map_error)?;
 
         let restore_file = backup
             .deltas
@@ -766,6 +779,7 @@ impl ApiService {
             backup_id: req.backup_id,
             file: restore_file,
             deltas_restored: delta_count,
+            merged_snapshot_id: merged_id.to_hex(),
         })
     }
 
@@ -976,66 +990,41 @@ impl ApiService {
         })?;
 
         // 2. Build internal restore request
+        let source_filter: Option<Vec<&str>> = req
+            .source_filter
+            .as_ref()
+            .map(|v| v.iter().map(|s| s.as_str()).collect());
+
         let chk_req = crate::checkpoint::restore::RestoreRequest {
             checkpoint_id: Some(cp_id),
             source_filter: req.source_filter.clone(),
             time_range: None,
         };
 
-        // 3. Execute restore (get snapshot data)
+        // 3. Execute restore + apply via core library (keeps lock guard alive)
         let checkpoint_repo = self
             .checkpoint_repo
             .read()
             .map_err(|e| ApiError::internal(format!("Failed to acquire lock: {}", e)))?;
 
         let resp = checkpoint_repo.restore(&chk_req).map_err(map_error)?;
+
+        // 4. Delegate file writing to core CheckpointRepo::apply_restore
+        let apply_result = if !req.skip_write {
+            checkpoint_repo
+                .apply_restore(&resp, source_filter.as_deref())
+                .map_err(map_error)?
+        } else {
+            crate::checkpoint::restore::RestoreApplyResult {
+                checkpoint_id: resp.checkpoint.id,
+                files_written: vec![],
+            }
+        };
+
         drop(checkpoint_repo);
 
-        // 4. Write file contents to disk
-        let mut files_written: Vec<String> = Vec::new();
-        if !req.skip_write {
-            for (snap_id, content, source) in &resp.snapshots {
-                // Only restore file:// content — agent/graph state is managed
-                // externally by the application using branch isolation.
-                if !source.starts_with("file://") {
-                    continue;
-                }
-                let file_path_str = source.trim_start_matches("file://");
-                let path = std::path::PathBuf::from(file_path_str);
-
-                // Ensure parent directory exists
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| {
-                        ApiError::storage(format!(
-                            "failed to create directory for {}: {}",
-                            file_path_str, e
-                        ))
-                    })?;
-                }
-
-                // Write file content
-                std::fs::write(&path, content.to_bytes()).map_err(|e| {
-                    ApiError::storage(format!(
-                        "failed to write {}: {}",
-                        file_path_str, e
-                    ))
-                })?;
-
-                files_written.push(file_path_str.to_string());
-
-                // 5. Update staged partition pointer if requested
-                if req.update_staged {
-                    let staged_pid = crate::layered::staged::staged_partition_id();
-                    let _ = self
-                        .storage
-                        .update_pointer(&staged_pid, snap_id)
-                        .map_err(|e| ApiError::storage(format!(
-                            "failed to update staged partition pointer: {}", e
-                        )));
-                }
-            }
-        } else if req.update_staged {
-            // skip_write=true but update_staged=true: update pointers without writing
+        // 5. Update staged partition pointer if requested
+        if req.update_staged {
             for (snap_id, _content, source) in &resp.snapshots {
                 if !source.starts_with("file://") {
                     continue;
@@ -1044,15 +1033,18 @@ impl ApiService {
                 let _ = self
                     .storage
                     .update_pointer(&staged_pid, snap_id)
-                    .map_err(|e| ApiError::storage(format!(
-                        "failed to update staged partition pointer: {}", e
-                    )));
+                    .map_err(|e| {
+                        ApiError::storage(format!(
+                            "failed to update staged partition pointer: {}",
+                            e
+                        ))
+                    });
             }
         }
 
         Ok(CheckpointRestoreApplyResponse {
             checkpoint_id: req.checkpoint_id,
-            files_written,
+            files_written: apply_result.files_written,
             staged_updated: req.update_staged,
         })
     }
@@ -1089,29 +1081,110 @@ impl ApiService {
         })
     }
 
-    pub fn push(&self, req: PushRequest) -> ApiResult<PushResponse> {
-        let remote = req.remote.unwrap_or_else(|| "origin".into());
+    pub fn git_commit(&self, req: GitCommitRequest) -> ApiResult<GitCommitResponse> {
         let message = req.message.unwrap_or_else(|| "sync from layertwine".into());
 
         let mut repo = load_checkpoint_repo(self.storage.as_ref()).map_err(map_error)?;
         let branch_name = repo.current_branch_name().to_string();
-        let git_hash = GitBridge::push_to_remote(
+        let git_hash = GitBridge::push_to_git(
             self.storage.as_ref(),
             Path::new(&req.git_repo),
             &mut repo,
             &branch_name,
-            &remote,
             &message,
         )
         .map_err(map_error)?;
 
-        // Persist git_anchor changes made inside push_to_remote
+        // Persist git_anchor changes
         repo.sync_all().map_err(map_error)?;
 
-        Ok(PushResponse {
-            remote,
+        Ok(GitCommitResponse {
             git_commit_hash: git_hash,
         })
+    }
+
+    pub fn clean(&self, req: CleanRequest) -> ApiResult<CleanResponse> {
+        let mut response = CleanResponse {
+            removed_branches: 0,
+            removed_checkpoints: 0,
+            removed_snapshots: 0,
+            removed_deltas: 0,
+            removed_layers: 0,
+            message: String::new(),
+        };
+
+        if req.all {
+            // Clean all: remove everything from storage in order (respecting FK constraints)
+            let storage = self.storage.as_ref();
+            let _ = storage.with_atomic(|s| {
+                if let Ok(partitions) = s.list_partitions() {
+                    for p in &partitions {
+                        let _ = s.delete_partition(&p.id);
+                    }
+                }
+                s.clear_all_checkpoints().ok();
+                s.clear_all_branches().ok();
+                s.clear_all_layers().ok();
+                s.clear_all_snapshots().ok();
+                s.clear_all_deltas().ok();
+                Ok(())
+            });
+
+            response.message = "All layertwine storage cleared. Run `init` to reinitialize.".into();
+            return Ok(response);
+        }
+
+        // Clean specific branch
+        if let Some(branch_name) = &req.branch {
+            let mut repo = load_checkpoint_repo(self.storage.as_ref()).map_err(map_error)?;
+            let branch_count_before = repo.branches.len();
+
+            if repo.remove_branch(branch_name).is_ok() {
+                let stats = collect_garbage(&mut repo).map_err(map_error)?;
+                repo.sync_all().map_err(map_error)?;
+                response.removed_branches = branch_count_before - repo.branches.len();
+                response.removed_checkpoints = stats.removed_checkpoints as usize;
+            }
+        }
+
+        // Clean specific layer
+        if let Some(layer_type_name) = &req.layer {
+            let storage = self.storage.as_ref();
+            if let Some(lt) = crate::core::types::LayerType::from_name(layer_type_name) {
+                if let Ok(layer) = storage.get_layer(&lt) {
+                    for pid in &layer.partitions {
+                        let _ = storage.delete_partition(pid);
+                    }
+                }
+                storage.delete_layer(&lt).ok();
+                response.removed_layers += 1;
+            }
+        }
+
+        // Clean orphaned snapshots and deltas (SQL-level cleanup)
+        let storage = self.storage.as_ref();
+        response.removed_snapshots = storage.cleanup_orphan_snapshots().unwrap_or(0);
+        response.removed_deltas = storage.cleanup_orphan_deltas().unwrap_or(0);
+
+        if response.removed_branches == 0
+            && response.removed_checkpoints == 0
+            && response.removed_snapshots == 0
+            && response.removed_deltas == 0
+            && response.removed_layers == 0
+        {
+            response.message = "Nothing to clean.".into();
+        } else {
+            response.message = format!(
+                "Cleaned: {} branch(es), {} checkpoint(s), {} snapshot(s), {} delta(s), {} layer(s)",
+                response.removed_branches,
+                response.removed_checkpoints,
+                response.removed_snapshots,
+                response.removed_deltas,
+                response.removed_layers,
+            );
+        }
+
+        Ok(response)
     }
 
     pub fn pull(&self, req: PullRequest) -> ApiResult<PullResponse> {

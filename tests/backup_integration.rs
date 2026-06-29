@@ -240,7 +240,7 @@ fn test_merge_backup_to_staged() {
     let merged_deltas = core.get_deltas(&merged_snapshot.deltas).unwrap();
     let merged_content =
         apply_deltas(&String::from_utf8(merged_base).unwrap(), &merged_deltas).unwrap();
-    assert_eq!(merged_content, "a\nB\nC");
+    assert_eq!(merged_content, "a\nB\nC\n");
 }
 
 #[test]
@@ -277,7 +277,7 @@ fn test_restore_backup_without_conflict() {
     let merged_deltas = core.get_deltas(&merged_snapshot.deltas).unwrap();
     let merged_content =
         apply_deltas(&String::from_utf8(merged_base).unwrap(), &merged_deltas).unwrap();
-    assert_eq!(merged_content, "a\nb\nC");
+    assert_eq!(merged_content, "a\nb\nC\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -457,7 +457,7 @@ fn test_merge_multi_file_edits() {
     let merged_deltas = core.get_deltas(&merged_snapshot.deltas).unwrap();
     let merged_content =
         apply_deltas(&String::from_utf8(merged_base).unwrap(), &merged_deltas).unwrap();
-    assert_eq!(merged_content, "a\nB\nC\nd");
+    assert_eq!(merged_content, "a\nB\nC\nd\n");
 }
 
 // ---------------------------------------------------------------------------

@@ -64,10 +64,54 @@ impl BackupSnapshot {
     }
 
     pub fn compute_id(&self) -> BackupId {
-        let mut clone = self.clone();
-        clone.backed_at = 0; // Exclude timestamp from content hash
-        let json = serde_json::to_vec(&clone).unwrap_or_default();
-        BackupId::from_content(&json)
+        use blake3::Hasher;
+
+        let mut hasher = Hasher::new();
+
+        // source_snapshot: 32-byte content hash
+        hasher.update(&self.source_snapshot.0);
+
+        // file: path + content hash
+        hasher.update(self.file.path_str().as_bytes());
+        hasher.update(&self.file.base_hash);
+
+        // deltas: each delta's content-derived id (avoids full delta serialization)
+        for delta in &self.deltas {
+            hasher.update(&delta.id.0);
+        }
+
+        // label (excluded when None, matching original behavior)
+        if let Some(label) = &self.label {
+            hasher.update(label.as_bytes());
+        }
+
+        // agent_id
+        if let Some(agent_id) = &self.agent_id {
+            hasher.update(agent_id.as_bytes());
+        }
+
+        // source_type
+        if let Some(source_type) = &self.source_type {
+            hasher.update(source_type.as_bytes());
+        }
+
+        // file_content (the raw bytes of the base content)
+        hasher.update(&self.file_content);
+
+        // metadata: sorted by key for deterministic hashing
+        let mut meta_pairs: Vec<(&String, &String)> = self.metadata.iter().collect();
+        meta_pairs.sort_by(|a, b| a.0.cmp(b.0));
+        for (key, value) in &meta_pairs {
+            hasher.update(key.as_bytes());
+            hasher.update(b"\0");
+            hasher.update(value.as_bytes());
+            hasher.update(b"\0");
+        }
+
+        // backed_at is intentionally excluded (timestamp shouldn't affect content identity)
+
+        let hash = hasher.finalize();
+        ContentId(*hash.as_bytes())
     }
 
     pub fn with_metadata(mut self, key: &str, value: &str) -> Self {

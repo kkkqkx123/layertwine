@@ -4,7 +4,7 @@
 
 ## 概述
 
-Layertwine 提供一套完整的命令行接口（CLI），用于管理文件编辑历史、分层状态机流转、检查点提交、分支管理、快照备份以及 Git 双向同步。
+Layertwine 提供一套完整的命令行接口（CLI），用于管理文件编辑历史、分层状态机流转、检查点提交、分支管理、快照备份、数据清理以及 Git 双向同步。
 
 当前 CLI 通过 Rust 库暴露，入口为 `layertwine::cli::run()`。所有功能均通过 clap v4 子命令系统组织。
 
@@ -112,7 +112,7 @@ layertwine edit <FILE> [-c, --content <CONTENT>]
 | 参数                      | 说明                             |
 | ------------------------- | -------------------------------- |
 | `<FILE>`                  | 要编辑的文件路径（必需）         |
-| `-c, --content <CONTENT>` | 新文件内容。若未提供，使用空内容 |
+| `-c, --content <CONTENT>` | 新文件内容。若未提供，从 stdin 读取 |
 
 **示例：**
 
@@ -172,35 +172,45 @@ Agent 'agent-01' submitted for approval -> snapshot c3d4e5f6a1b2
 
 ---
 
-### `layertwine approve` — 审核通过 Agent 修改
+### `layertwine approval` — 审批管理
 
 ```
-layertwine approve <AGENT_ID>
+layertwine approval list
+layertwine approval approve <AGENT_ID> [--integrated-name <NAME>]
+layertwine approval reject <AGENT_ID>
+layertwine approval merge-to-unified [--names <NAMES>...]
+layertwine approval merge-to-staged
 ```
 
-审核通过指定 Agent 的修改。流程：
+细粒度的审批操作管理，替代旧版 `approve <AGENT_ID>` 单步命令。
 
-1. 将 Agent 的修改从 `approval` 层迁移到 `integrated` 分区
-2. 将所有 `integrated` 分区合并到 `unified` 分区
-3. 将 `unified` 分区合并到 `staged` 层
+**子命令：**
 
-**参数：**
-
-| 参数         | 说明                               |
-| ------------ | ---------------------------------- |
-| `<AGENT_ID>` | 要审核通过的 Agent 实例 ID（必需） |
+| 子命令                                          | 说明                                               |
+| ----------------------------------------------- | -------------------------------------------------- |
+| `list`                                          | 列出所有待审批的 Agent 提交                         |
+| `approve <AGENT_ID> [--integrated-name <NAME>]` | 审批通过指定 Agent，迁移到 integrated 分区         |
+| `reject <AGENT_ID>`                             | 拒绝指定 Agent 的提交，回滚到基线                   |
+| `merge-to-unified [--names <NAMES>...]`         | 将已审批的 integrated 分区合并到 unified 分区      |
+| `merge-to-staged`                               | 将 unified 分区合并到 staged 层                     |
 
 **示例：**
 
 ```bash
-layertwine approve agent-01
-```
+# 列出待审批项
+layertwine approval list
 
-**输出：**
+# 审批 Agent
+layertwine approval approve agent-01
 
-```
-Approved agent 'agent-01' -> integrated snapshot d4e5f6a1b2c3
-Merged to staged -> snapshot e5f6a1b2c3d4
+# 拒绝 Agent
+layertwine approval reject agent-01
+
+# 合并到 unified
+layertwine approval merge-to-unified
+
+# 合并到 staged
+layertwine approval merge-to-staged
 ```
 
 ---
@@ -259,6 +269,36 @@ b2c3d4e5f6a1         developer-1      1            2             修复边界条
 c3d4e5f6a1b2 [git]   developer-1      1            2             从 Git 同步 [git]
 ----------------------------------------------------------------------------------------------------
 Total: 3 checkpoint(s)
+```
+
+---
+
+### `layertwine show` — 查看差异
+
+```
+layertwine show <SHOW_WHAT> [--id <ID>]
+```
+
+查看 staged / checkpoint / partition 与基准之间的 unified diff。
+
+**参数：**
+
+| 参数              | 说明                                                      |
+| ----------------- | --------------------------------------------------------- |
+| `<SHOW_WHAT>`     | 目标类型：`staged` / `checkpoint` / `partition`           |
+| `--id, -i <ID>`   | 目标 ID：checkpoint 时必传 checkpoint ID，partition 时必传分区名 |
+
+**示例：**
+
+```bash
+# 查看 staged 差异
+layertwine show staged
+
+# 查看指定 checkpoint 差异
+layertwine show checkpoint --id a1b2c3d4e5f6
+
+# 查看指定 partition 差异
+layertwine show partition --id manual
 ```
 
 ---
@@ -330,6 +370,44 @@ layertwine merge feature/login -m "合并登录功能到主分支"
 
 ```
 Merged 'feature/login' into 'main' -> checkpoint d4e5f6a1b2c3
+```
+
+---
+
+### `layertwine checkpoint` — 检查点操作
+
+```
+layertwine checkpoint restore <CHECKPOINT_ID> [--source-filter <PATTERN>...]
+layertwine checkpoint restore-by-time <TARGET_TIME> [--source-filter <PATTERN>...]
+layertwine checkpoint diff <FROM_ID> <TO_ID>
+layertwine checkpoint rollback <CHECKPOINT_ID>
+```
+
+对检查点执行恢复、差异对比和回滚操作。
+
+**子命令：**
+
+| 子命令                                          | 说明                                                       |
+| ----------------------------------------------- | ---------------------------------------------------------- |
+| `restore <ID> [--source-filter <PATTERN>...]`   | 从指定检查点恢复文件到工作目录                             |
+| `restore-by-time <TIME> [--source-filter ...]`  | 恢复到距离目标时间最近的检查点                             |
+| `diff <FROM_ID> <TO_ID>`                        | 对比两个检查点之间的差异                                   |
+| `rollback <ID>`                                 | 将 staged 分区回滚到指定检查点                             |
+
+**示例：**
+
+```bash
+# 从检查点恢复
+layertwine checkpoint restore a1b2c3d4e5f6
+
+# 按时间恢复
+layertwine checkpoint restore-by-time 1684396800000
+
+# 对比检查点
+layertwine checkpoint diff a1b2c3d4e5f6 b2c3d4e5f6a1
+
+# 回滚到检查点
+layertwine checkpoint rollback a1b2c3d4e5f6
 ```
 
 ---
@@ -415,32 +493,63 @@ GC complete: 5 checkpoints removed, 12 snapshots freed, 102400 bytes
 
 ---
 
-### `layertwine push` — 推送到 Git
+### `layertwine compact` — 数据库压缩
 
 ```
-layertwine push [--remote <REMOTE>] [-m, --message <MESSAGE>]
+layertwine compact [--vacuum-full]
 ```
 
-将当前分支的检查点历史推送到关联的 Git 仓库。需要预先通过 `--git-repo` 指定 Git 仓库路径。
+压缩数据库——截断 WAL 并回收空闲页。
 
 **参数：**
 
-| 参数                      | 说明                                           |
-| ------------------------- | ---------------------------------------------- |
-| `--remote <REMOTE>`       | Git 远程名称（可选，默认 `origin`）            |
-| `-m, --message <MESSAGE>` | Git 提交信息（可选，默认 `sync from layertwine`） |
+| 参数                | 说明                                               |
+| ------------------- | -------------------------------------------------- |
+| `--vacuum-full`     | 强制执行完整 VACUUM 而非增量模式（需要排它锁）     |
 
 **示例：**
 
 ```bash
-layertwine --git-repo /path/to/repo push --remote origin -m "同步检查点到 Git"
+layertwine compact
 ```
 
 **输出：**
 
 ```
-  Pushing to Git ... done
-Pushed to remote 'origin' (commit: 9f8e7d6c5b4a)
+  Compacting database ... done
+Database compacted: WAL checkpointed, 100 free pages reclaimed
+```
+
+---
+
+### `layertwine git-commit` — 提交到本地 Git 分支
+
+```
+layertwine git-commit [-m, --message <MESSAGE>]
+```
+
+将当前分支的检查点历史提交到关联的 Git 仓库的本地分支。**不执行远程推送**，需要手动执行 `git push` 将变更推送到远程。
+
+需要预先通过 `--git-repo` 指定 Git 仓库路径。
+
+**参数：**
+
+| 参数                      | 说明                                           |
+| ------------------------- | ---------------------------------------------- |
+| `-m, --message <MESSAGE>` | Git 提交信息（可选，默认 `sync from layertwine`） |
+
+**示例：**
+
+```bash
+layertwine --git-repo /path/to/repo git-commit -m "同步检查点到 Git"
+```
+
+**输出：**
+
+```
+  Committing to local Git branch ... done
+Committed to local Git branch (commit: 9f8e7d6c5b4a)
+  Run `git push` manually to push to remote.
 ```
 
 ---
@@ -469,9 +578,49 @@ layertwine --git-repo /path/to/repo pull --remote origin --git-ref main
 **输出：**
 
 ```
-  Fetching from Git remote ... done
-  Importing from Git ... done
+  Pulling from Git remote ... done
 Pulled from remote 'origin' ref 'main'
+```
+
+---
+
+### `layertwine clean` — 清理 Layertwine 存储
+
+```
+layertwine clean --branch <NAME>
+layertwine clean --layer <TYPE>
+layertwine clean --all
+```
+
+清理 Layertwine 存储中的数据（不碰 Git 仓库和本地文件）。
+
+**参数：**
+
+| 参数                | 说明                                                       |
+| ------------------- | ---------------------------------------------------------- |
+| `--branch <NAME>`   | 清理指定分支的所有检查点及相关数据                         |
+| `--layer <TYPE>`    | 清理指定层的数据（如 `staged`、`unified`、`integrated`）  |
+| `--all`             | 清理所有 Layertwine 数据，重置为初始状态                   |
+
+**示例：**
+
+```bash
+# 清理指定分支
+layertwine clean --branch feature/login
+
+# 清理指定层
+layertwine clean --layer staged
+
+# 全部清理
+layertwine clean --all
+```
+
+**输出：**
+
+```
+  Cleaning layertwine storage ... done
+Clean: 1 branch removed, 3 checkpoints, 5 snapshots, 12 deltas, 1 layer
+  All orphaned snapshots and deltas cleaned up.
 ```
 
 ---
@@ -509,11 +658,20 @@ layertwine agent agent-a submit
 layertwine agent agent-b edit src/db.rs -c "pub fn connect() {}"
 layertwine agent agent-b submit
 
-# 4. 人工审核
-layertwine approve agent-a
-layertwine approve agent-b
+# 4. 查看待审批列表
+layertwine approval list
 
-# 5. 提交最终检查点
+# 5. 审批通过
+layertwine approval approve agent-a
+layertwine approval approve agent-b
+
+# 6. 合并到 unified
+layertwine approval merge-to-unified
+
+# 7. 合并到 staged
+layertwine approval merge-to-staged
+
+# 8. 提交最终检查点
 layertwine commit -m "合并 auth 和 db 模块"
 ```
 
@@ -527,10 +685,13 @@ layertwine --git-repo /path/to/repo init --git-ref main
 layertwine edit src/lib.rs -c "// new code"
 layertwine commit -m "Layertwine 编辑"
 
-# 3. 将检查点推回 Git
-layertwine --git-repo /path/to/repo push
+# 3. 将检查点提交到本地 Git 分支
+layertwine --git-repo /path/to/repo git-commit
 
-# 4. 拉取 Git 更新到 Layertwine
+# 4. 手动推送到远程
+cd /path/to/repo && git push
+
+# 5. 拉取 Git 更新到 Layertwine
 layertwine --git-repo /path/to/repo pull
 ```
 
@@ -540,22 +701,29 @@ layertwine --git-repo /path/to/repo pull
 
 每个 CLI 命令对应的内部模块：
 
-| CLI 命令            | 所属模块                                 | 对应架构层        |
-| ------------------- | ---------------------------------------- | ----------------- |
-| `init`              | `state_machine` + `storage`              | P1 存储层         |
-| `status`            | `cli::output`                            | P3 状态机查询     |
-| `edit`              | `state_machine::manual`                  | P3 manual_edit 层 |
-| `agent edit/submit` | `state_machine::agent`                   | P3 agent_edit 层  |
-| `approve`           | `state_machine::approval`                | P3 approval 层    |
-| `commit`            | `state_machine::staged` + `checkpoint`   | P4 检查点仓库     |
-| `log`               | `checkpoint` + `storage`                 | P4 历史查询       |
-| `branch`            | `checkpoint::branch` + `checkpoint::dag` | P4 分支管理       |
-| `merge`             | `checkpoint::repo` + `engine::merge`     | P4/P2 合并引擎    |
-| `backup`            | `backup`                                 | P5 备份模块       |
-| `restore`           | `backup`                                 | P5 恢复模块       |
-| `gc`                | `git_sync::gc`                           | P6 垃圾回收       |
-| `push`              | `git_sync::git_bridge`                   | P6 Git 同步       |
-| `pull`              | `git_sync::git_bridge`                   | P6 Git 同步       |
+| CLI 命令                      | 所属模块                                 | 对应架构层        |
+| ----------------------------- | ---------------------------------------- | ----------------- |
+| `init`                        | `state_machine` + `storage`              | P1 存储层         |
+| `status`                      | `cli::output`                            | P3 状态机查询     |
+| `edit`                        | `state_machine::manual`                  | P3 manual_edit 层 |
+| `agent edit/submit`           | `state_machine::agent`                   | P3 agent_edit 层  |
+| `approval list/approve/reject`| `state_machine::approval`                | P3 approval 层    |
+| `approval merge-to-unified`   | `state_machine::integrated` + `unified`  | P3 多层流水线     |
+| `approval merge-to-staged`    | `state_machine::unified` + `staged`      | P3 多层流水线     |
+| `commit`                      | `state_machine::staged` + `checkpoint`   | P4 检查点仓库     |
+| `log`                         | `checkpoint` + `storage`                 | P4 历史查询       |
+| `show`                        | `api::service` + `engine::diff`          | P2/P4 差异查看    |
+| `branch`                      | `checkpoint::branch` + `checkpoint::dag` | P4 分支管理       |
+| `merge`                       | `checkpoint::repo` + `engine::merge`     | P4/P2 合并引擎    |
+| `checkpoint restore/diff`     | `checkpoint::repo` + `engine`            | P4/P2 检查点操作  |
+| `checkpoint rollback`         | `state_machine::staged` + `checkpoint`   | P3/P4 回滚        |
+| `backup`                      | `backup`                                 | P5 备份模块       |
+| `restore`                     | `backup`                                 | P5 恢复模块       |
+| `gc`                          | `git_sync::gc`                           | P6 垃圾回收       |
+| `compact`                     | `storage::sqlite`                        | P1 数据库维护     |
+| `git-commit`                  | `git_sync::git_bridge`                   | P6 Git 同步       |
+| `pull`                        | `git_sync::git_bridge`                   | P6 Git 同步       |
+| `clean`                       | `storage::sqlite` + `git_sync::gc`       | P1/P6 数据清理    |
 
 ---
 

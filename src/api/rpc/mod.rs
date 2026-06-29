@@ -338,6 +338,7 @@ impl Layertwine for LayertwineGrpc {
             backup_id: result.backup_id,
             file: result.file,
             deltas_restored: result.deltas_restored as u32,
+            merged_snapshot_id: result.merged_snapshot_id,
         }))
     }
 
@@ -358,24 +359,47 @@ impl Layertwine for LayertwineGrpc {
         }))
     }
 
-    async fn push(
+    async fn git_commit(
         &self,
-        request: Request<layertwine_proto::PushRequest>,
-    ) -> Result<Response<layertwine_proto::PushResponse>, Status> {
+        request: Request<layertwine_proto::GitCommitRequest>,
+    ) -> Result<Response<layertwine_proto::GitCommitResponse>, Status> {
         let req = request.into_inner();
-        let api_req = PushRequest {
-            remote: req.remote,
+        let api_req = GitCommitRequest {
             git_repo: req.git_repo,
             message: req.message,
         };
         let service = self.service.clone();
-        let result = tokio::task::spawn_blocking(move || service.push(api_req))
+        let result = tokio::task::spawn_blocking(move || service.git_commit(api_req))
             .await
             .map_err(|e| Status::internal(format!("join error: {}", e)))?
             .map_err(to_status)?;
-        Ok(Response::new(layertwine_proto::PushResponse {
-            remote: result.remote,
+        Ok(Response::new(layertwine_proto::GitCommitResponse {
             git_commit_hash: result.git_commit_hash,
+        }))
+    }
+
+    async fn clean(
+        &self,
+        request: Request<layertwine_proto::CleanRequest>,
+    ) -> Result<Response<layertwine_proto::CleanResponse>, Status> {
+        let req = request.into_inner();
+        let api_req = CleanRequest {
+            branch: req.branch,
+            layer: req.layer,
+            all: req.all,
+        };
+        let service = self.service.clone();
+        let result = tokio::task::spawn_blocking(move || service.clean(api_req))
+            .await
+            .map_err(|e| Status::internal(format!("join error: {}", e)))?
+            .map_err(to_status)?;
+        Ok(Response::new(layertwine_proto::CleanResponse {
+            removed_branches: result.removed_branches as u32,
+            removed_checkpoints: result.removed_checkpoints as u32,
+            removed_snapshots: result.removed_snapshots as u32,
+            removed_deltas: result.removed_deltas as u32,
+            removed_layers: result.removed_layers as u32,
+            message: result.message,
         }))
     }
 

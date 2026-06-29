@@ -180,6 +180,7 @@ impl CheckpointRepo {
 
         // Update current branch head
         self.current_branch_mut().set_head(cp.id);
+        self.dirty_checkpoints.insert(cp.id);
 
         // Persist to storage backend
         if let Some(storage) = &self.storage {

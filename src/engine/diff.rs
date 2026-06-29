@@ -2,11 +2,8 @@
 //!
 //! Convert the output of similar::TextDiff to a Delta representation within Layertwine.
 
-use crate::core::delta::Delta;
-use crate::core::file_node::FileNode;
-use crate::core::types::{DiffOp, Hunk, LineDiff, SourceType};
+use crate::core::types::{DiffOp, Hunk, LineDiff};
 use similar::{ChangeTag, TextDiff};
-use std::path::PathBuf;
 
 // Performance optimizations
 use lazy_static::lazy_static;
@@ -14,6 +11,9 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
+
+/// Maximum number of entries in the unified diff cache to prevent memory leaks
+const DIFF_CACHE_MAX_ENTRIES: usize = 100;
 
 lazy_static! {
     static ref DIFF_CACHE: Mutex<HashMap<u64, String>> = Mutex::new(HashMap::new());
@@ -40,6 +40,11 @@ fn strip_newline(s: &str) -> String {
 /// Generate a line-level diff using similar::TextDiff::from_lines.
 /// Grouped as Hunk list by grouped_ops(3), context rows = 3.
 pub fn diff_to_line_diff(old: &str, new: &str) -> LineDiff {
+    // Fast path: identical texts produce no diff, avoid expensive diff computation
+    if old == new {
+        return LineDiff { hunks: vec![] };
+    }
+
     let diff = TextDiff::from_lines(old, new);
     let grouped = diff.grouped_ops(3);
 
@@ -119,112 +124,6 @@ pub fn diff_to_line_diff(old: &str, new: &str) -> LineDiff {
     LineDiff { hunks }
 }
 
-/// Gather all changes from diff and build the complete Delta
-///
-/// Use iter_all_changes() to iterate over all row changes and construct a Delta containing the full content mapping.
-#[allow(dead_code)]
-fn collect_changes_from_diff<'a>(
-    diff: &'a TextDiff<'a, 'a, str>,
-    path: PathBuf,
-    old_content: &[u8],
-    source_type: SourceType,
-) -> Delta {
-    // Building LineDiff from iter_all_changes
-    let mut equal_ops: Vec<DiffOp> = Vec::new();
-    let mut hunks: Vec<Hunk> = Vec::new();
-    let mut current_ops = Vec::new();
-    let mut old_pos: usize = 0;
-    let mut new_pos: usize = 0;
-    let mut in_change = false;
-
-    for change in diff.iter_all_changes() {
-        match change.tag() {
-            ChangeTag::Equal => {
-                if in_change {
-                    // End the previous change block
-                    if !current_ops.is_empty() {
-                        let old_start = old_pos.saturating_sub(1) as u32;
-                        let new_start = new_pos.saturating_sub(1) as u32;
-                        hunks.push(Hunk {
-                            old_start,
-                            old_len: 0, // Will be amended below
-                            new_start,
-                            new_len: 0,
-                            ops: std::mem::take(&mut current_ops),
-                        });
-                    }
-                    in_change = false;
-                }
-                equal_ops.push(DiffOp::Equal { count: 1 });
-                old_pos += 1;
-                new_pos += 1;
-            }
-            ChangeTag::Delete => {
-                in_change = true;
-                current_ops.push(DiffOp::Delete {
-                    old_start: old_pos as u32 + 1,
-                    count: 1,
-                });
-                old_pos += 1;
-            }
-            ChangeTag::Insert => {
-                in_change = true;
-                current_ops.push(DiffOp::Insert {
-                    new_start: new_pos as u32 + 1,
-                    lines: vec![change.value().to_string()],
-                });
-                new_pos += 1;
-            }
-        }
-    }
-
-    // Last paragraph change
-    if !current_ops.is_empty() {
-        let old_start = old_pos.saturating_sub(1) as u32;
-        let new_start = new_pos.saturating_sub(1) as u32;
-        hunks.push(Hunk {
-            old_start,
-            old_len: 0,
-            new_start,
-            new_len: 0,
-            ops: std::mem::take(&mut current_ops),
-        });
-    }
-
-    // Fix the len field in Hunk
-    for hunk in &mut hunks {
-        let mut old_len = 0u32;
-        let mut new_len = 0u32;
-        for op in &hunk.ops {
-            match op {
-                DiffOp::Equal { count } => {
-                    old_len += count;
-                    new_len += count;
-                }
-                DiffOp::Delete { count, .. } => {
-                    old_len += count;
-                }
-                DiffOp::Insert { lines, .. } => {
-                    new_len += lines.len() as u32;
-                }
-                DiffOp::Replace {
-                    old_count, lines, ..
-                } => {
-                    old_len += old_count;
-                    new_len += lines.len() as u32;
-                }
-            }
-        }
-        hunk.old_len = old_len;
-        hunk.new_len = new_len;
-    }
-
-    let line_diff = LineDiff { hunks };
-
-    let file_node = FileNode::new(path, old_content);
-    Delta::new(file_node, line_diff, source_type)
-}
-
 /// Unified diff output (with context preserved) for displaying the
 pub fn format_unified_diff(old: &str, new: &str, context: usize) -> String {
     // Try cache for small files
@@ -251,11 +150,20 @@ pub fn format_unified_diff(old: &str, new: &str, context: usize) -> String {
         diff.unified_diff().context_radius(context).to_string()
     };
 
-    // Cache small file results
-    let total_size = old.len() + new.len();
+    // Cache small file results with bounded size to prevent memory leaks
     if total_size < 100000 {
         let hash = compute_hash(old, new, context);
-        DIFF_CACHE.lock().unwrap().insert(hash, result.clone());
+        let mut cache = DIFF_CACHE.lock().unwrap();
+        if cache.len() >= DIFF_CACHE_MAX_ENTRIES {
+            // Evict oldest half of entries instead of clearing all,
+            // preserving some cache benefit during consecutive calls.
+            let to_remove = cache.len() / 2;
+            let keys: Vec<_> = cache.keys().take(to_remove).copied().collect();
+            for k in keys {
+                cache.remove(&k);
+            }
+        }
+        cache.insert(hash, result.clone());
     }
 
     result
@@ -353,54 +261,6 @@ mod tests {
             2,
             "two separated changes should produce 2 hunks"
         );
-    }
-
-    #[test]
-    fn test_collect_changes() {
-        let old = "keep\nremove\nkeep\n";
-        let new = "keep\nadded\nkeep\n";
-        let diff = TextDiff::from_lines(old, new);
-        let delta = collect_changes_from_diff(
-            &diff,
-            PathBuf::from("test.txt"),
-            old.as_bytes(),
-            SourceType::Manual,
-        );
-        assert!(delta.id.to_hex().len() == 64, "delta should have valid id");
-    }
-
-    #[test]
-    fn test_collect_changes_empty_diff() {
-        let old = "same\n";
-        let new = "same\n";
-        let diff = TextDiff::from_lines(old, new);
-        let delta = collect_changes_from_diff(
-            &diff,
-            PathBuf::from("test.txt"),
-            old.as_bytes(),
-            SourceType::Manual,
-        );
-        assert!(delta.diff.hunks.is_empty() || delta.diff.hunks.iter().all(|h| h.ops.is_empty()));
-    }
-
-    #[test]
-    fn test_collect_changes_only_insert() {
-        let old = "";
-        let new = "a\nb\nc\n";
-        let diff = TextDiff::from_lines(old, new);
-        let delta = collect_changes_from_diff(
-            &diff,
-            PathBuf::from("test.txt"),
-            old.as_bytes(),
-            SourceType::Manual,
-        );
-        assert!(!delta.diff.hunks.is_empty());
-        let has_insert = delta
-            .diff
-            .hunks
-            .iter()
-            .any(|h| h.ops.iter().any(|op| matches!(op, DiffOp::Insert { .. })));
-        assert!(has_insert);
     }
 
     #[test]

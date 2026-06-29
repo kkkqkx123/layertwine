@@ -4,10 +4,11 @@
 //! 1. apply_deltas: rebuilds the complete file content from the baseline content + Delta chains
 //! 2. merge_texts: three-way text merge (with conflict detection)
 
+use std::borrow::Cow;
+
 use crate::core::delta::Delta;
+use crate::core::types::DiffOp;
 use crate::core::types::LineDiff;
-#[allow(unused_imports)]
-use crate::core::types::{DiffOp, Hunk};
 use crate::error::{LayertwineError, Result};
 
 /// Apply Delta sequentially from the baseline content to rebuild the complete file content.
@@ -20,105 +21,40 @@ use crate::error::{LayertwineError, Result};
 /// - Insert: Inserts a new line
 /// - Replace: skips the old line and inserts a new one
 pub fn apply_deltas(content: &str, deltas: &[Delta]) -> Result<String> {
-    let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+    // Fast path: no deltas to apply, avoid split/join overhead entirely
+    if deltas.is_empty() {
+        return Ok(content.to_string());
+    }
+
+    let has_trailing_newline = content.ends_with('\n');
+    // Use Cow<str> to avoid cloning unchanged lines through the delta chain.
+    // Borrowed for lines that pass through unchanged, Owned for inserted/replaced lines.
+    let mut lines: Vec<Cow<str>> = content.lines().map(Cow::Borrowed).collect();
 
     for delta in deltas {
         lines = apply_line_diff(&lines, &delta.diff)?;
     }
 
-    Ok(lines.join("\n"))
-}
-
-/// Batch apply multiple deltas with optimized sorting and processing.
-///
-/// This function collects all hunks from all deltas, sorts them once, and applies them in order.
-/// This is more efficient than applying deltas sequentially when there are multiple deltas.
-pub fn apply_deltas_batch(content: &str, deltas: &[Delta]) -> Result<String> {
-    if deltas.is_empty() {
-        let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
-        return Ok(lines.join("\n"));
+    let result = lines.join("\n");
+    // .lines() + .join("\n") strips trailing newlines. Restore so downstream
+    // consumers (TextDiff::from_lines, diff_to_line_diff) get correct tokens.
+    if has_trailing_newline && !result.is_empty() {
+        Ok(result + "\n")
+    } else {
+        Ok(result)
     }
-
-    let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
-
-    let mut all_hunks: Vec<(usize, usize, &Hunk)> = Vec::new();
-    for (delta_idx, delta) in deltas.iter().enumerate() {
-        for (hunk_idx, hunk) in delta.diff.hunks.iter().enumerate() {
-            all_hunks.push((delta_idx, hunk_idx, hunk));
-        }
-    }
-
-    all_hunks.sort_unstable_by_key(|(_, _, h)| h.old_start);
-
-    for (_delta_idx, _hunk_idx, hunk) in &all_hunks {
-        apply_single_hunk_to_lines(&mut lines, hunk)?;
-    }
-
-    Ok(lines.join("\n"))
-}
-
-/// Apply a single hunk to the lines vector in-place.
-fn apply_single_hunk_to_lines(lines: &mut Vec<String>, hunk: &Hunk) -> Result<()> {
-    let hunk_start = (hunk.old_start.saturating_sub(1)) as usize;
-    let hunk_end = hunk_start + hunk.old_len as usize;
-
-    if hunk_end > lines.len() {
-        return Err(LayertwineError::Engine(format!(
-            "Hunk out of range: old_start={}, old_len={}, total rows={}",
-            hunk.old_start,
-            hunk.old_len,
-            lines.len()
-        )));
-    }
-
-    // Replace the hunk range with the new content
-    let mut new_lines: Vec<String> = Vec::new();
-    let mut hunk_pos = hunk_start;
-
-    for op in &hunk.ops {
-        match op {
-            DiffOp::Equal { count } => {
-                let c = *count as usize;
-                new_lines.extend_from_slice(&lines[hunk_pos..hunk_pos + c]);
-                hunk_pos += c;
-            }
-            DiffOp::Delete { count, .. } => {
-                hunk_pos += *count as usize;
-            }
-            DiffOp::Insert {
-                lines: insert_lines,
-                ..
-            } => {
-                new_lines.extend(insert_lines.iter().cloned());
-            }
-            DiffOp::Replace {
-                old_count,
-                lines: replace_lines,
-                ..
-            } => {
-                hunk_pos += *old_count as usize;
-                new_lines.extend(replace_lines.iter().cloned());
-            }
-        }
-    }
-
-    // Replace the hunk range with new content
-    lines.splice(hunk_start..hunk_end, new_lines);
-
-    Ok(())
 }
 
 /// Apply a single LineDiff to an array of rows.
-fn apply_line_diff(lines: &[String], diff: &LineDiff) -> Result<Vec<String>> {
-    let mut result: Vec<String> = Vec::with_capacity(lines.len());
+///
+/// Uses `Cow<str>` so unchanged lines can be borrowed from the input without allocation,
+/// while inserted/replaced lines are owned strings. This significantly reduces memory
+/// allocation overhead in multi-delta chains.
+fn apply_line_diff<'a>(lines: &[Cow<'a, str>], diff: &LineDiff) -> Result<Vec<Cow<'a, str>>> {
+    let mut result: Vec<Cow<'a, str>> = Vec::with_capacity(lines.len());
     let mut old_pos = 0usize;
 
-    // Sort by old_start without cloning hunks
-    let mut hunk_indices: Vec<usize> = (0..diff.hunks.len()).collect();
-    hunk_indices.sort_unstable_by_key(|&i| diff.hunks[i].old_start);
-
-    for hunk_idx in hunk_indices {
-        let hunk = &diff.hunks[hunk_idx];
+    for hunk in &diff.hunks {
         let hunk_start = (hunk.old_start.saturating_sub(1)) as usize;
         let hunk_end = hunk_start + hunk.old_len as usize;
 
@@ -138,7 +74,7 @@ fn apply_line_diff(lines: &[String], diff: &LineDiff) -> Result<Vec<String>> {
             )));
         }
 
-        // Copy the unchanged part before the hunk
+        // Copy the unchanged part before the hunk (Cow::Borrowed — no allocation)
         if hunk_start > old_pos {
             result.extend_from_slice(&lines[old_pos..hunk_start]);
         }
@@ -158,7 +94,7 @@ fn apply_line_diff(lines: &[String], diff: &LineDiff) -> Result<Vec<String>> {
                 DiffOp::Insert {
                     lines: new_lines, ..
                 } => {
-                    result.extend(new_lines.iter().cloned());
+                    result.extend(new_lines.iter().map(|s| Cow::Owned(s.clone())));
                 }
                 DiffOp::Replace {
                     old_count,
@@ -166,7 +102,7 @@ fn apply_line_diff(lines: &[String], diff: &LineDiff) -> Result<Vec<String>> {
                     ..
                 } => {
                     hunk_pos += *old_count as usize;
-                    result.extend(new_lines.iter().cloned());
+                    result.extend(new_lines.iter().map(|s| Cow::Owned(s.clone())));
                 }
             }
         }
@@ -174,7 +110,7 @@ fn apply_line_diff(lines: &[String], diff: &LineDiff) -> Result<Vec<String>> {
         old_pos = hunk_end;
     }
 
-    // Remaining unchanged rows
+    // Remaining unchanged rows (Cow::Borrowed — no allocation)
     if old_pos < lines.len() {
         result.extend_from_slice(&lines[old_pos..]);
     }
@@ -223,23 +159,55 @@ impl MergeConflict {
 pub fn merge_texts(base: &str, ours: &str, theirs: &str) -> (String, Vec<MergeConflict>) {
     use crate::engine::diff::diff_to_line_diff;
 
+    // Fast path: both sides identical → return either one
+    if ours == theirs {
+        let has_trailing_newline =
+            base.ends_with('\n') || ours.ends_with('\n') || theirs.ends_with('\n');
+        let result = if has_trailing_newline && !ours.is_empty() && !ours.ends_with('\n') {
+            format!("{}\n", ours)
+        } else {
+            ours.to_string()
+        };
+        return (result, vec![]);
+    }
+    // Fast path: only ours changed → return ours
+    if base == theirs {
+        let has_trailing_newline =
+            base.ends_with('\n') || ours.ends_with('\n') || theirs.ends_with('\n');
+        let result = if has_trailing_newline && !ours.is_empty() && !ours.ends_with('\n') {
+            format!("{}\n", ours)
+        } else {
+            ours.to_string()
+        };
+        return (result, vec![]);
+    }
+    // Fast path: only theirs changed → return theirs
+    if base == ours {
+        let has_trailing_newline =
+            base.ends_with('\n') || ours.ends_with('\n') || theirs.ends_with('\n');
+        let result = if has_trailing_newline && !theirs.is_empty() && !theirs.ends_with('\n') {
+            format!("{}\n", theirs)
+        } else {
+            theirs.to_string()
+        };
+        return (result, vec![]);
+    }
+
     let diff_ours = diff_to_line_diff(base, ours);
     let diff_theirs = diff_to_line_diff(base, theirs);
 
-    // Use Cow to avoid unnecessary cloning for unchanged lines
     let base_lines: Vec<&str> = base.lines().collect();
-    let ours_lines: Vec<&str> = ours.lines().collect();
-    let theirs_lines: Vec<&str> = theirs.lines().collect();
 
     // Collect the changes made by both sides on the base
     let mut our_changes: Vec<ChangeRange> = Vec::new();
     let mut their_changes: Vec<ChangeRange> = Vec::new();
 
-    extract_changes_from_line_diff(&diff_ours, &ours_lines, &mut our_changes);
-    extract_changes_from_line_diff(&diff_theirs, &theirs_lines, &mut their_changes);
+    extract_changes_from_line_diff(&diff_ours, &mut our_changes);
+    extract_changes_from_line_diff(&diff_theirs, &mut their_changes);
 
     // Merge changes on both sides (using jj-like line-by-line markup)
-    let mut result: Vec<String> = Vec::new();
+    // Pre-allocate capacity based on base line count to reduce reallocations
+    let mut result: Vec<String> = Vec::with_capacity(base_lines.len());
     let mut conflicts: Vec<MergeConflict> = Vec::new();
     let mut base_pos = 0usize;
 
@@ -289,6 +257,39 @@ pub fn merge_texts(base: &str, ours: &str, theirs: &str) -> (String, Vec<MergeCo
                         append_unchanged(&mut result, &base_lines, base_pos, oc.base_start);
                         append_change(&mut result, oc);
                         base_pos = oc_end;
+                    } else if oc.base_len == 0 && tc.base_len == 0 {
+                        // Both are pure insertions at the same position.
+                    // If one side is a prefix of the other, take the longer one (no conflict).
+                    if tc.new_lines.starts_with(&oc.new_lines) {
+                        // Theirs includes all of ours → accept theirs
+                        append_unchanged(&mut result, &base_lines, base_pos, oc.base_start);
+                        append_change(&mut result, tc);
+                        base_pos = oc.base_start;
+                    } else if oc.new_lines.starts_with(&tc.new_lines) {
+                        // Ours includes all of theirs → accept ours
+                        append_unchanged(&mut result, &base_lines, base_pos, oc.base_start);
+                        append_change(&mut result, oc);
+                        base_pos = oc.base_start;
+                        } else {
+                            // Different insertions at same position = conflict
+                            append_unchanged(&mut result, &base_lines, base_pos, oc.base_start);
+
+                            let conflict_start_line = result.len();
+                            for line in &oc.new_lines {
+                                result.push(line.clone());
+                            }
+                            base_pos = oc_end.max(tc_end);
+
+                            conflicts.push(MergeConflict {
+                                start_line: conflict_start_line,
+                                base: base_lines[oc.base_start..oc.base_start + oc.base_len]
+                                    .iter()
+                                    .map(|s| s.to_string())
+                                    .collect(),
+                                ours: oc.new_lines.clone(),
+                                theirs: tc.new_lines.clone(),
+                            });
+                        }
                     } else {
                         // Overlapping or same scope but different content = conflict
                         append_unchanged(&mut result, &base_lines, base_pos, oc.base_start);
@@ -325,7 +326,15 @@ pub fn merge_texts(base: &str, ours: &str, theirs: &str) -> (String, Vec<MergeCo
         }
     }
 
-    (result.join("\n"), conflicts)
+    let result_str = result.join("\n");
+    // Preserve trailing newline (consistent with apply_deltas behavior)
+    // so downstream consumers get accurate line-terminated text.
+    let has_trailing_newline = base.ends_with('\n') || ours.ends_with('\n') || theirs.ends_with('\n');
+    if has_trailing_newline && !result_str.is_empty() {
+        (result_str + "\n", conflicts)
+    } else {
+        (result_str, conflicts)
+    }
 }
 
 /// Scope of the change: a paragraph in the tag base is replaced with the new content.
@@ -336,13 +345,30 @@ struct ChangeRange {
     new_lines: Vec<String>,
 }
 
+/// Flush accumulated changes into the changes vector and reset accumulators.
+fn flush_change(
+    changes: &mut Vec<ChangeRange>,
+    current_base_start: &mut Option<usize>,
+    current_base_len: &mut usize,
+    current_new_lines: &mut Vec<String>,
+) {
+    if let Some(start) = *current_base_start {
+        changes.push(ChangeRange {
+            base_start: start,
+            base_len: *current_base_len,
+            new_lines: std::mem::take(current_new_lines),
+        });
+    }
+    *current_base_start = None;
+    *current_base_len = 0;
+}
+
 /// Extracting changes from LineDiff into ChangeRange list
 ///
 /// Skips the Equal context and extracts only the actual change area (Delete/Insert/Replace).
 /// Each hunk may generate multiple ChangeRanges (Equal segregated multiple change segments).
 fn extract_changes_from_line_diff(
     diff: &LineDiff,
-    _new_lines: &[&str],
     changes: &mut Vec<ChangeRange>,
 ) {
     for hunk in &diff.hunks {
@@ -361,31 +387,12 @@ fn extract_changes_from_line_diff(
         let mut current_base_len: usize = 0;
         let mut current_new_lines: Vec<String> = Vec::new();
 
-        fn flush_change(
-            changes: &mut Vec<ChangeRange>,
-            _base_offset: usize,
-            current_base_start: &mut Option<usize>,
-            current_base_len: &mut usize,
-            current_new_lines: &mut Vec<String>,
-        ) {
-            if let Some(start) = *current_base_start {
-                changes.push(ChangeRange {
-                    base_start: start,
-                    base_len: *current_base_len,
-                    new_lines: std::mem::take(current_new_lines),
-                });
-            }
-            *current_base_start = None;
-            *current_base_len = 0;
-        }
-
         for op in &hunk.ops {
             match op {
                 DiffOp::Equal { count } => {
                     let c = *count as usize;
                     flush_change(
                         changes,
-                        base_offset,
                         &mut current_base_start,
                         &mut current_base_len,
                         &mut current_new_lines,
@@ -422,7 +429,6 @@ fn extract_changes_from_line_diff(
 
         flush_change(
             changes,
-            base_offset,
             &mut current_base_start,
             &mut current_base_len,
             &mut current_new_lines,
@@ -456,7 +462,7 @@ mod tests {
     fn test_apply_empty_deltas() {
         let content = "hello\nworld\n";
         let result = apply_deltas(content, &[]).unwrap();
-        assert_eq!(result, "hello\nworld");
+        assert_eq!(result, "hello\nworld\n");
     }
 
     #[test]
@@ -482,7 +488,7 @@ mod tests {
             SourceType::Manual,
         );
         let result = apply_deltas(content, &[delta]).unwrap();
-        assert_eq!(result, "line1\nline2\nline3");
+        assert_eq!(result, "line1\nline2\nline3\n");
     }
 
     #[test]
@@ -505,7 +511,7 @@ mod tests {
             SourceType::Manual,
         );
         let result = apply_deltas(content, &[delta]).unwrap();
-        assert_eq!(result, "line1\nline3");
+        assert_eq!(result, "line1\nline3\n");
     }
 
     #[test]
@@ -530,7 +536,7 @@ mod tests {
             SourceType::Manual,
         );
         let result = apply_deltas(content, &[delta]).unwrap();
-        assert_eq!(result, "aaa\nxxx\nccc");
+        assert_eq!(result, "aaa\nxxx\nccc\n");
     }
 
     #[test]
@@ -576,7 +582,7 @@ mod tests {
             SourceType::Manual,
         );
         let result = apply_deltas(content, &[delta1, delta2]).unwrap();
-        assert_eq!(result, "a\nx\ny\nc");
+        assert_eq!(result, "a\nx\ny\nc\n");
     }
 
     #[test]
@@ -605,7 +611,7 @@ mod tests {
         };
         let diff = LineDiff::new(vec![hunk1, hunk_overlap]);
         let result = apply_line_diff(
-            &content.lines().map(|l| l.to_string()).collect::<Vec<_>>(),
+            &content.lines().map(Cow::Borrowed).collect::<Vec<_>>(),
             &diff,
         );
         assert!(result.is_err());
@@ -635,7 +641,7 @@ mod tests {
     fn test_merge_identical() {
         let base = "a\nb\nc\n";
         let (merged, conflicts) = merge_texts(base, base, base);
-        assert_eq!(merged, "a\nb\nc");
+        assert_eq!(merged, "a\nb\nc\n");
         assert!(conflicts.is_empty());
     }
 
@@ -668,7 +674,7 @@ mod tests {
         let theirs = "a\nX\nc\n";
         let (merged, conflicts) = merge_texts(base, ours, theirs);
         assert!(conflicts.is_empty());
-        assert_eq!(merged, "a\nX\nc");
+        assert_eq!(merged, "a\nX\nc\n");
     }
 
     #[test]
@@ -703,7 +709,7 @@ mod tests {
         let theirs = "";
         let (merged, conflicts) = merge_texts(base, ours, theirs);
         assert!(conflicts.is_empty());
-        assert_eq!(merged, "a\nb");
+        assert_eq!(merged, "a\nb\n");
     }
 
     #[test]
@@ -713,7 +719,7 @@ mod tests {
         let theirs = "a\nX\nc\n";
         let (merged, conflicts) = merge_texts(base, ours, theirs);
         assert!(conflicts.is_empty());
-        assert_eq!(merged, "a\nX\nc");
+        assert_eq!(merged, "a\nX\nc\n");
     }
 
     #[test]

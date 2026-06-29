@@ -116,7 +116,7 @@ fn test_full_manual_pipeline() {
     assert!(result.is_ok());
 
     let text = staged_text(&storage);
-    assert_eq!(text, "line1\nmodified\nline3");
+    assert_eq!(text, "line1\nmodified\nline3\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +164,7 @@ fn test_full_agent_pipeline() {
     execute_forward(&storage, ForwardTransition::UnifiedToStaged, &[]).unwrap();
 
     let text = staged_text(&storage);
-    assert_eq!(text, "base\nagent-change");
+    assert_eq!(text, "base\nagent-change\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -325,7 +325,7 @@ fn test_rollback_staged_to_manual() {
 
     // Verify staged has the new content
     let staged_before = staged_text(&storage);
-    assert_eq!(staged_before, "original\nedited");
+    assert_eq!(staged_before, "original\nedited\n");
 
     // Rollback staged → manual
     let result = execute_rollback(&storage, RollbackTransition::StagedToManual, &[]);
@@ -461,7 +461,7 @@ fn test_approval_integrated_unified_staged_chain() {
     assert_ne!(staged_sid, integrated_sid, "staged snapshot must advance");
 
     let text = staged_text(&storage);
-    assert_eq!(text, "start\nchained");
+    assert_eq!(text, "start\nchained\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -491,7 +491,7 @@ fn test_sequential_manual_edits() {
     // Now forward to staged in one step
     ensure_staged(&storage, initial_id);
     execute_forward(&storage, ForwardTransition::ManualToStaged, &[]).unwrap();
-    assert_eq!(staged_text(&storage), "line1\nmodified\nline3");
+    assert_eq!(staged_text(&storage), "line1\nmodified\nline3\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -507,11 +507,11 @@ fn test_edit_after_forward() {
 
     layertwine::layered::manual::apply_manual_edit(&storage, "test.txt", "base\na\n").unwrap();
     execute_forward(&storage, ForwardTransition::ManualToStaged, &[]).unwrap();
-    assert_eq!(staged_text(&storage), "base\na");
+    assert_eq!(staged_text(&storage), "base\na\n");
 
     layertwine::layered::manual::apply_manual_edit(&storage, "test.txt", "base\na\nb\n").unwrap();
     execute_forward(&storage, ForwardTransition::ManualToStaged, &[]).unwrap();
-    assert_eq!(staged_text(&storage), "base\na\nb");
+    assert_eq!(staged_text(&storage), "base\na\nb\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -551,7 +551,7 @@ fn test_state_machine_integration() {
     // Verify via sm
     let staged_pid = layertwine::layered::staged::staged_partition_id();
     let part = sm
-        .get_partition(&layertwine::core::types::LayerType::Staged, &staged_pid)
+        .get_partition(&staged_pid)
         .unwrap();
     assert_eq!(part.current_snapshot, sid);
 

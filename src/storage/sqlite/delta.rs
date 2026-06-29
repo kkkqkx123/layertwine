@@ -5,6 +5,7 @@ use crate::storage::repository::DeltaStore;
 use crate::storage::sqlite::connection::SqliteStorage;
 use crate::StorageResult;
 use rusqlite::{params, Row};
+use std::collections::HashMap;
 
 fn bytes_to_array<const N: usize>(bytes: &[u8]) -> [u8; N] {
     let mut arr = [0u8; N];
@@ -94,13 +95,35 @@ impl DeltaStore for SqliteStorage {
             return Ok(Vec::new());
         }
 
-        if ids.len() == 1 {
-            return Ok(vec![self.get_delta(&ids[0])?]);
+        let conn = self.conn.lock();
+        let placeholders: Vec<String> = (0..ids.len()).map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "SELECT id, file_path, file_hash, diff, source, source_data, timestamp \
+             FROM deltas WHERE id IN ({})",
+            placeholders.join(", ")
+        );
+        let mut stmt = conn.prepare(&sql)?;
+
+        let blob_params: Vec<Vec<u8>> = ids.iter().map(|id| id.0.to_vec()).collect();
+        let param_refs: Vec<&[u8]> = blob_params.iter().map(|v| v.as_slice()).collect();
+
+        let deltas = stmt.query_map(
+            rusqlite::params_from_iter(&param_refs),
+            row_to_delta,
+        )?;
+
+        // Collect into a HashMap so we can return results in the original ID order
+        let mut delta_map: HashMap<Vec<u8>, Delta> = HashMap::new();
+        for d in deltas {
+            let delta = d?;
+            delta_map.insert(delta.id.0.to_vec(), delta);
         }
 
         let mut result = Vec::with_capacity(ids.len());
         for id in ids {
-            result.push(self.get_delta(id)?);
+            if let Some(delta) = delta_map.remove(&id.0.to_vec()) {
+                result.push(delta);
+            }
         }
         Ok(result)
     }

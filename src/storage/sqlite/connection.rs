@@ -91,24 +91,6 @@ impl SqliteStorage {
         f(&conn)
     }
 
-    pub fn with_transaction<F, T>(&self, f: F) -> StorageResult<T>
-    where
-        F: FnOnce(&Connection) -> StorageResult<T>,
-    {
-        let conn = self.conn.lock();
-        conn.execute_batch("BEGIN TRANSACTION;")?;
-        match f(&conn) {
-            Ok(result) => {
-                conn.execute_batch("COMMIT;")?;
-                Ok(result)
-            }
-            Err(e) => {
-                conn.execute_batch("ROLLBACK;")?;
-                Err(e)
-            }
-        }
-    }
-
     /// Run periodic maintenance to prevent file bloat:
     /// 1. Truncate the WAL journal file via checkpoint.
     /// 2. If the freelist ratio exceeds the threshold, reclaim pages
@@ -172,5 +154,74 @@ impl SqliteStorage {
                 message,
             })
         })
+    }
+
+    // ── Cleanup / clear methods ──
+
+    /// Delete all checkpoints from storage.
+    pub fn clear_all_checkpoints(&self) -> StorageResult<usize> {
+        let conn = self.conn.lock();
+        let count = conn.execute("DELETE FROM time_index", [])?;
+        let count2 = conn.execute("DELETE FROM checkpoints", [])?;
+        Ok(count + count2)
+    }
+
+    /// Delete all branches from storage.
+    pub fn clear_all_branches(&self) -> StorageResult<usize> {
+        let conn = self.conn.lock();
+        let count = conn.execute("DELETE FROM branches", [])?;
+        Ok(count as usize)
+    }
+
+    /// Delete all layers from storage.
+    pub fn clear_all_layers(&self) -> StorageResult<usize> {
+        let conn = self.conn.lock();
+        let count = conn.execute("DELETE FROM layers", [])?;
+        Ok(count as usize)
+    }
+
+    /// Delete all snapshots from storage.
+    pub fn clear_all_snapshots(&self) -> StorageResult<usize> {
+        let conn = self.conn.lock();
+        let count = conn.execute("DELETE FROM snapshots", [])?;
+        Ok(count as usize)
+    }
+
+    /// Delete all deltas from storage.
+    pub fn clear_all_deltas(&self) -> StorageResult<usize> {
+        let conn = self.conn.lock();
+        let count = conn.execute("DELETE FROM deltas", [])?;
+        Ok(count as usize)
+    }
+
+    /// Delete orphaned snapshots not referenced by any checkpoint.
+    ///
+    /// Uses SQLite's json_each to extract snapshot IDs stored as JSON arrays
+    /// in the checkpoints table. Only snapshots whose IDs do not appear in
+    /// any checkpoint's snapshot_ids are removed.
+    pub fn cleanup_orphan_snapshots(&self) -> StorageResult<usize> {
+        let conn = self.conn.lock();
+        // Delete snapshots whose ID is not referenced by any checkpoint's snapshot_ids JSON array
+        let sql = "DELETE FROM snapshots WHERE id NOT IN (
+            SELECT DISTINCT json_each.value
+            FROM checkpoints, json_each(checkpoints.snapshot_ids)
+        )";
+        let count = conn.execute(sql, [])?;
+        Ok(count as usize)
+    }
+
+    /// Delete orphaned deltas not referenced by any snapshot.
+    ///
+    /// Uses SQLite's json_each to extract delta IDs stored as JSON arrays
+    /// in the snapshots table. Only deltas whose IDs do not appear in
+    /// any snapshot's deltas array are removed.
+    pub fn cleanup_orphan_deltas(&self) -> StorageResult<usize> {
+        let conn = self.conn.lock();
+        let sql = "DELETE FROM deltas WHERE id NOT IN (
+            SELECT DISTINCT json_each.value
+            FROM snapshots, json_each(snapshots.deltas)
+        )";
+        let count = conn.execute(sql, [])?;
+        Ok(count as usize)
     }
 }

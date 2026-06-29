@@ -130,15 +130,26 @@ pub enum Commands {
         vacuum_full: bool,
     },
 
-    /// Push checkpoints to Git
-    #[command(name = "push")]
-    Push {
-        /// Remote name (default: origin)
-        #[arg(long = "remote", default_value = "origin")]
-        remote: String,
+    /// Commit checkpoints to local Git branch (no remote push)
+    #[command(name = "git-commit")]
+    GitCommit {
         /// Commit message for the Git commit
         #[arg(short = 'm', long = "message", default_value = "sync from layertwine")]
         message: String,
+    },
+
+    /// Clean layertwine storage data (does not touch git or local files)
+    #[command(name = "clean")]
+    Clean {
+        /// Branch name to clean (all checkpoints + orphaned data)
+        #[arg(long = "branch")]
+        branch: Option<String>,
+        /// Layer type to clean (e.g. "staged", "unified", "integrated")
+        #[arg(long = "layer")]
+        layer: Option<String>,
+        /// Clean ALL layertwine storage (reset to initial state)
+        #[arg(long = "all")]
+        all: bool,
     },
 
     /// Fetch and pull from Git

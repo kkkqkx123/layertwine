@@ -78,6 +78,7 @@ http://127.0.0.1:8080
 | ------------------- | ----------- | -------------- |
 | `NOT_FOUND`         | 404         | 实体未找到     |
 | `INVALID_PARAMS`    | 400         | 参数无效       |
+| `ALREADY_EXISTS`    | 409         | 实体已存在     |
 | `STORAGE_ERROR`     | 500         | 存储层错误     |
 | `ENGINE_ERROR`      | 500         | 引擎层错误     |
 | `STATE_MACHINE_ERROR`| 500        | 状态机错误     |
@@ -287,18 +288,150 @@ curl -X POST http://127.0.0.1:8080/api/v1/agent/agent-01/submit
 
 ---
 
-### 6. 审核通过 — `POST /api/v1/approve/{agent_id}`
+### 6. 审批管理端点
 
-审核通过指定 Agent 的修改，执行完整流转：
-1. Agent 修改从 `approval` 层迁移到 `integrated` 分区
-2. 将所有 `integrated` 分区合并到 `unified` 分区
-3. 将 `unified` 分区合并到 `staged` 层
+Layertwine 提供一组细粒度审批管理端点，替代旧版单步 `POST /api/v1/approve/{agent_id}`。
 
-**路径参数：**
+#### 6a. 待审批列表 — `GET /api/v1/approvals`
 
-| 参数       | 类型   | 说明                               |
-| ---------- | ------ | ---------------------------------- |
-| `agent_id` | string | 要审核通过的 Agent 实例 ID         |
+列出所有待审批的 Agent 提交。
+
+**请求：** 无参数。
+
+**响应：**
+
+```json
+{
+  "success": true,
+  "data": {
+    "approvals": [
+      {
+        "agent_id": "agent-01",
+        "partition_name": "agent:agent-01",
+        "current_snapshot": "c3d4e5f6a1b2...",
+        "history_len": 2
+      }
+    ],
+    "total": 1
+  }
+}
+```
+
+**cURL 示例：**
+
+```bash
+curl http://127.0.0.1:8080/api/v1/approvals
+```
+
+#### 6b. 审批通过 — `POST /api/v1/approve-agent`
+
+审批通过指定 Agent 的提交，迁移到 integrated 分区。
+
+**请求体：**
+
+```json
+{
+  "agent_id": "agent-01",
+  "integrated_name": null
+}
+```
+
+| 字段              | 类型           | 说明                               |
+| ----------------- | -------------- | ---------------------------------- |
+| `agent_id`        | string (必需)  | Agent 实例 ID                      |
+| `integrated_name` | string (可选)  | integrated 分区名称，默认自动生成  |
+
+**响应：**
+
+```json
+{
+  "success": true,
+  "data": {
+    "agent_id": "agent-01",
+    "integrated_snapshot_id": "d4e5f6a1b2c3..."
+  }
+}
+```
+
+**cURL 示例：**
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/approve-agent \
+  -H 'Content-Type: application/json' \
+  -d '{"agent_id": "agent-01"}'
+```
+
+#### 6c. 拒绝提交 — `POST /api/v1/reject-agent`
+
+拒绝指定 Agent 的提交，回滚到基线。
+
+**请求体：**
+
+```json
+{
+  "agent_id": "agent-01"
+}
+```
+
+**响应：**
+
+```json
+{
+  "success": true,
+  "data": {
+    "agent_id": "agent-01",
+    "baseline_snapshot_id": "a1b2c3d4e5f6..."
+  }
+}
+```
+
+**cURL 示例：**
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/reject-agent \
+  -H 'Content-Type: application/json' \
+  -d '{"agent_id": "agent-01"}'
+```
+
+#### 6d. 合并到 Unified — `POST /api/v1/merge-to-unified`
+
+将已审批的 integrated 分区合并到 unified 分区。
+
+**请求体：**
+
+```json
+{
+  "integration_names": ["agent-01", "agent-02"]
+}
+```
+
+| 字段                | 类型             | 说明                                            |
+| ------------------- | ---------------- | ----------------------------------------------- |
+| `integration_names` | string[] (可选)  | 指定要合并的 integration 名称，为空时自动检测   |
+
+**响应：**
+
+```json
+{
+  "success": true,
+  "data": {
+    "unified_snapshot_id": "e5f6a1b2c3d4...",
+    "merged_count": 2
+  }
+}
+```
+
+**cURL 示例：**
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/merge-to-unified \
+  -H 'Content-Type: application/json' \
+  -d '{"integration_names": ["agent-01"]}'
+```
+
+#### 6e. 合并到 Staged — `POST /api/v1/merge-to-staged`
+
+将 unified 分区合并到 staged 层。
 
 **请求：** 无请求体。
 
@@ -308,8 +441,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/agent/agent-01/submit
 {
   "success": true,
   "data": {
-    "integrated_snapshot_id": "d4e5f6a1b2c3...",
-    "staged_snapshot_id": "e5f6a1b2c3d4..."
+    "staged_snapshot_id": "f6e5d4c3b2a1..."
   }
 }
 ```
@@ -317,7 +449,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/agent/agent-01/submit
 **cURL 示例：**
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/v1/approve/agent-01
+curl -X POST http://127.0.0.1:8080/api/v1/merge-to-staged
 ```
 
 ---
@@ -665,15 +797,56 @@ curl -X POST http://127.0.0.1:8080/api/v1/gc
 
 ---
 
-### 16. 推送到 Git — `POST /api/v1/push`
+### 16. 数据库压缩 — `POST /api/v1/compact`
 
-将当前分支的检查点历史推送到关联的 Git 远程仓库。
+压缩数据库——截断 WAL 并回收空闲页。
 
 **请求体：**
 
 ```json
 {
-  "remote": "origin",
+  "vacuum_full": false
+}
+```
+
+| 字段          | 类型          | 说明                                              |
+| ------------- | ------------- | ------------------------------------------------- |
+| `vacuum_full` | boolean (可选)| 是否强制执行完整 VACUUM（需要排它锁），默认 false |
+
+**响应：**
+
+```json
+{
+  "success": true,
+  "data": {
+    "wal_checkpointed": true,
+    "freelist_before": 200,
+    "total_pages": 1000,
+    "freelist_after": 50,
+    "vacuum_performed": false,
+    "message": "Database compacted: WAL checkpointed, 150 free pages reclaimed"
+  }
+}
+```
+
+**cURL 示例：**
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/compact \
+  -H 'Content-Type: application/json' \
+  -d '{"vacuum_full": false}'
+```
+
+---
+
+### 17. 提交到本地 Git 分支 — `POST /api/v1/git-commit`
+
+将当前分支的检查点历史提交到关联的 Git 仓库的本地分支。**不执行远程推送**。
+
+**请求体：**
+
+```json
+{
   "git_repo": "/path/to/repo",
   "message": "sync from layertwine"
 }
@@ -681,7 +854,6 @@ curl -X POST http://127.0.0.1:8080/api/v1/gc
 
 | 字段      | 类型           | 说明                                          |
 | --------- | -------------- | --------------------------------------------- |
-| `remote`  | string (可选)  | Git 远程名称，默认 `origin`                   |
 | `git_repo`| string (必需)  | Git 仓库路径                                  |
 | `message` | string (可选)  | Git 提交信息，默认 `"sync from layertwine"`      |
 
@@ -691,7 +863,6 @@ curl -X POST http://127.0.0.1:8080/api/v1/gc
 {
   "success": true,
   "data": {
-    "remote": "origin",
     "git_commit_hash": "9f8e7d6c5b4a..."
   }
 }
@@ -700,14 +871,14 @@ curl -X POST http://127.0.0.1:8080/api/v1/gc
 **cURL 示例：**
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/v1/push \
+curl -X POST http://127.0.0.1:8080/api/v1/git-commit \
   -H 'Content-Type: application/json' \
-  -d '{"remote": "origin", "git_repo": "/path/to/repo", "message": "同步检查点到 Git"}'
+  -d '{"git_repo": "/path/to/repo", "message": "从 Layertwine 同步"}'
 ```
 
 ---
 
-### 17. 从 Git 拉取 — `POST /api/v1/pull`
+### 18. 从 Git 拉取 — `POST /api/v1/pull`
 
 从 Git 远程仓库拉取并导入最新提交为 Layertwine 检查点。
 
@@ -749,7 +920,59 @@ curl -X POST http://127.0.0.1:8080/api/v1/pull \
 
 ---
 
-### 18. 显示差异 — `GET /api/v1/show`
+### 19. 清理存储 — `POST /api/v1/clean`
+
+清理 Layertwine 存储中的数据（不碰 Git 仓库和本地文件）。
+
+**请求体：**
+
+```json
+{
+  "all": false,
+  "branch": null,
+  "layer": "staged"
+}
+```
+
+| 字段     | 类型           | 说明                                                       |
+| -------- | -------------- | ---------------------------------------------------------- |
+| `all`    | boolean (可选) | 清理所有 Layertwine 数据，重置为初始状态                   |
+| `branch` | string (可选)  | 清理指定分支的所有检查点及相关数据                         |
+| `layer`  | string (可选)  | 清理指定层的数据（如 `staged`、`unified`、`integrated`）  |
+
+**响应：**
+
+```json
+{
+  "success": true,
+  "data": {
+    "removed_branches": 1,
+    "removed_checkpoints": 3,
+    "removed_snapshots": 5,
+    "removed_deltas": 12,
+    "removed_layers": 1,
+    "message": "Clean: 1 branch removed, 3 checkpoints, 5 snapshots, 12 deltas, 1 layer\n  All orphaned snapshots and deltas cleaned up."
+  }
+}
+```
+
+**cURL 示例：**
+
+```bash
+# 清理指定层
+curl -X POST http://127.0.0.1:8080/api/v1/clean \
+  -H 'Content-Type: application/json' \
+  -d '{"layer": "staged"}'
+
+# 全部清理
+curl -X POST http://127.0.0.1:8080/api/v1/clean \
+  -H 'Content-Type: application/json' \
+  -d '{"all": true}'
+```
+
+---
+
+### 20. 显示差异 — `GET /api/v1/show`
 
 查看 staged / checkpoint / partition 与基准之间的 unified diff。
 
@@ -790,6 +1013,107 @@ curl "http://127.0.0.1:8080/api/v1/show?show_what=checkpoint&target_id=a1b2c3d4e
 
 # 查看指定 partition 差异
 curl "http://127.0.0.1:8080/api/v1/show?show_what=partition&target_id=manual"
+```
+
+---
+
+### 21. 检查点恢复 — `POST /api/v1/checkpoint/restore`
+
+从指定检查点恢复文件到工作目录。
+
+**请求体：**
+
+```json
+{
+  "checkpoint_id": "a1b2c3d4e5f6...",
+  "source_filter": null
+}
+```
+
+| 字段            | 类型             | 说明                                     |
+| --------------- | ---------------- | ---------------------------------------- |
+| `checkpoint_id` | string (必需)    | 检查点 ID                                |
+| `source_filter` | string[] (可选)  | 源过滤模式（glob），为空时恢复所有文件   |
+
+**cURL 示例：**
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/checkpoint/restore \
+  -H 'Content-Type: application/json' \
+  -d '{"checkpoint_id": "a1b2c3d4e5f6"}'
+```
+
+---
+
+### 22. 按时间恢复 — `POST /api/v1/checkpoint/restore-by-time`
+
+恢复到距离目标时间最近的检查点。
+
+**请求体：**
+
+```json
+{
+  "target_time": 1684396800000,
+  "source_filter": null
+}
+```
+
+| 字段            | 类型             | 说明                                      |
+| --------------- | ---------------- | ----------------------------------------- |
+| `target_time`   | number (必需)    | 目标时间戳（Unix 毫秒）                   |
+| `source_filter` | string[] (可选)  | 源过滤模式（glob）                        |
+
+**cURL 示例：**
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/checkpoint/restore-by-time \
+  -H 'Content-Type: application/json' \
+  -d '{"target_time": 1684396800000}'
+```
+
+---
+
+### 23. 检查点差异 — `POST /api/v1/checkpoint/diff`
+
+对比两个检查点之间的差异。
+
+**请求体：**
+
+```json
+{
+  "from_id": "a1b2c3d4e5f6...",
+  "to_id": "b2c3d4e5f6a1..."
+}
+```
+
+**cURL 示例：**
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/checkpoint/diff \
+  -H 'Content-Type: application/json' \
+  -d '{"from_id": "a1b2c3d4e5f6", "to_id": "b2c3d4e5f6a1"}'
+```
+
+---
+
+### 24. 回滚检查点 — `POST /api/v1/checkpoint/rollback`
+
+将 staged 分区回滚到指定检查点。
+
+**请求体：**
+
+```json
+{
+  "checkpoint_id": "a1b2c3d4e5f6..."
+}
+```
+
+**cURL 示例：**
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/checkpoint/rollback \
+  -H 'Content-Type: application/json' \
+  -d '{"checkpoint_id": "a1b2c3d4e5f6"}'
 ```
 
 ---
@@ -835,11 +1159,26 @@ curl -X POST http://127.0.0.1:8080/api/v1/agent/agent-b/edit \
   -d '{"file":"src/db.rs","content":"pub fn connect() {}"}'
 curl -X POST http://127.0.0.1:8080/api/v1/agent/agent-b/submit
 
-# 4. 人工审核通过
-curl -X POST http://127.0.0.1:8080/api/v1/approve/agent-a
-curl -X POST http://127.0.0.1:8080/api/v1/approve/agent-b
+# 4. 查看待审批列表
+curl http://127.0.0.1:8080/api/v1/approvals
 
-# 5. 提交最终检查点
+# 5. 审批通过
+curl -X POST http://127.0.0.1:8080/api/v1/approve-agent \
+  -H 'Content-Type: application/json' \
+  -d '{"agent_id":"agent-a"}'
+curl -X POST http://127.0.0.1:8080/api/v1/approve-agent \
+  -H 'Content-Type: application/json' \
+  -d '{"agent_id":"agent-b"}'
+
+# 6. 合并到 unified
+curl -X POST http://127.0.0.1:8080/api/v1/merge-to-unified \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+
+# 7. 合并到 staged
+curl -X POST http://127.0.0.1:8080/api/v1/merge-to-staged
+
+# 8. 提交最终检查点
 curl -X POST http://127.0.0.1:8080/api/v1/commit \
   -H 'Content-Type: application/json' \
   -d '{"message":"合并 auth 和 db 模块","author":"reviewer"}'
@@ -861,8 +1200,8 @@ curl -X POST http://127.0.0.1:8080/api/v1/commit \
   -H 'Content-Type: application/json' \
   -d '{"message":"Layertwine 编辑"}'
 
-# 3. 推送检查点到 Git
-curl -X POST http://127.0.0.1:8080/api/v1/push \
+# 3. 提交到本地 Git 分支
+curl -X POST http://127.0.0.1:8080/api/v1/git-commit \
   -H 'Content-Type: application/json' \
   -d '{"git_repo":"/path/to/repo","message":"从 Layertwine 同步"}'
 
@@ -909,26 +1248,36 @@ curl http://127.0.0.1:8080/api/v1/branches
 
 每个 HTTP 端点对应的内部模块及架构层：
 
-| HTTP 端点                                   | 所属模块                                 | 架构层              |
-| ------------------------------------------- | ---------------------------------------- | ------------------- |
-| `POST /api/v1/init`                         | `state_machine` + `storage`              | P1 存储层           |
-| `GET  /api/v1/status`                       | `api::service`                           | P3 状态机查询       |
-| `POST /api/v1/edit`                         | `layered::manual`                        | P3 manual_edit 层   |
-| `POST /api/v1/agent/{id}/edit`              | `layered::agent`                         | P3 agent_edit 层    |
-| `POST /api/v1/agent/{id}/submit`            | `layered::agent` + `approval`            | P3 approval 层      |
-| `POST /api/v1/approve/{agent_id}`           | `layered::integrated` + `unified` + `staged` | P3 多 层流水线  |
-| `POST /api/v1/commit`                       | `checkpoint::repo`                       | P4 检查点仓库       |
-| `GET  /api/v1/log`                          | `checkpoint::repo`                       | P4 历史查询         |
-| `GET  /api/v1/branches`                     | `checkpoint::branch`                     | P4 分支管理         |
-| `POST /api/v1/branches`                     | `checkpoint::repo`                       | P4 分支管理         |
-| `POST /api/v1/branches/{name}/switch`       | `checkpoint::repo` + `state_machine`     | P4 分支切换         |
-| `POST /api/v1/merge`                        | `checkpoint::repo` + `engine::merge`     | P4/P2 合并引擎      |
-| `POST /api/v1/backup`                       | `backup::backup_repo`                    | P5 备份模块         |
-| `POST /api/v1/restore`                      | `backup::backup_repo`                    | P5 恢复模块         |
-| `POST /api/v1/gc`                           | `git_sync::gc`                           | P6 垃圾回收         |
-| `POST /api/v1/push`                         | `git_sync::git_bridge`                   | P6 Git 同步         |
-| `POST /api/v1/pull`                         | `git_sync::git_bridge`                   | P6 Git 同步         |
-| `GET  /api/v1/show`                         | `api::service` + `engine::diff`          | P2/P4 差异查看      |
+| HTTP 端点                                           | 所属模块                                 | 架构层              |
+| --------------------------------------------------- | ---------------------------------------- | ------------------- |
+| `POST /api/v1/init`                                 | `state_machine` + `storage`              | P1 存储层           |
+| `GET  /api/v1/status`                               | `api::service`                           | P3 状态机查询       |
+| `POST /api/v1/edit`                                 | `layered::manual`                        | P3 manual_edit 层   |
+| `POST /api/v1/agent/{id}/edit`                      | `layered::agent`                         | P3 agent_edit 层    |
+| `POST /api/v1/agent/{id}/submit`                    | `layered::agent` + `approval`            | P3 approval 层      |
+| `GET  /api/v1/approvals`                            | `api::service` + `state_machine`         | P3 审批查询         |
+| `POST /api/v1/approve-agent`                        | `state_machine::approval`                | P3 approval 层      |
+| `POST /api/v1/reject-agent`                         | `state_machine::approval`                | P3 approval 层      |
+| `POST /api/v1/merge-to-unified`                     | `layered::integrated` + `unified`        | P3 多层流水线       |
+| `POST /api/v1/merge-to-staged`                      | `layered::unified` + `staged`            | P3 多层流水线       |
+| `POST /api/v1/commit`                               | `checkpoint::repo`                       | P4 检查点仓库       |
+| `GET  /api/v1/log`                                  | `checkpoint::repo`                       | P4 历史查询         |
+| `GET  /api/v1/branches`                             | `checkpoint::branch`                     | P4 分支管理         |
+| `POST /api/v1/branches`                             | `checkpoint::repo`                       | P4 分支管理         |
+| `POST /api/v1/branches/{name}/switch`               | `checkpoint::repo` + `state_machine`     | P4 分支切换         |
+| `POST /api/v1/merge`                                | `checkpoint::repo` + `engine::merge`     | P4/P2 合并引擎      |
+| `POST /api/v1/backup`                               | `backup::backup_repo`                    | P5 备份模块         |
+| `POST /api/v1/restore`                              | `backup::backup_repo`                    | P5 恢复模块         |
+| `POST /api/v1/gc`                                   | `git_sync::gc`                           | P6 垃圾回收         |
+| `POST /api/v1/compact`                              | `storage::sqlite`                        | P1 数据库维护       |
+| `POST /api/v1/git-commit`                           | `git_sync::git_bridge`                   | P6 Git 同步         |
+| `POST /api/v1/pull`                                 | `git_sync::git_bridge`                   | P6 Git 同步         |
+| `GET  /api/v1/show`                                 | `api::service` + `engine::diff`          | P2/P4 差异查看      |
+| `POST /api/v1/clean`                                | `storage::sqlite` + `git_sync::gc`       | P1/P6 数据清理      |
+| `POST /api/v1/checkpoint/restore`                   | `checkpoint::repo` + `engine`            | P4/P2 检查点恢复    |
+| `POST /api/v1/checkpoint/restore-by-time`           | `checkpoint::repo` + `engine`            | P4/P2 检查点恢复    |
+| `POST /api/v1/checkpoint/diff`                      | `checkpoint::repo` + `engine`            | P4/P2 差异对比      |
+| `POST /api/v1/checkpoint/rollback`                  | `state_machine::staged` + `checkpoint`   | P3/P4 回滚          |
 
 ---
 

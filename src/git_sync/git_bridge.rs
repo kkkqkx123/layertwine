@@ -6,11 +6,52 @@ use crate::core::file_node::FileNode;
 use crate::core::snapshot::Snapshot;
 use crate::core::types::LineDiff;
 use crate::core::types::{CheckpointId, SourceType};
+use crate::engine::merge::apply_deltas;
 use crate::error::{LayertwineError, Result};
 use crate::storage::repository::{DeltaStore, FileNodeStore, SnapshotStore};
 
 #[cfg(test)]
 use crate::engine::diff::diff_to_line_diff;
+
+/// Which ref namespace to use for git commits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefNamespace {
+    /// Commit directly to the current git branch (HEAD), updating working tree and index.
+    /// This is the default, backward-compatible mode.
+    CurrentBranch,
+    /// Commit to `refs/layertwine/<branch>`, isolated from working tree.
+    /// Uses TreeBuilder directly without touching HEAD, index, or working tree.
+    Isolated,
+}
+
+impl Default for RefNamespace {
+    fn default() -> Self {
+        Self::CurrentBranch
+    }
+}
+
+/// Configuration for git sync operations.
+#[derive(Debug, Clone)]
+pub struct GitSyncConfig {
+    /// Which ref namespace to use for the git commit.
+    pub ref_namespace: RefNamespace,
+    /// Whether to require the git working tree to be clean before committing.
+    /// Only applies in `CurrentBranch` mode.
+    pub require_clean_tree: bool,
+    /// Whether to write files to the working tree (only for `CurrentBranch` mode).
+    /// When false, uses TreeBuilder even in `CurrentBranch` mode.
+    pub write_working_tree: bool,
+}
+
+impl Default for GitSyncConfig {
+    fn default() -> Self {
+        Self {
+            ref_namespace: RefNamespace::CurrentBranch,
+            require_clean_tree: false,
+            write_working_tree: true,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncStatus {
@@ -105,17 +146,42 @@ impl GitBridge {
         Ok(())
     }
 
-    /// Push the current state of a checkpoint repo branch to Git.
+    /// Commit the current checkpoint state to Git.
     ///
-    /// Restores ALL file contents from ALL baseline snapshots, writes to the
-    /// Git working tree, stages them, creates a commit, and records the
-    /// git_anchor in the checkpoint metadata.
+    /// Depending on `config.ref_namespace`:
+    /// - `CurrentBranch`: writes files to working tree, stages, commits to HEAD (backward compatible)
+    /// - `Isolated`: creates tree via TreeBuilder, commits to `refs/layertwine/<branch>`,
+    ///   does NOT touch HEAD, index, or working tree.
+    ///
+    /// Records the git commit hash in the checkpoint's `git_anchor` metadata.
     pub fn push_to_git<S>(
         storage: &S,
         git_repo_path: &Path,
         checkpoint_repo: &mut CheckpointRepo,
         branch_name: &str,
         message: &str,
+    ) -> Result<String>
+    where
+        S: SnapshotStore + DeltaStore + FileNodeStore,
+    {
+        Self::push_to_git_with_config(
+            storage,
+            git_repo_path,
+            checkpoint_repo,
+            branch_name,
+            message,
+            &GitSyncConfig::default(),
+        )
+    }
+
+    /// Commit the current checkpoint state to Git with explicit configuration.
+    pub fn push_to_git_with_config<S>(
+        storage: &S,
+        git_repo_path: &Path,
+        checkpoint_repo: &mut CheckpointRepo,
+        branch_name: &str,
+        message: &str,
+        config: &GitSyncConfig,
     ) -> Result<String>
     where
         S: SnapshotStore + DeltaStore + FileNodeStore,
@@ -137,9 +203,77 @@ impl GitBridge {
             ));
         }
 
+        // Clone to release immutable borrow before passing checkpoint_repo as &mut
+        let checkpoint = checkpoint.clone();
+
+        match config.ref_namespace {
+            RefNamespace::Isolated => {
+                Self::push_to_git_isolated(
+                    &git_repo,
+                    storage,
+                    checkpoint_repo,
+                    &checkpoint,
+                    branch_name,
+                    message,
+                    config,
+                )
+            }
+            RefNamespace::CurrentBranch => {
+                Self::push_to_git_current_branch(
+                    &git_repo,
+                    storage,
+                    checkpoint_repo,
+                    &checkpoint,
+                    branch_name,
+                    message,
+                    config,
+                )
+            }
+        }
+    }
+
+    /// CurrentBranch mode: write to working tree + commit to HEAD.
+    fn push_to_git_current_branch<S>(
+        git_repo: &git2::Repository,
+        storage: &S,
+        checkpoint_repo: &mut CheckpointRepo,
+        checkpoint: &crate::checkpoint::types::Checkpoint,
+        branch_name: &str,
+        message: &str,
+        config: &GitSyncConfig,
+    ) -> Result<String>
+    where
+        S: SnapshotStore + DeltaStore + FileNodeStore,
+    {
+        if config.require_clean_tree {
+            let statuses = git_repo.statuses(None).map_err(|e| {
+                LayertwineError::GitSync(format!("failed to get repo status: {}", e))
+            })?;
+            if statuses.iter().any(|s| s.status() != git2::Status::CURRENT) {
+                return Err(LayertwineError::GitSync(
+                    "working tree is not clean. Commit or stash changes first.".to_string(),
+                ));
+            }
+        }
+
+        if !config.write_working_tree {
+            // Use TreeBuilder directly, skip working tree
+            return Self::build_tree_and_commit(
+                git_repo,
+                storage,
+                checkpoint_repo,
+                checkpoint,
+                Some("HEAD"),
+                branch_name,
+                message,
+            );
+        }
+
         let workdir = git_repo
             .workdir()
-            .ok_or_else(|| LayertwineError::GitSync("bare repository has no workdir".to_string()))?
+            .ok_or_else(|| {
+                LayertwineError::GitSync("bare repository has no workdir".to_string())
+            })?
             .to_path_buf();
 
         let mut index = git_repo
@@ -152,9 +286,7 @@ impl GitBridge {
                 .get_snapshot(snapshot_id)
                 .map_err(LayertwineError::Storage)?;
 
-            let content = storage
-                .get_file_content(snapshot.file.path_str(), &snapshot.file.base_hash)
-                .map_err(LayertwineError::Storage)?;
+            let current_text = reconstruct_snapshot_text(storage, &snapshot)?;
 
             let file_path_in_repo = workdir.join(&snapshot.file.file_path);
             if let Some(parent) = file_path_in_repo.parent() {
@@ -162,7 +294,7 @@ impl GitBridge {
                     LayertwineError::GitSync(format!("failed to create directories: {}", e))
                 })?;
             }
-            std::fs::write(&file_path_in_repo, &content)
+            std::fs::write(&file_path_in_repo, current_text.as_bytes())
                 .map_err(|e| LayertwineError::GitSync(format!("failed to write file: {}", e)))?;
 
             let repo_relative_path = snapshot.file.file_path.to_str().unwrap_or("");
@@ -183,35 +315,158 @@ impl GitBridge {
             .find_tree(tree_id)
             .map_err(|e| LayertwineError::GitSync(format!("failed to find tree: {}", e)))?;
 
+        let checkpoint_id = checkpoint.id;
+        let git_commit_hash = Self::create_git_commit(
+            git_repo,
+            checkpoint,
+            Some("HEAD"),
+            branch_name,
+            message,
+            &tree,
+        )?;
+
+        if let Ok(cp) = checkpoint_repo.get_checkpoint_mut(&checkpoint_id) {
+            cp.metadata.git_anchor = Some(git_commit_hash.clone());
+        }
+
+        Ok(git_commit_hash)
+    }
+
+    /// Isolated mode: use TreeBuilder, commit to `refs/layertwine/<branch>`.
+    fn push_to_git_isolated<S>(
+        git_repo: &git2::Repository,
+        storage: &S,
+        checkpoint_repo: &mut CheckpointRepo,
+        checkpoint: &crate::checkpoint::types::Checkpoint,
+        branch_name: &str,
+        message: &str,
+        _config: &GitSyncConfig,
+    ) -> Result<String>
+    where
+        S: SnapshotStore + DeltaStore + FileNodeStore,
+    {
+        let git_ref = format!("refs/layertwine/{}", branch_name);
+        Self::build_tree_and_commit(
+            git_repo,
+            storage,
+            checkpoint_repo,
+            checkpoint,
+            Some(&git_ref),
+            branch_name,
+            message,
+        )
+    }
+
+    /// Build a tree object from snapshot contents and create a git commit.
+    ///
+    /// `target_ref`: `Some("HEAD")` for CurrentBranch mode, `Some("refs/layertwine/<branch>")` for Isolated.
+    /// When `None`, creates a dangling commit (no ref update).
+    fn build_tree_and_commit<S>(
+        git_repo: &git2::Repository,
+        storage: &S,
+        checkpoint_repo: &mut CheckpointRepo,
+        checkpoint: &crate::checkpoint::types::Checkpoint,
+        target_ref: Option<&str>,
+        branch_name: &str,
+        message: &str,
+    ) -> Result<String>
+    where
+        S: SnapshotStore + DeltaStore + FileNodeStore,
+    {
+        let mut tree_builder = git_repo
+            .treebuilder(None)
+            .map_err(|e| LayertwineError::GitSync(format!("failed to create tree builder: {}", e)))?;
+
+        for snapshot_id in &checkpoint.baseline_snapshots {
+            let snapshot = storage
+                .get_snapshot(snapshot_id)
+                .map_err(LayertwineError::Storage)?;
+
+            let current_text = reconstruct_snapshot_text(storage, &snapshot)?;
+
+            let blob_oid = git_repo
+                .blob(current_text.as_bytes())
+                .map_err(|e| LayertwineError::GitSync(format!("failed to create blob: {}", e)))?;
+
+            let path_str = snapshot.file.file_path.to_str().unwrap_or("");
+            tree_builder
+                .insert(path_str, blob_oid, git2::FileMode::Blob.into())
+                .map_err(|e| {
+                    LayertwineError::GitSync(format!("failed to insert tree entry: {}", e))
+                })?;
+        }
+
+        let tree_oid = tree_builder
+            .write()
+            .map_err(|e| LayertwineError::GitSync(format!("failed to write tree: {}", e)))?;
+
+        let tree = git_repo
+            .find_tree(tree_oid)
+            .map_err(|e| LayertwineError::GitSync(format!("failed to find tree: {}", e)))?;
+
+        let checkpoint_id = checkpoint.id;
+        let git_commit_hash = Self::create_git_commit(
+            git_repo,
+            checkpoint,
+            target_ref,
+            branch_name,
+            message,
+            &tree,
+        )?;
+
+        if let Ok(cp) = checkpoint_repo.get_checkpoint_mut(&checkpoint_id) {
+            cp.metadata.git_anchor = Some(git_commit_hash.clone());
+        }
+
+        Ok(git_commit_hash)
+    }
+
+    /// Create a git commit, optionally updating a ref.
+    ///
+    /// `update_ref`: `Some("HEAD")` or `Some("refs/layertwine/<branch>")`.
+    /// When `None`, creates an unreferenced commit.
+    fn create_git_commit(
+        git_repo: &git2::Repository,
+        checkpoint: &crate::checkpoint::types::Checkpoint,
+        update_ref: Option<&str>,
+        branch_name: &str,
+        message: &str,
+        tree: &git2::Tree,
+    ) -> Result<String> {
         let author_sig =
             git2::Signature::now(checkpoint.metadata.author.as_str(), "layertwine@local").map_err(
                 |e| LayertwineError::GitSync(format!("failed to create signature: {}", e)),
             )?;
 
-        let parent_commit = git_repo
-            .head()
-            .ok()
-            .and_then(|head| head.peel_to_commit().ok());
+        // Find parent commit: either from the update_ref or HEAD
+        let parent_commit = if let Some(ref_str) = update_ref {
+            git_repo
+                .refname_to_id(ref_str)
+                .ok()
+                .and_then(|oid| git_repo.find_commit(oid).ok())
+        } else {
+            git_repo.head().ok().and_then(|head| head.peel_to_commit().ok())
+        };
 
         let git_commit = if let Some(parent) = &parent_commit {
             git_repo
                 .commit(
-                    Some("HEAD"),
+                    update_ref,
                     &author_sig,
                     &author_sig,
                     message,
-                    &tree,
+                    tree,
                     &[parent],
                 )
                 .map_err(|e| LayertwineError::GitSync(format!("failed to commit: {}", e)))?
         } else {
             git_repo
                 .commit(
-                    Some("HEAD"),
+                    update_ref,
                     &author_sig,
                     &author_sig,
                     message,
-                    &tree,
+                    tree,
                     &[] as &[&git2::Commit],
                 )
                 .map_err(|e| LayertwineError::GitSync(format!("failed to commit: {}", e)))?
@@ -219,8 +474,23 @@ impl GitBridge {
 
         let git_commit_hash = git_commit.to_string();
 
-        if let Ok(cp) = checkpoint_repo.get_checkpoint_mut(&checkpoint_id) {
-            cp.metadata.git_anchor = Some(git_commit_hash.clone());
+        // Ensure refs/heads/<branch_name> exists for CurrentBranch mode
+        // In Isolated mode, the ref is already set (refs/layertwine/<branch>)
+        if update_ref == Some("HEAD") {
+            git_repo
+                .branch(
+                    branch_name,
+                    &git_repo.find_commit(git_commit).map_err(|e| {
+                        LayertwineError::GitSync(format!("failed to find commit: {}", e))
+                    })?,
+                    true, // force update
+                )
+                .map_err(|e| {
+                    LayertwineError::GitSync(format!(
+                        "failed to create/update branch '{}': {}",
+                        branch_name, e
+                    ))
+                })?;
         }
 
         Ok(git_commit_hash)
@@ -294,59 +564,6 @@ impl GitBridge {
             git_head_hash,
             local_baseline_id,
         })
-    }
-
-    /// Push the checkpoint repo's current branch to a Git remote.
-    ///
-    /// First pushes to the local Git repo (via push_to_git), then pushes
-    /// the branch to the named remote.
-    pub fn push_to_remote<S>(
-        storage: &S,
-        git_repo_path: &Path,
-        checkpoint_repo: &mut CheckpointRepo,
-        branch_name: &str,
-        remote_name: &str,
-        message: &str,
-    ) -> Result<String>
-    where
-        S: SnapshotStore + DeltaStore + FileNodeStore,
-    {
-        // First commit to the local Git repo (also updates git_anchor)
-        let git_hash = Self::push_to_git(
-            storage,
-            git_repo_path,
-            checkpoint_repo,
-            branch_name,
-            message,
-        )?;
-
-        let git_repo = git2::Repository::open(git_repo_path)
-            .map_err(|e| LayertwineError::GitSync(format!("failed to open git repo: {}", e)))?;
-
-        // Find the remote
-        let mut remote = git_repo.find_remote(remote_name).map_err(|e| {
-            LayertwineError::GitSync(format!("failed to find remote '{}': {}", remote_name, e))
-        })?;
-
-        // Build the refspec: refs/heads/<branch>
-        let branch_ref = format!("refs/heads/{}", branch_name);
-        let remote_ref = format!("refs/heads/{}", branch_name);
-
-        // Push
-        let mut push_options = git2::PushOptions::new();
-        remote
-            .push(
-                &[format!("{}:{}", branch_ref, remote_ref).as_str()],
-                Some(&mut push_options),
-            )
-            .map_err(|e| {
-                LayertwineError::GitSync(format!(
-                    "failed to push to remote '{}': {}",
-                    remote_name, e
-                ))
-            })?;
-
-        Ok(git_hash)
     }
 
     /// Fetch from a Git remote and update the checkpoint repo accordingly.
@@ -443,6 +660,21 @@ where
         }
     }
     Ok(())
+}
+
+/// Reconstruct the current text of a snapshot from its base content + delta chain.
+fn reconstruct_snapshot_text<S>(storage: &S, snapshot: &Snapshot) -> Result<String>
+where
+    S: SnapshotStore + DeltaStore + FileNodeStore,
+{
+    let base_content = storage
+        .get_file_content(snapshot.file.path_str(), &snapshot.file.base_hash)
+        .map_err(LayertwineError::Storage)?;
+    let deltas = storage
+        .get_deltas(&snapshot.deltas)
+        .map_err(LayertwineError::Storage)?;
+    let base_str = String::from_utf8_lossy(&base_content).to_string();
+    apply_deltas(&base_str, &deltas).map_err(|e| LayertwineError::Engine(e.to_string()))
 }
 
 #[cfg(test)]

@@ -73,11 +73,7 @@ name = "merge"
 harness = false
 
 [[bench]]
-name = "inverse"
-harness = false
-
-[[bench]]
-name = "core_types"
+name = "export_helper"
 harness = false
 
 [[bench]]
@@ -90,4 +86,16 @@ harness = false
 
 [[bench]]
 name = "checkpoint"
+harness = false
+
+[[bench]]
+name = "backup"
+harness = false
+
+[[bench]]
+name = "engine_edge"
+harness = false
+
+[[bench]]
+name = "file_storage"
 harness = false

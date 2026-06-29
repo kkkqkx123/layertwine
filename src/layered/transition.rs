@@ -304,6 +304,9 @@ pub fn partition_type_matches_layer(partition_type: &str, target_layer: &LayerTy
 /// Reconstructs the complete text content from Snapshot's delta chains
 ///
 /// Read the original content from file_node and apply all deltas in turn.
+/// apply_deltas now preserves trailing newlines, ensuring downstream
+/// consumers (merge_texts, diff_to_line_diff) receive properly
+/// line-terminated text for accurate TextDiff comparison.
 pub fn reconstruct_text<S>(storage: &S, snapshot: &Snapshot) -> Result<String>
 where
     S: FileNodeStore + DeltaStore,
@@ -317,7 +320,8 @@ where
         .get_deltas(&snapshot.deltas)
         .map_err(LayertwineError::Storage)?;
 
-    apply_deltas(&content_str, &deltas).map_err(|e| LayertwineError::Engine(e.to_string()))
+    apply_deltas(&content_str, &deltas)
+        .map_err(|e| LayertwineError::Engine(e.to_string()))
 }
 
 /// Checks if the snapshot contains a parent of the specified partition_type.
@@ -369,22 +373,47 @@ mod tests {
         let valid_pairs = [
             (LayerType::ManualEdit, LayerType::Staged),
             (LayerType::AgentEdit, LayerType::Approval),
-            (LayerType::Approval, LayerType::Staged),
+            (LayerType::Approval, LayerType::Integrated),
+            (LayerType::Integrated, LayerType::Unified),
+            (LayerType::Unified, LayerType::Staged),
         ];
 
         let all_pairs = [
             (LayerType::ManualEdit, LayerType::ManualEdit),
             (LayerType::ManualEdit, LayerType::AgentEdit),
             (LayerType::ManualEdit, LayerType::Approval),
+            (LayerType::ManualEdit, LayerType::Integrated),
+            (LayerType::ManualEdit, LayerType::Unified),
+            (LayerType::ManualEdit, LayerType::Staged),
             (LayerType::AgentEdit, LayerType::ManualEdit),
             (LayerType::AgentEdit, LayerType::AgentEdit),
+            (LayerType::AgentEdit, LayerType::Approval),
+            (LayerType::AgentEdit, LayerType::Integrated),
+            (LayerType::AgentEdit, LayerType::Unified),
             (LayerType::AgentEdit, LayerType::Staged),
             (LayerType::Approval, LayerType::ManualEdit),
             (LayerType::Approval, LayerType::AgentEdit),
             (LayerType::Approval, LayerType::Approval),
+            (LayerType::Approval, LayerType::Integrated),
+            (LayerType::Approval, LayerType::Unified),
+            (LayerType::Approval, LayerType::Staged),
+            (LayerType::Integrated, LayerType::ManualEdit),
+            (LayerType::Integrated, LayerType::AgentEdit),
+            (LayerType::Integrated, LayerType::Approval),
+            (LayerType::Integrated, LayerType::Integrated),
+            (LayerType::Integrated, LayerType::Unified),
+            (LayerType::Integrated, LayerType::Staged),
+            (LayerType::Unified, LayerType::ManualEdit),
+            (LayerType::Unified, LayerType::AgentEdit),
+            (LayerType::Unified, LayerType::Approval),
+            (LayerType::Unified, LayerType::Integrated),
+            (LayerType::Unified, LayerType::Unified),
+            (LayerType::Unified, LayerType::Staged),
             (LayerType::Staged, LayerType::ManualEdit),
             (LayerType::Staged, LayerType::AgentEdit),
             (LayerType::Staged, LayerType::Approval),
+            (LayerType::Staged, LayerType::Integrated),
+            (LayerType::Staged, LayerType::Unified),
             (LayerType::Staged, LayerType::Staged),
         ];
 
@@ -510,7 +539,7 @@ mod tests {
         storage.store_snapshot(&snapshot, b"").unwrap();
 
         let text = reconstruct_text(&storage, &snapshot).unwrap();
-        assert_eq!(text, "hello world");
+        assert_eq!(text, "hello world\n");
     }
 
     #[test]

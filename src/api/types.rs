@@ -280,14 +280,16 @@ pub struct CheckpointRestoreApplyResponse {
     pub staged_updated: bool,
 }
 
-// ── Push/Pull types ──
+// ── GitCommit (sync to git)/Pull types ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PushRequest {
-    pub remote: Option<String>,
+pub struct GitCommitRequest {
     pub git_repo: String,
     pub message: Option<String>,
 }
+
+// Backward compatibility alias
+pub type PushRequest = GitCommitRequest;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PullRequest {
@@ -427,6 +429,8 @@ pub struct RestoreResponse {
     pub backup_id: String,
     pub file: String,
     pub deltas_restored: usize,
+    /// Snapshot ID of the merged result after 3-way merge into staged
+    pub merged_snapshot_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -462,9 +466,33 @@ pub struct CompactResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PushResponse {
-    pub remote: String,
+pub struct GitCommitResponse {
     pub git_commit_hash: String,
+}
+
+// Backward compatibility alias
+pub type PushResponse = GitCommitResponse;
+
+// ── Clean types ──
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanRequest {
+    /// Branch name to clean (all checkpoints + orphaned data)
+    pub branch: Option<String>,
+    /// Layer type to clean (e.g. "staged", "unified", "integrated")
+    pub layer: Option<String>,
+    /// Clean ALL layertwine storage (reset to initial state)
+    pub all: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanResponse {
+    pub removed_branches: usize,
+    pub removed_checkpoints: usize,
+    pub removed_snapshots: usize,
+    pub removed_deltas: usize,
+    pub removed_layers: usize,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

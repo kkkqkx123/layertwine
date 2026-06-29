@@ -115,7 +115,13 @@ where
 
 /// Merge the current snapshot of the manual_edit tier into staged
 ///
-/// Take the current Snapshot from manual_edit and staged and merge it to create a new Snapshot to push into the staged history.
+/// Uses three-way merge with the staged partition's first history entry as the merge base:
+///   merge_base = staged_partition.history[0]
+///   ours       = staged.current_snapshot
+///   theirs     = manual.current_snapshot
+///
+/// This ensures manual edits don't silently overwrite changes that entered staged via
+/// other paths (e.g., unified → staged).
 pub fn merge_manual_to_staged<S>(storage: &S) -> Result<SnapshotId>
 where
     S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
@@ -131,6 +137,11 @@ where
         .get_partition(&staged_pid)
         .map_err(|_| LayertwineError::NotFound("staged partition not found".into()))?;
 
+    // If both point to the same snapshot, no merge needed
+    if manual_partition.current_snapshot == staged_partition.current_snapshot {
+        return Ok(staged_partition.current_snapshot);
+    }
+
     let manual_snapshot = storage
         .get_snapshot(&manual_partition.current_snapshot)
         .map_err(LayertwineError::Storage)?;
@@ -138,15 +149,25 @@ where
         .get_snapshot(&staged_partition.current_snapshot)
         .map_err(LayertwineError::Storage)?;
 
-    // Reconstructing text content
-    let manual_text = crate::layered::transition::reconstruct_text(storage, &manual_snapshot)?;
-    let staged_text = crate::layered::transition::reconstruct_text(storage, &staged_snapshot)?;
+    // Use staged's current snapshot as the merge baseline.
+    // This is the correct common ancestor: staged reflects the last committed/merged state,
+    // and manual contains the user's new edits. Using staged.current ensures the 3-way merge
+    // compares against the right baseline (not the initial empty snapshot).
+    let baseline_snapshot = staged_snapshot.clone();
 
-    // Incorporate manual changes using staged as a baseline.
-    // Calculate the diff of manual_text relative to staged_text
-    let merge_diff = diff_to_line_diff(&staged_text, &manual_text);
+    // Reconstruct texts for three-way merge
+    let baseline_text = crate::layered::transition::reconstruct_text(storage, &baseline_snapshot)?;
+    let staged_text = crate::layered::transition::reconstruct_text(storage, &staged_snapshot)?;
+    let manual_text = crate::layered::transition::reconstruct_text(storage, &manual_snapshot)?;
+
+    // Three-way merge: base (common ancestor), ours (staged), theirs (manual)
+    let (merged_text, conflicts) =
+        crate::engine::merge::merge_texts(&baseline_text, &staged_text, &manual_text);
+    let has_conflicts = !conflicts.is_empty();
+
+    let merge_diff = diff_to_line_diff(&staged_text, &merged_text);
     if merge_diff.is_empty() {
-        return Ok(staged_partition.current_snapshot); // no change
+        return Ok(staged_partition.current_snapshot);
     }
 
     let manual_deltas = storage
@@ -161,12 +182,12 @@ where
         .store_delta(&merge_delta)
         .map_err(LayertwineError::Storage)?;
 
-    // Create merge snapshot (dual parent)
+    // Create merge snapshot (dual parent) with conflict tracking
     let new_snapshot = Snapshot::merge(
         vec![&staged_snapshot, &manual_snapshot],
         merge_delta.id,
         PartitionType::Staged.name().to_string(),
-        false,
+        has_conflicts,
     );
     storage
         .store_snapshot(&new_snapshot, b"")

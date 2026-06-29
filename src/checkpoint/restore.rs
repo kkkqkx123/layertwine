@@ -190,19 +190,22 @@ impl CheckpointRepo {
                     .get(snap_id)
                     .cloned()
                     .unwrap_or_default();
-                let content_type = self
+                let (content_type, size) = self
                     .get_snapshot_by_id(snap_id)
                     .map(|s| {
-                        s.content
+                        let ct = s
+                            .content
                             .as_ref()
                             .map(|c| c.content_type().to_string())
-                            .unwrap_or_else(|| "unknown".to_string())
+                            .unwrap_or_else(|| "unknown".to_string());
+                        let sz = s
+                            .content
+                            .as_ref()
+                            .map(|c| c.to_bytes().len())
+                            .unwrap_or(0);
+                        (ct, sz)
                     })
-                    .unwrap_or_else(|_| "unknown".to_string());
-                let size = self
-                    .get_snapshot_by_id(snap_id)
-                    .map(|s| s.content.as_ref().map(|c| c.to_bytes().len()).unwrap_or(0))
-                    .unwrap_or(0);
+                    .unwrap_or_else(|_| ("unknown".to_string(), 0));
                 Ok((*snap_id, source_str, content_type, size))
             })
             .collect()
@@ -310,6 +313,75 @@ impl CheckpointRepo {
                 Ok((*id, content, source))
             })
             .collect()
+    }
+}
+
+/// Result of applying a restore operation (writing snapshot content to disk)
+pub struct RestoreApplyResult {
+    /// Checkpoint that was restored
+    pub checkpoint_id: CheckpointId,
+    /// File paths written to disk
+    pub files_written: Vec<String>,
+}
+
+impl CheckpointRepo {
+    /// Apply a restore: write `file://` snapshot contents back to the filesystem.
+    ///
+    /// Only snapshots with `file://` source URIs are written to disk.
+    /// Other sources (`agent://`, `graph://`, etc.) are skipped since they
+    /// are managed externally (e.g., by an AI agent application).
+    ///
+    /// `source_filter` can be used to limit which snapshots are written
+    /// (e.g., `["file://src/**"]` to only restore specific directories).
+    ///
+    /// Returns the list of file paths that were written.
+    pub fn apply_restore(
+        &self,
+        response: &RestoreResponse,
+        source_filter: Option<&[&str]>,
+    ) -> Result<RestoreApplyResult> {
+        let mut files_written = Vec::new();
+
+        for (_snap_id, content, source) in &response.snapshots {
+            // Apply optional source filter
+            if let Some(filters) = source_filter {
+                let matched = filters
+                    .iter()
+                    .any(|f| source::matches_glob(source, f));
+                if !matched {
+                    continue;
+                }
+            }
+
+            // Only write file:// snapshots to disk
+            if let Some(file_path) = source.strip_prefix("file://") {
+                let bytes = content.to_bytes();
+                // Ensure parent directory exists
+                if let Some(parent) = std::path::Path::new(file_path).parent() {
+                    if !parent.as_os_str().is_empty() {
+                        std::fs::create_dir_all(parent).map_err(|e| {
+                            LayertwineError::General(format!(
+                                "failed to create directory '{}': {}",
+                                parent.display(),
+                                e
+                            ))
+                        })?;
+                    }
+                }
+                std::fs::write(file_path, &bytes).map_err(|e| {
+                    LayertwineError::General(format!(
+                        "failed to write file '{}': {}",
+                        file_path, e
+                    ))
+                })?;
+                files_written.push(file_path.to_string());
+            }
+        }
+
+        Ok(RestoreApplyResult {
+            checkpoint_id: response.checkpoint.id,
+            files_written,
+        })
     }
 }
 

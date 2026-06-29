@@ -1,7 +1,7 @@
 use crate::core::file_node::FileNode;
 use crate::core::snapshot::{Snapshot, SnapshotCompression, SnapshotContent};
 use crate::core::types::{ContentId, SnapshotId};
-use crate::storage::repository::SnapshotStore;
+use crate::storage::repository::{AtomicOps, SnapshotStore};
 use crate::storage::sqlite::connection::SqliteStorage;
 use crate::StorageResult;
 use rusqlite::{params, Row};
@@ -46,8 +46,8 @@ fn row_to_snapshot(row: &Row) -> Result<Snapshot, rusqlite::Error> {
     });
 
     let compression = match compression_str.as_str() {
-        "gzip" => SnapshotCompression::Gzip,
         "zstd" => SnapshotCompression::Zstd,
+        // "gzip" was a no-op placeholder; treat as uncompressed
         _ => SnapshotCompression::None,
     };
 
@@ -68,41 +68,6 @@ fn row_to_snapshot(row: &Row) -> Result<Snapshot, rusqlite::Error> {
     })
 }
 
-fn row_to_snapshot_lenient(row: &Row) -> Snapshot {
-    let id_bytes: Vec<u8> = row.get(0).unwrap_or_default();
-    let id = ContentId(bytes_to_array(&id_bytes));
-
-    let file_path: String = row.get(1).unwrap_or_default();
-    let file_hash_bytes: Vec<u8> = row.get(2).unwrap_or_default();
-    let file_hash = bytes_to_array(&file_hash_bytes);
-
-    let deltas_json: Vec<u8> = row.get(3).unwrap_or_default();
-    let parents_json: Vec<u8> = row.get(4).unwrap_or_default();
-    let partition_type: String = row.get(5).unwrap_or_default();
-    let created_at: i64 = row.get(6).unwrap_or(0);
-    let has_conflicts: bool = row.get::<_, i32>(7).unwrap_or(0) != 0;
-
-    let deltas: Vec<crate::core::types::DeltaId> =
-        serde_json::from_slice(&deltas_json).unwrap_or_default();
-    let parents: Vec<SnapshotId> = serde_json::from_slice(&parents_json).unwrap_or_default();
-
-    Snapshot {
-        id,
-        file: FileNode {
-            file_path: std::path::PathBuf::from(file_path),
-            base_hash: file_hash,
-        },
-        deltas,
-        parents,
-        partition_type,
-        created_at,
-        has_conflicts,
-        content: None,
-        source: String::new(),
-        compression: SnapshotCompression::None,
-    }
-}
-
 impl SnapshotStore for SqliteStorage {
     fn store_snapshot(&self, snapshot: &Snapshot, _content: &[u8]) -> StorageResult<()> {
         let conn = self.conn.lock();
@@ -116,7 +81,6 @@ impl SnapshotStore for SqliteStorage {
 
         let compression_str = match snapshot.compression {
             SnapshotCompression::None => "none",
-            SnapshotCompression::Gzip => "gzip",
             SnapshotCompression::Zstd => "zstd",
         };
 
@@ -158,8 +122,7 @@ impl SnapshotStore for SqliteStorage {
              FROM snapshots WHERE file_path = ?1 ORDER BY created_at DESC",
         )?;
 
-        let snapshots =
-            stmt.query_map(params![file_path], |row| Ok(row_to_snapshot_lenient(row)))?;
+        let snapshots = stmt.query_map(params![file_path], row_to_snapshot)?;
 
         let mut result = Vec::new();
         for s in snapshots {
@@ -178,9 +141,7 @@ impl SnapshotStore for SqliteStorage {
              FROM snapshots WHERE partition_type = ?1 ORDER BY created_at DESC",
         )?;
 
-        let snapshots = stmt.query_map(params![partition_type.name()], |row| {
-            Ok(row_to_snapshot_lenient(row))
-        })?;
+        let snapshots = stmt.query_map(params![partition_type.name()], row_to_snapshot)?;
 
         let mut result = Vec::new();
         for s in snapshots {
@@ -197,7 +158,8 @@ impl SnapshotStore for SqliteStorage {
     }
 
     fn store_snapshots_batch(&self, snapshots: &[(&Snapshot, &[u8])]) -> StorageResult<()> {
-        self.with_transaction(|conn| {
+        self.with_atomic(|storage| {
+            let conn = storage.conn.lock();
             let mut stmt = conn.prepare_cached(
                 "INSERT OR IGNORE INTO snapshots (id, file_path, file_hash, deltas, parents, partition_type, created_at, has_conflicts, source, content_type, content, compression)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
@@ -217,7 +179,6 @@ impl SnapshotStore for SqliteStorage {
 
                 let compression_str = match snapshot.compression {
                     SnapshotCompression::None => "none",
-                    SnapshotCompression::Gzip => "gzip",
                     SnapshotCompression::Zstd => "zstd",
                 };
 

@@ -15,6 +15,22 @@ use crate::error::{LayertwineError, Result};
 use crate::storage::repository::{DeltaStore, FileNodeStore, PartitionStore, SnapshotStore};
 use crate::{StorageError, StorageResult};
 
+/// Compress delta JSON with zstd to reduce storage footprint.
+/// Uses level 3 for a good speed/ratio trade-off.
+fn compress_deltas(deltas: &[Delta]) -> StorageResult<Vec<u8>> {
+    let json = serde_json::to_vec(deltas)?;
+    zstd::encode_all(json.as_slice(), 3)
+        .map_err(|e| StorageError::Serialization(format!("zstd compression failed: {}", e)))
+}
+
+/// Decompress zstd-compressed delta JSON back into a Vec<Delta>.
+fn decompress_deltas(compressed: &[u8]) -> StorageResult<Vec<Delta>> {
+    let decompressed = zstd::decode_all(compressed)
+        .map_err(|e| StorageError::Serialization(format!("zstd decompression failed: {}", e)))?;
+    serde_json::from_slice(&decompressed)
+        .map_err(|e| StorageError::Serialization(format!("delta JSON deserialization failed: {}", e)))
+}
+
 const BACKUP_MIGRATION_SQL: &str = "
 CREATE TABLE IF NOT EXISTS backup_snapshots (
     id              BLOB PRIMARY KEY,
@@ -34,6 +50,17 @@ CREATE INDEX IF NOT EXISTS idx_backup_label ON backup_snapshots(label);
 CREATE INDEX IF NOT EXISTS idx_backup_backed_at ON backup_snapshots(backed_at);
 CREATE INDEX IF NOT EXISTS idx_backup_agent_id ON backup_snapshots(agent_id);
 CREATE INDEX IF NOT EXISTS idx_backup_source_type ON backup_snapshots(source_type);
+
+-- Separate key-value table for SQL-level metadata filtering.
+-- Avoids deserializing the JSON blob and filtering in memory.
+CREATE TABLE IF NOT EXISTS backup_metadata (
+    backup_id BLOB NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (backup_id, key)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_backup_meta_key ON backup_metadata(key, value);
 ";
 
 fn map_db_err(e: rusqlite::Error) -> LayertwineError {
@@ -101,8 +128,29 @@ impl BackupRepo {
             source_type,
             file_content,
         );
-        self.store_backup(&backup)?;
-        Ok(backup.id)
+
+        // Use transaction to ensure atomic backup write
+        let conn = self.conn.lock();
+        conn.execute_batch("BEGIN IMMEDIATE;")
+            .map_err(|e| LayertwineError::Storage(StorageError::Database(e)))?;
+
+        let store_result = self.store_backup_inner(&backup);
+
+        match store_result {
+            Ok(()) => {
+                conn.execute_batch("COMMIT;")
+                    .map_err(|e| LayertwineError::Storage(StorageError::Database(e)))?;
+                drop(conn);
+                Ok(backup.id)
+            }
+            Err(e) => {
+                conn.execute_batch("ROLLBACK;")
+                    .map_err(|_| ()) // ignore rollback error, report original
+                    .unwrap_or(());
+                drop(conn);
+                Err(LayertwineError::Storage(e))
+            }
+        }
     }
 
     fn extract_source_info_from_deltas(deltas: &[Delta]) -> (Option<String>, Option<String>) {
@@ -118,13 +166,14 @@ impl BackupRepo {
         }
     }
 
-    fn store_backup(&self, backup: &BackupSnapshot) -> StorageResult<()> {
+    fn store_backup_inner(&self, backup: &BackupSnapshot) -> StorageResult<()> {
         let conn = self.conn.lock();
-        let deltas_json = serde_json::to_vec(&backup.deltas)?;
+        let deltas_json = compress_deltas(&backup.deltas)?;
         let metadata_json = serde_json::to_vec(&backup.metadata)?;
 
+        // Use INSERT OR IGNORE so that identical backups (same content hash) are idempotent
         conn.execute(
-            "INSERT INTO backup_snapshots (id, source_snapshot, file_path, file_hash, deltas, label, backed_at, metadata, agent_id, source_type, file_content)
+            "INSERT OR IGNORE INTO backup_snapshots (id, source_snapshot, file_path, file_hash, deltas, label, backed_at, metadata, agent_id, source_type, file_content)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 &backup.id.0.to_vec(),
@@ -140,6 +189,17 @@ impl BackupRepo {
                 &backup.file_content,
             ],
         )?;
+
+        // Also write metadata into the dedicated key-value table for SQL-level filtering.
+        if !backup.metadata.is_empty() {
+            let mut stmt = conn.prepare(
+                "INSERT OR IGNORE INTO backup_metadata (backup_id, key, value) VALUES (?1, ?2, ?3)",
+            )?;
+            for (key, value) in &backup.metadata {
+                stmt.execute(params![&backup.id.0.to_vec(), key, value])?;
+            }
+        }
+
         Ok(())
     }
 
@@ -175,7 +235,7 @@ impl BackupRepo {
                 let source_type: Option<String> = row.get(9)?;
                 let file_content: Vec<u8> = row.get(10)?;
 
-                let deltas: Vec<Delta> = serde_json::from_slice(&deltas_json)
+                let deltas: Vec<Delta> = decompress_deltas(&deltas_json)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
                 let metadata: HashMap<String, String> = serde_json::from_slice(&metadata_json)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
@@ -231,6 +291,20 @@ impl BackupRepo {
             sql.push_str(" AND source_type = ?");
             param_values.push(Box::new(source_type.clone()));
         }
+        if let Some(meta_key) = &filter.metadata_key {
+            if let Some(meta_val) = &filter.metadata_value {
+                sql.push_str(
+                    " AND EXISTS (SELECT 1 FROM backup_metadata WHERE backup_id = backup_snapshots.id AND key = ? AND value = ?)",
+                );
+                param_values.push(Box::new(meta_key.clone()));
+                param_values.push(Box::new(meta_val.clone()));
+            } else {
+                sql.push_str(
+                    " AND EXISTS (SELECT 1 FROM backup_metadata WHERE backup_id = backup_snapshots.id AND key = ?)",
+                );
+                param_values.push(Box::new(meta_key.clone()));
+            }
+        }
 
         sql.push_str(" ORDER BY backed_at DESC");
 
@@ -262,7 +336,7 @@ impl BackupRepo {
                 let source_type: Option<String> = row.get(9)?;
                 let file_content: Vec<u8> = row.get(10)?;
 
-                let deltas: Vec<Delta> = serde_json::from_slice(&deltas_json).unwrap_or_default();
+                let deltas: Vec<Delta> = decompress_deltas(&deltas_json).unwrap_or_default();
                 let metadata: HashMap<String, String> =
                     serde_json::from_slice(&metadata_json).unwrap_or_default();
 
@@ -287,16 +361,6 @@ impl BackupRepo {
         let mut result = Vec::new();
         for row in rows {
             result.push(row.map_err(map_db_err)?);
-        }
-
-        if let Some(meta_key) = &filter.metadata_key {
-            result.retain(|b| {
-                if let Some(meta_val) = &filter.metadata_value {
-                    b.metadata.get(meta_key.as_str()).map(|s| s.as_str()) == Some(meta_val.as_str())
-                } else {
-                    b.metadata.contains_key(meta_key.as_str())
-                }
-            });
         }
 
         Ok(result)
@@ -334,6 +398,34 @@ impl BackupRepo {
     where
         S: SnapshotStore + DeltaStore + PartitionStore + FileNodeStore,
     {
+        // Use transaction on backup DB for consistent reads
+        let conn = self.conn.lock();
+        conn.execute_batch("BEGIN IMMEDIATE;")
+            .map_err(|e| LayertwineError::Storage(StorageError::Database(e)))?;
+
+        let result = self.merge_to_staged_inner(backup_id, core_repo);
+
+        match result {
+            Ok(merged_id) => {
+                conn.execute_batch("COMMIT;")
+                    .map_err(|e| LayertwineError::Storage(StorageError::Database(e)))?;
+                drop(conn);
+                Ok(merged_id)
+            }
+            Err(e) => {
+                conn.execute_batch("ROLLBACK;")
+                    .map_err(|_| ())
+                    .unwrap_or(());
+                drop(conn);
+                Err(e)
+            }
+        }
+    }
+
+    fn merge_to_staged_inner<S>(&self, backup_id: &BackupId, core_repo: &S) -> Result<SnapshotId>
+    where
+        S: SnapshotStore + DeltaStore + PartitionStore + FileNodeStore,
+    {
         let backup = self.get_backup(backup_id)?;
 
         let integrity_ok = {
@@ -358,12 +450,6 @@ impl BackupRepo {
         // Step 1: Reconstruct the backed-up file content using backup's stored file_content
         let backup_base_str = String::from_utf8_lossy(&backup.file_content).to_string();
         let backup_text = apply_deltas(&backup_base_str, &backup.deltas)?;
-        let has_trailing_newline = backup_base_str.ends_with('\n');
-        let backup_base_str = if has_trailing_newline {
-            backup_base_str.trim_end_matches('\n').to_string()
-        } else {
-            backup_base_str
-        };
 
         // Step 2: Get current staged content
         let staged_partition = core_repo.get_partition_by_name("staged")?;
@@ -378,20 +464,26 @@ impl BackupRepo {
         let staged_text = apply_deltas(&staged_base_str, &staged_deltas)?;
 
         // Step 3: Three-way merge
-        //   base = original file content (common ancestor), normalized without trailing newline
+        //   base = original file content (common ancestor)
         //   ours = current staged content
         //   theirs = backed-up content
+        //   apply_deltas and merge_texts preserve trailing newlines natively.
         let (merged_text, _conflicts) =
             crate::engine::merge::merge_texts(&backup_base_str, &staged_text, &backup_text);
 
-        let merged_text = if has_trailing_newline && !merged_text.is_empty() {
-            format!("{}\n", merged_text)
-        } else {
-            merged_text
-        };
-
         // Step 4: Compute diff from base to merged result, create delta
-        let diff = diff_to_line_diff(&backup_base_str, &merged_text);
+        // Optimization: when merged result equals one input with a single delta,
+        // reuse that delta's diff directly, avoiding full diff recomputation.
+        let diff = if merged_text == backup_text && backup.deltas.len() == 1 {
+            backup.deltas[0].diff.clone()
+        } else if merged_text == staged_text
+            && staged_deltas.len() == 1
+            && staged_base_str == backup_base_str
+        {
+            staged_deltas[0].diff.clone()
+        } else {
+            diff_to_line_diff(&backup_base_str, &merged_text)
+        };
         let merge_file = backup
             .deltas
             .last()
@@ -479,7 +571,7 @@ mod tests {
             None,
             content.to_vec(),
         );
-        backup_repo.store_backup(&backup).unwrap();
+        backup_repo.store_backup_inner(&backup).unwrap();
         backup.id
     }
 
@@ -641,7 +733,7 @@ mod tests {
         let merged_deltas = core.get_deltas(&merged_snapshot.deltas).unwrap();
         let merged_content =
             apply_deltas(&String::from_utf8(merged_base).unwrap(), &merged_deltas).unwrap();
-        assert_eq!(merged_content, "a\nB\nC");
+        assert_eq!(merged_content, "a\nB\nC\n");
     }
 
     #[test]
@@ -689,7 +781,7 @@ mod tests {
         let merged_deltas = core.get_deltas(&merged_snapshot.deltas).unwrap();
         let merged_content =
             apply_deltas(&String::from_utf8(merged_base).unwrap(), &merged_deltas).unwrap();
-        assert_eq!(merged_content, "line1\nmodified\nline3");
+        assert_eq!(merged_content, "line1\nmodified\nline3\n");
     }
 
     #[test]

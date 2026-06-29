@@ -1015,3 +1015,109 @@ fn test_validate_integrity_integration() {
         issues
     );
 }
+
+// ---------------------------------------------------------------------------
+// Complex DAG: 5+ branches with interleaved merges
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_complex_dag_multi_branch_merge() {
+    let snap = dummy_snapshot_id(1);
+    let mut repo = CheckpointRepo::new_single(snap);
+
+    // Create 3 feature branches from root
+    repo.create_branch("feature-a").unwrap();
+    repo.create_branch("feature-b").unwrap();
+    repo.create_branch("feature-c").unwrap();
+
+    // Commit on feature-a
+    repo.switch_branch("feature-a").unwrap();
+    let snap_a1 = dummy_snapshot_id(10);
+    let cp_a1 = repo.commit_single(snap_a1, "feature-a v1", "dev").unwrap();
+
+    // Commit on feature-b
+    repo.switch_branch("feature-b").unwrap();
+    let snap_b1 = dummy_snapshot_id(20);
+    let cp_b1 = repo.commit_single(snap_b1, "feature-b v1", "dev").unwrap();
+    let snap_b2 = dummy_snapshot_id(21);
+    let _cp_b2 = repo.commit_single(snap_b2, "feature-b v2", "dev").unwrap();
+
+    // Commit on feature-c
+    repo.switch_branch("feature-c").unwrap();
+    let snap_c1 = dummy_snapshot_id(30);
+    let _cp_c1 = repo.commit_single(snap_c1, "feature-c v1", "dev").unwrap();
+
+    // Merge feature-a into feature-c
+    let snap_m1 = dummy_snapshot_id(40);
+    let merge_cp = repo
+        .merge_branches("feature-a", vec![snap_m1], "merge a into c", "dev")
+        .unwrap();
+
+    let cp = repo.get_checkpoint(&merge_cp).unwrap();
+    assert_eq!(cp.parents.len(), 2, "merge should have 2 parents");
+
+    // Verify DAG knows about all branches
+    let branches = repo.list_branches();
+    assert_eq!(branches.len(), 4, "root + 3 feature branches = 4");
+
+    // Verify feature-b is independent (no merge_base with feature-c after merge)
+    let dag = repo.dag();
+    let feature_b_head = repo.get_branch_head("feature-b").unwrap();
+    let feature_c_head = repo.get_branch_head("feature-c").unwrap();
+
+    let get_parents = |id: &CheckpointId| -> Vec<CheckpointId> {
+        repo.get_checkpoint(id)
+            .map(|cp| cp.parents.clone())
+            .unwrap_or_default()
+    };
+
+    // feature-b and feature-c should have a merge-base at root
+    let mb = dag.merge_base(&feature_b_head, &feature_c_head, get_parents);
+    assert!(mb.is_some(), "branches should have a merge base");
+}
+
+// ---------------------------------------------------------------------------
+// Complex DAG: diamond merge (two branches merged into main independently)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_diamond_merge_dag() {
+    let snap = dummy_snapshot_id(1);
+    let mut repo = CheckpointRepo::new_single(snap);
+
+    // Main branch: commit v2
+    let snap_m2 = dummy_snapshot_id(2);
+    let cp_m2 = repo.commit_single(snap_m2, "main v2", "dev").unwrap();
+
+    // Branch A from main v2
+    repo.create_branch("branch-a").unwrap();
+    let snap_a1 = dummy_snapshot_id(10);
+    let _cp_a1 = repo.commit_single(snap_a1, "branch-a v1", "dev").unwrap();
+
+    // Branch B from main v2
+    repo.create_branch("branch-b").unwrap();
+    let snap_b1 = dummy_snapshot_id(20);
+    let _cp_b1 = repo.commit_single(snap_b1, "branch-b v1", "dev").unwrap();
+
+    // Merge A into main
+    repo.switch_branch("main").unwrap();
+    let snap_m3 = dummy_snapshot_id(3);
+    let merge_a = repo
+        .merge_branches("branch-a", vec![snap_m3], "merge a", "dev")
+        .unwrap();
+
+    // Merge B into main (now main has both A and B)
+    let snap_m4 = dummy_snapshot_id(4);
+    let merge_b = repo
+        .merge_branches("branch-b", vec![snap_m4], "merge b", "dev")
+        .unwrap();
+
+    let head = repo.current_branch_head();
+
+    // DAG should show main_v2 as ancestor of both merge commits
+    let dag = repo.dag();
+    assert!(dag.is_ancestor(&cp_m2, &merge_a));
+    assert!(dag.is_ancestor(&cp_m2, &merge_b));
+    assert!(dag.is_ancestor(&merge_a, &head));
+    assert!(dag.is_ancestor(&merge_b, &head));
+}

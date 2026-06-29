@@ -72,13 +72,7 @@ impl LayerStore for SqliteStorage {
             .collect::<Result<Vec<_>, _>>()?;
         let result: Vec<LayerType> = types
             .iter()
-            .filter_map(|s| match s.as_str() {
-                "manual_edit" => Some(LayerType::ManualEdit),
-                "agent_edit" => Some(LayerType::AgentEdit),
-                "approval" => Some(LayerType::Approval),
-                "staged" => Some(LayerType::Staged),
-                _ => None,
-            })
+            .filter_map(|s| LayerType::from_name(s))
             .collect();
         Ok(result)
     }

@@ -290,11 +290,11 @@ pub fn run_with_cli(cli: Cli) -> i32 {
             }
             resp.map(|_| ())
         }
-        Commands::Push { remote, message } => {
+        Commands::GitCommit { message } => {
             let git_repo = match &cli.git_repo {
                 Some(p) => p.clone(),
                 None => {
-                    eprintln!("error: --git-repo path is required for push");
+                    eprintln!("error: --git-repo path is required for git-commit");
                     return exit_codes::USAGE_ERROR;
                 }
             };
@@ -302,18 +302,41 @@ pub fn run_with_cli(cli: Cli) -> i32 {
                 Ok(s) => s,
                 Err(code) => return code,
             };
-            print_progress("Pushing to Git");
-            let resp = service.push(PushRequest {
-                remote: Some(remote.clone()),
+            print_progress("Committing to local Git branch");
+            let resp = service.git_commit(GitCommitRequest {
                 git_repo,
                 message: Some(message.clone()),
             });
             if let Ok(ref r) = resp {
                 print_done();
                 println!(
-                    "Pushed to remote '{}' (commit: {})",
-                    r.remote, r.git_commit_hash
+                    "Committed to local Git branch (commit: {})",
+                    r.git_commit_hash
                 );
+                println!(
+                    "  Run `git push` manually to push to remote."
+                );
+            }
+            resp.map(|_| ())
+        }
+        Commands::Clean { branch, layer, all } => {
+            if !*all && branch.is_none() && layer.is_none() {
+                eprintln!("error: specify --branch, --layer, or --all for clean");
+                return exit_codes::USAGE_ERROR;
+            }
+            let service = match open_service(&cli) {
+                Ok(s) => s,
+                Err(code) => return code,
+            };
+            print_progress("Cleaning layertwine storage");
+            let resp = service.clean(CleanRequest {
+                branch: branch.clone(),
+                layer: layer.clone(),
+                all: *all,
+            });
+            if let Ok(ref r) = resp {
+                print_done();
+                println!("{}", r.message);
             }
             resp.map(|_| ())
         }
