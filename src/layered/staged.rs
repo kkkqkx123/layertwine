@@ -15,6 +15,7 @@ use crate::core::snapshot::Snapshot;
 use crate::core::types::{CheckpointId, PartitionId, PartitionType, SnapshotId, SourceType};
 use crate::engine::diff::diff_to_line_diff;
 use crate::error::{LayertwineError, Result};
+use crate::layered::MergeResult;
 use crate::storage::repository::{
     CheckpointPersist, DeltaStore, FileNodeStore, PartitionStore, SnapshotStore,
 };
@@ -75,54 +76,77 @@ pub fn ensure_staged_partition<S: PartitionStore>(
     }
 }
 
-/// Merge the contents of the Unified partition into the staged
+/// Merge a single Integrated feature partition directly into Staged.
 ///
-/// This is the UNIQUE entry point for merging into staged from the approval pipeline.
-/// All content should flow through: approval_agent → integrated → unified → staged.
+/// Uses three-way merge with the feature's own baseline:
+///   baseline = feature.history[0]
+///   ours     = staged.current_snapshot
+///   theirs   = feature.current_snapshot
 ///
-/// This ensures proper three-way merging and conflict detection before the final stage.
-pub fn merge_unified_to_staged<S>(storage: &S) -> Result<SnapshotId>
+/// Replaces the former Unified intermediary layer. The three-way merge
+/// ensures correctness when multiple features merge into staged sequentially.
+pub fn merge_feature_to_staged<S>(storage: &S, feature_name: &str) -> Result<MergeResult>
 where
     S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
 {
     let staged_pid = staged_partition_id();
-    let unified_pid = crate::layered::unified::unified_partition_id();
+    let integrated_pid = crate::layered::integrated::integrated_partition_id(feature_name);
 
-    let unified_partition = storage.get_partition(&unified_pid).map_err(|_| {
-        LayertwineError::NotFound(
-            "unified partition not found, call ensure_unified_partition first".into(),
-        )
+    let feature_part = storage.get_partition(&integrated_pid).map_err(|_| {
+        LayertwineError::NotFound(format!("integrated partition '{}' not found", feature_name))
     })?;
+    let baseline_id = feature_part.history.first().ok_or_else(|| {
+        LayertwineError::StateMachine(format!(
+            "integrated partition '{}' has empty history",
+            feature_name
+        ))
+    })?;
+    let baseline_snapshot = storage
+        .get_snapshot(baseline_id)
+        .map_err(LayertwineError::Storage)?;
+    let feature_snapshot = storage
+        .get_snapshot(&feature_part.current_snapshot)
+        .map_err(LayertwineError::Storage)?;
+
     let staged_partition = storage.get_partition(&staged_pid).map_err(|_| {
-        LayertwineError::NotFound(
-            "staged partition not found, call ensure_staged_partition first".into(),
-        )
+        LayertwineError::NotFound("staged partition not found".into())
     })?;
 
-    // If unified and staged point to the same snapshot, no merge needed
-    if unified_partition.current_snapshot == staged_partition.current_snapshot {
-        return Ok(staged_partition.current_snapshot);
+    // If staged and feature already point to the same snapshot, no merge needed
+    if staged_partition.current_snapshot == feature_part.current_snapshot {
+        return Ok(MergeResult {
+            snapshot_id: staged_partition.current_snapshot,
+            conflicts: vec![],
+        });
     }
 
-    let unified_snapshot = storage
-        .get_snapshot(&unified_partition.current_snapshot)
-        .map_err(LayertwineError::Storage)?;
     let staged_snapshot = storage
         .get_snapshot(&staged_partition.current_snapshot)
         .map_err(LayertwineError::Storage)?;
 
-    let unified_text = crate::layered::transition::reconstruct_text(storage, &unified_snapshot)?;
+    // Reconstruct texts for three-way merge
+    let baseline_text = crate::layered::transition::reconstruct_text(storage, &baseline_snapshot)?;
     let staged_text = crate::layered::transition::reconstruct_text(storage, &staged_snapshot)?;
+    let feature_text = crate::layered::transition::reconstruct_text(storage, &feature_snapshot)?;
 
-    let merge_diff = diff_to_line_diff(&staged_text, &unified_text);
+    // Three-way merge: baseline (base), staged (ours), feature (theirs)
+    let (merged_text, conflicts) =
+        crate::engine::merge::merge_texts(&baseline_text, &staged_text, &feature_text);
+
+    let has_conflicts = !conflicts.is_empty();
+
+    let merge_diff = diff_to_line_diff(&staged_text, &merged_text);
     if merge_diff.is_empty() {
-        return Ok(staged_partition.current_snapshot);
+        return Ok(MergeResult {
+            snapshot_id: staged_partition.current_snapshot,
+            conflicts,
+        });
     }
 
-    let unified_deltas = storage
-        .get_deltas(&unified_snapshot.deltas)
+    let feature_deltas = storage
+        .get_deltas(&feature_snapshot.deltas)
         .map_err(LayertwineError::Storage)?;
-    let merge_file = unified_deltas
+    let merge_file = feature_deltas
         .last()
         .map(|d| d.file.clone())
         .unwrap_or_else(|| staged_snapshot.file.clone());
@@ -132,53 +156,85 @@ where
         .map_err(LayertwineError::Storage)?;
 
     let new_snapshot = Snapshot::merge(
-        vec![&staged_snapshot, &unified_snapshot],
+        vec![&staged_snapshot, &feature_snapshot],
         merge_delta.id,
         PartitionType::Staged.name(),
-        false,
+        has_conflicts,
     );
     storage
         .store_snapshot(&new_snapshot, b"")
         .map_err(LayertwineError::Storage)?;
-
     storage
         .update_pointer(&staged_pid, &new_snapshot.id)
         .map_err(LayertwineError::Storage)?;
 
-    Ok(new_snapshot.id)
+    Ok(MergeResult {
+        snapshot_id: new_snapshot.id,
+        conflicts,
+    })
+}
+
+/// Merge multiple Integrated feature partitions directly into Staged.
+///
+/// Each feature is merged sequentially via three-way merge using its own baseline.
+/// Features are merged one at a time, each accumulating into staged.
+/// This replaces the former `merge_features_to_unified` + `merge_unified_to_staged` pattern.
+pub fn merge_features_to_staged<S>(storage: &S, feature_names: &[String]) -> Result<MergeResult>
+where
+    S: SnapshotStore + DeltaStore + FileNodeStore + PartitionStore,
+{
+    if feature_names.is_empty() {
+        return Err(LayertwineError::General(
+            "at least one feature required".into(),
+        ));
+    }
+
+    let mut all_conflicts = Vec::new();
+    let mut last_snapshot_id = None;
+
+    for name in feature_names {
+        let result = merge_feature_to_staged(storage, name)?;
+        all_conflicts.extend(result.conflicts);
+        last_snapshot_id = Some(result.snapshot_id);
+    }
+
+    Ok(MergeResult {
+        snapshot_id: last_snapshot_id.unwrap(),
+        conflicts: all_conflicts,
+    })
 }
 
 /// Validate staged before commit
 ///
 /// Checks if staged is ready to commit by:
-/// 1. Verifying staged contains all content from unified
-/// 2. Checking for unresolved conflicts
-/// 3. Checking for other problems
+/// 1. Checking for unresolved conflicts in the staged snapshot
+/// 2. Checking for other problems
 pub fn validate_staged_for_commit<S>(storage: &S) -> Result<ValidationResult>
 where
-    S: SnapshotStore + PartitionStore,
+    S: SnapshotStore + PartitionStore + DeltaStore + FileNodeStore,
 {
-    let unified_pid = crate::layered::unified::unified_partition_id();
     let staged_pid = staged_partition_id();
-
-    let unified = storage
-        .get_partition(&unified_pid)
-        .map_err(|_| LayertwineError::NotFound("unified partition not found".into()))?;
     let staged = storage
         .get_partition(&staged_pid)
         .map_err(|_| LayertwineError::NotFound("staged partition not found".into()))?;
 
-    // Check if staged contains unified content
-    if staged.current_snapshot == unified.current_snapshot {
+    let staged_snapshot = storage
+        .get_snapshot(&staged.current_snapshot)
+        .map_err(LayertwineError::Storage)?;
+
+    let mut problems = Vec::new();
+
+    if staged_snapshot.has_conflicts {
+        problems.push(
+            "Staged snapshot has unresolved merge conflicts. Resolve conflicts before committing."
+                .to_string(),
+        );
+    }
+
+    if problems.is_empty() {
         Ok(ValidationResult::Ready)
     } else {
-        // Check if there are unresolved conflicts or other problems
-        // TODO: Need to record conflict status during merge
-        // For now, we assume if staged != unified, there might be pending changes
-        Ok(ValidationResult::HasUnresolvedProblems(vec![
-            "Staged does not contain all unified content. Call merge_unified_to_staged first."
-                .to_string(),
-        ]))
+        Ok(ValidationResult::HasUnresolvedProblems(problems))
     }
 }
 
@@ -289,57 +345,63 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_unified_to_staged() {
+    fn test_merge_feature_to_staged() {
         let storage = setup_storage_full();
         let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
         ensure_staged_partition(&storage, initial_id).unwrap();
 
-        let unified_pid = crate::layered::unified::unified_partition_id();
-        let unified_part = Partition {
-            id: unified_pid,
-            name: "unified".to_string(),
-            current_snapshot: initial_id,
-            history: vec![initial_id],
-            partition_type: PartitionType::Unified,
+        // Create an integrated (feature) partition with modified content
+        let feature_name = "test-feature";
+        let integrated_pid = crate::layered::integrated::integrated_partition_id(feature_name);
+        let feature_snap_id = create_snapshot_with_content(
+            &storage,
+            &initial_id,
+            "base\nfeature-added\n",
+            "integrated/test-feature",
+        );
+        let integrated_part = Partition {
+            id: integrated_pid,
+            name: format!("integrated/{}", feature_name),
+            current_snapshot: feature_snap_id,
+            history: vec![initial_id, feature_snap_id],
+            partition_type: PartitionType::Integrated(feature_name.to_string()),
         };
-        storage.create_partition(&unified_part).unwrap();
+        storage.create_partition(&integrated_part).unwrap();
 
-        let modified_id =
-            create_snapshot_with_content(&storage, &initial_id, "base\nmodified\n", "unified");
-        storage.update_pointer(&unified_pid, &modified_id).unwrap();
-
-        let merged_id = merge_unified_to_staged(&storage).unwrap();
+        let merged_id = merge_feature_to_staged(&storage, feature_name).unwrap();
         assert!(
-            merged_id != initial_id,
+            merged_id.snapshot_id != initial_id,
             "should create new snapshot when there are changes"
         );
 
         let staged = storage.get_partition(&staged_partition_id()).unwrap();
-        assert_eq!(staged.current_snapshot, merged_id);
+        assert_eq!(staged.current_snapshot, merged_id.snapshot_id);
 
-        let merged = storage.get_snapshot(&merged_id).unwrap();
-        assert_eq!(merged.parents.len(), 2);
+        let merged_snap = storage.get_snapshot(&merged_id.snapshot_id).unwrap();
+        assert_eq!(merged_snap.parents.len(), 2);
     }
 
     #[test]
-    fn test_merge_unified_to_staged_no_changes() {
+    fn test_merge_feature_to_staged_no_changes() {
         let storage = setup_storage_full();
         let initial_id = create_initial_snapshot(&storage, "base\n", SourceType::Manual);
         ensure_staged_partition(&storage, initial_id).unwrap();
 
-        let unified_pid = crate::layered::unified::unified_partition_id();
-        let unified_part = Partition {
-            id: unified_pid,
-            name: "unified".to_string(),
+        // Create an integrated partition without modifications
+        let feature_name = "test-feature";
+        let integrated_pid = crate::layered::integrated::integrated_partition_id(feature_name);
+        let integrated_part = Partition {
+            id: integrated_pid,
+            name: format!("integrated/{}", feature_name),
             current_snapshot: initial_id,
             history: vec![initial_id],
-            partition_type: PartitionType::Unified,
+            partition_type: PartitionType::Integrated(feature_name.to_string()),
         };
-        storage.create_partition(&unified_part).unwrap();
+        storage.create_partition(&integrated_part).unwrap();
 
-        let result = merge_unified_to_staged(&storage).unwrap();
+        let result = merge_feature_to_staged(&storage, feature_name).unwrap();
         assert_eq!(
-            result, initial_id,
+            result.snapshot_id, initial_id,
             "should return initial id when no changes"
         );
     }

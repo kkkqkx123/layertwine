@@ -177,6 +177,31 @@ impl CheckpointRepo {
         dag
     }
 
+    /// Rebuild the DAG from storage (or in-memory checkpoints).
+    ///
+    /// Call this after checkpoints have been modified directly through the storage
+    /// backend (e.g., via `commit_staged_to_checkpoint` in the staged layer API)
+    /// to keep the DAG in sync with persisted data.
+    ///
+    /// When a storage backend is attached, reloads all checkpoints from storage
+    /// and rebuilds the DAG from scratch. When no storage backend is available,
+    /// rebuilds from the in-memory checkpoint map.
+    pub fn rebuild_dag(&mut self) -> Result<()> {
+        if let Some(storage) = &self.storage {
+            let checkpoints: HashMap<CheckpointId, Checkpoint> = storage
+                .list_checkpoints()?
+                .into_iter()
+                .map(|cp| (cp.id, cp))
+                .collect();
+            self.checkpoints = checkpoints;
+        }
+        self.checkpoint_dag = Self::build_dag_from_checkpoints(&self.checkpoints);
+        self.time_index = TimeIndex::from_checkpoints(
+            &self.checkpoints.values().cloned().collect::<Vec<_>>(),
+        );
+        Ok(())
+    }
+
     /// Persist a specific checkpoint to storage (used after in-memory metadata changes).
     pub fn sync_checkpoint(&self, cp_id: &CheckpointId) -> Result<()> {
         if let Some(storage) = &self.storage {

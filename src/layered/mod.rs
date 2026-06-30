@@ -10,7 +10,6 @@ pub mod integrated;
 pub mod manual;
 pub mod staged;
 pub mod transition;
-pub mod unified;
 
 use crate::core::layer::Layer;
 use crate::core::partition::Partition;

@@ -107,8 +107,17 @@ where
         .get_snapshot(&approval_partition.current_snapshot)
         .map_err(LayertwineError::Storage)?;
 
+    // Use the approval partition's original baseline (history[0]) as the
+    // integrated partition's initial snapshot. This ensures the merge baseline
+    // is the common ancestor — the staged snapshot at the time of agent submission.
+    // Using approval_partition.current_snapshot would set the baseline to the
+    // post-edit content, causing downstream three-way merges to collapse to
+    // "ours wins" since baseline == theirs, which means staged never advances.
+    let approval_baseline = approval_partition.history.first().ok_or_else(|| {
+        LayertwineError::StateMachine("approval partition has empty history".into())
+    })?;
     let integrated_partition =
-        ensure_integrated_partition(storage, feature_name, approval_partition.current_snapshot)?;
+        ensure_integrated_partition(storage, feature_name, *approval_baseline)?;
 
     if integrated_partition.current_snapshot == approval_partition.current_snapshot {
         return Ok(MergeResult {
@@ -132,7 +141,7 @@ where
 
     let has_conflicts = !conflicts.is_empty();
 
-    let merge_diff = diff_to_line_diff(&baseline_text, &merged_text);
+    let merge_diff = diff_to_line_diff(&integrated_text, &merged_text);
     if merge_diff.is_empty() {
         return Ok(MergeResult {
             snapshot_id: integrated_partition.current_snapshot,
@@ -146,14 +155,14 @@ where
     let merge_file = approval_deltas
         .last()
         .map(|d| d.file.clone())
-        .unwrap_or_else(|| baseline_snapshot.file.clone());
+        .unwrap_or_else(|| integrated_snapshot.file.clone());
     let merge_delta = Delta::new(merge_file, merge_diff, SourceType::Agent(agent_id.clone()));
     storage
         .store_delta(&merge_delta)
         .map_err(LayertwineError::Storage)?;
 
     let new_snapshot = Snapshot::merge(
-        vec![&baseline_snapshot, &approval_snapshot, &integrated_snapshot],
+        vec![&integrated_snapshot, &approval_snapshot, &baseline_snapshot],
         merge_delta.id,
         PartitionType::Integrated(feature_name.to_string()).name(),
         has_conflicts,
@@ -165,6 +174,12 @@ where
     storage
         .update_pointer(&integrated_pid, &new_snapshot.id)
         .map_err(LayertwineError::Storage)?;
+
+    // Reset the approval partition back to baseline after successful merge.
+    // This ensures list_pending_approvals() (which checks history.len() > 1)
+    // correctly identifies only truly pending approvals — those that have been
+    // submitted but not yet merged into the integrated feature.
+    crate::layered::approval::reject_approval(storage, agent_id)?;
 
     Ok(MergeResult {
         snapshot_id: new_snapshot.id,

@@ -21,10 +21,8 @@ pub enum ForwardTransition {
     AgentToApproval,
     /// approval → integrated
     ApprovalToIntegrated,
-    /// integrated → unified
-    IntegratedToUnified,
-    /// unified → staged
-    UnifiedToStaged,
+    /// integrated → staged (replaces former integrated → unified + unified → staged)
+    IntegratedToStaged,
 }
 
 /// Type of reverse flow
@@ -51,8 +49,7 @@ pub fn check_forward_valid(from: &LayerType, to: &LayerType) -> Result<()> {
         (LayerType::ManualEdit, LayerType::Staged)
             | (LayerType::AgentEdit, LayerType::Approval)
             | (LayerType::Approval, LayerType::Integrated)
-            | (LayerType::Integrated, LayerType::Unified)
-            | (LayerType::Unified, LayerType::Staged)
+            | (LayerType::Integrated, LayerType::Staged)
     );
 
     if !valid {
@@ -150,20 +147,16 @@ where
             )
             .map(|r| r.snapshot_id)
         }
-        ForwardTransition::IntegratedToUnified => {
-            // integrated_names passed in via params, separated by commas
+        ForwardTransition::IntegratedToStaged => {
+            // integrated_names passed via params, separated by commas
             let names_str = params.first().ok_or_else(|| {
                 LayertwineError::StateMachine(
-                    "IntegratedToUnified requires integrated_names parameter".into(),
+                    "IntegratedToStaged requires integrated_names parameter".into(),
                 )
             })?;
             let names: Vec<String> = names_str.split(',').map(|s| s.trim().to_string()).collect();
-            crate::layered::unified::merge_features_to_unified(storage, &names)
+            crate::layered::staged::merge_features_to_staged(storage, &names)
                 .map(|r| r.snapshot_id)
-        }
-        ForwardTransition::UnifiedToStaged => {
-            check_forward_valid(&LayerType::Unified, &LayerType::Staged)?;
-            crate::layered::staged::merge_unified_to_staged(storage)
         }
     }
 }
@@ -289,16 +282,17 @@ where
 
 // ===== Utility functions =====
 
-/// Check if a partition_type string matches a LayerType via structural matching
+/// Check if a partition_type string matches a LayerType via structural matching.
+///
+/// Uses `PartitionType::from_name()` to parse the string back into a proper enum,
+/// then delegates to `PartitionType::to_layer()` for the canonical mapping.
+/// This eliminates fragile string-prefix matching and ensures the same logic
+/// that maps PartitionType → LayerType at creation time is used at query time.
 pub fn partition_type_matches_layer(partition_type: &str, target_layer: &LayerType) -> bool {
-    match target_layer {
-        LayerType::ManualEdit => partition_type == "manual",
-        LayerType::AgentEdit => partition_type.starts_with("agent/"),
-        LayerType::Approval => partition_type.starts_with("approval/"),
-        LayerType::Integrated => partition_type.starts_with("integrated/"),
-        LayerType::Unified => partition_type == "unified",
-        LayerType::Staged => partition_type == "staged",
-    }
+    crate::core::types::PartitionType::from_name(partition_type)
+        .map(|pt| pt.to_layer())
+        .as_ref()
+        == Some(target_layer)
 }
 
 /// Reconstructs the complete text content from Snapshot's delta chains
@@ -359,8 +353,7 @@ mod tests {
         assert!(check_forward_valid(&LayerType::ManualEdit, &LayerType::Staged).is_ok());
         assert!(check_forward_valid(&LayerType::AgentEdit, &LayerType::Approval).is_ok());
         assert!(check_forward_valid(&LayerType::Approval, &LayerType::Integrated).is_ok());
-        assert!(check_forward_valid(&LayerType::Integrated, &LayerType::Unified).is_ok());
-        assert!(check_forward_valid(&LayerType::Unified, &LayerType::Staged).is_ok());
+        assert!(check_forward_valid(&LayerType::Integrated, &LayerType::Staged).is_ok());
 
         // Prohibition of cross-layering
         assert!(check_forward_valid(&LayerType::AgentEdit, &LayerType::Staged).is_err());
@@ -374,8 +367,7 @@ mod tests {
             (LayerType::ManualEdit, LayerType::Staged),
             (LayerType::AgentEdit, LayerType::Approval),
             (LayerType::Approval, LayerType::Integrated),
-            (LayerType::Integrated, LayerType::Unified),
-            (LayerType::Unified, LayerType::Staged),
+            (LayerType::Integrated, LayerType::Staged),
         ];
 
         let all_pairs = [
@@ -383,37 +375,26 @@ mod tests {
             (LayerType::ManualEdit, LayerType::AgentEdit),
             (LayerType::ManualEdit, LayerType::Approval),
             (LayerType::ManualEdit, LayerType::Integrated),
-            (LayerType::ManualEdit, LayerType::Unified),
             (LayerType::ManualEdit, LayerType::Staged),
             (LayerType::AgentEdit, LayerType::ManualEdit),
             (LayerType::AgentEdit, LayerType::AgentEdit),
             (LayerType::AgentEdit, LayerType::Approval),
             (LayerType::AgentEdit, LayerType::Integrated),
-            (LayerType::AgentEdit, LayerType::Unified),
             (LayerType::AgentEdit, LayerType::Staged),
             (LayerType::Approval, LayerType::ManualEdit),
             (LayerType::Approval, LayerType::AgentEdit),
             (LayerType::Approval, LayerType::Approval),
             (LayerType::Approval, LayerType::Integrated),
-            (LayerType::Approval, LayerType::Unified),
             (LayerType::Approval, LayerType::Staged),
             (LayerType::Integrated, LayerType::ManualEdit),
             (LayerType::Integrated, LayerType::AgentEdit),
             (LayerType::Integrated, LayerType::Approval),
             (LayerType::Integrated, LayerType::Integrated),
-            (LayerType::Integrated, LayerType::Unified),
             (LayerType::Integrated, LayerType::Staged),
-            (LayerType::Unified, LayerType::ManualEdit),
-            (LayerType::Unified, LayerType::AgentEdit),
-            (LayerType::Unified, LayerType::Approval),
-            (LayerType::Unified, LayerType::Integrated),
-            (LayerType::Unified, LayerType::Unified),
-            (LayerType::Unified, LayerType::Staged),
             (LayerType::Staged, LayerType::ManualEdit),
             (LayerType::Staged, LayerType::AgentEdit),
             (LayerType::Staged, LayerType::Approval),
             (LayerType::Staged, LayerType::Integrated),
-            (LayerType::Staged, LayerType::Unified),
             (LayerType::Staged, LayerType::Staged),
         ];
 

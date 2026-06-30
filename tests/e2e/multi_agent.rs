@@ -106,41 +106,16 @@ fn test_single_agent_workflow() {
         ));
     }
 
-    // Merge to unified layer
-    print_info("Step 7.5: Merge to unified layer");
-    let unified_snapshot_id = merge_to_unified(&env, None);
+    // Merge features directly to staged (no unified intermediary)
+    print_info("Step 7.5: Merge features directly to staged");
+    let staged_snapshot_id = merge_to_unified(&env, None);
     print_success(&format!(
-        "Merged to unified, snapshot_id: {}",
-        unified_snapshot_id.to_hex()
-    ));
-
-    // Merge unified to staged layer
-    print_info("Step 7.6: Merge unified to staged layer");
-    let staged_snapshot_id = merge_to_staged(&env);
-    print_success(&format!(
-        "Merged unified to staged, snapshot_id: {}",
+        "Merged features to staged, snapshot_id: {}",
         staged_snapshot_id.to_hex()
     ));
 
-    // Verify unified layer
-    print_info("Step 8: Verify unified layer");
-
-    // Debug: print all partitions again
-    let all_partitions = env.storage.list_partitions().unwrap_or_default();
-    print_info(&format!("  Total partitions: {}", all_partitions.len()));
-    for p in &all_partitions {
-        print_info(&format!("    - {} (type: {:?})", p.name, p.partition_type));
-    }
-
-    let unified_partitions =
-        get_partitions_by_layer(&env, layertwine::core::types::LayerType::Unified);
-    assert!(
-        !unified_partitions.is_empty(),
-        "unified layer should have partitions"
-    );
-
     // Verify staged layer
-    print_info("Step 9: Verify staged layer");
+    print_info("Step 8: Verify staged layer");
     let staged_partitions =
         get_partitions_by_layer(&env, layertwine::core::types::LayerType::Staged);
     assert!(

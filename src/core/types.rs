@@ -176,6 +176,32 @@ impl PartitionType {
             PartitionType::Staged => crate::core::types::LayerType::Staged,
         }
     }
+
+    /// Parse a string representation back into a PartitionType.
+    ///
+    /// This is the inverse of `name()` and supports the canonical formats:
+    /// - `"manual"`, `"unified"`, `"staged"` (singleton layers)
+    /// - `"agent/<id>"`, `"approval/<id>"`, `"integrated/<name>"` (multi-instance layers)
+    ///
+    /// Returns `None` for unrecognized formats instead of panicking.
+    pub fn from_name(s: &str) -> Option<Self> {
+        match s {
+            "manual" => Some(PartitionType::Manual),
+            "unified" => Some(PartitionType::Unified),
+            "staged" => Some(PartitionType::Staged),
+            _ => {
+                if let Some(rest) = s.strip_prefix("agent/") {
+                    Some(PartitionType::Agent(AgentInstanceId(rest.to_string())))
+                } else if let Some(rest) = s.strip_prefix("approval/") {
+                    Some(PartitionType::Approval(AgentInstanceId(rest.to_string())))
+                } else if let Some(rest) = s.strip_prefix("integrated/") {
+                    Some(PartitionType::Integrated(rest.to_string()))
+                } else {
+                    None
+                }
+            }
+        }
+    }
 }
 
 /// Diff operation type

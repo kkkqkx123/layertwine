@@ -1,7 +1,7 @@
 //! Integration tests for the layered state machine pipeline.
 //!
-//! These tests exercise the full six-layer pipeline end-to-end:
-//!   manual_edit → agent_edit → approval → integrated → unified → staged
+//! These tests exercise the full five-layer pipeline end-to-end:
+//!   manual_edit → agent_edit → approval → integrated → staged
 //!
 //! They verify correct content reconstruction, conflict detection, rollback,
 //! multi-agent collaboration, and multi-feature merging.
@@ -80,11 +80,6 @@ fn ensure_integrated(storage: &SqliteStorage, name: &str, initial_id: SnapshotId
         .unwrap();
 }
 
-/// Ensure unified partition exists.
-fn ensure_unified(storage: &SqliteStorage, initial_id: SnapshotId) {
-    layertwine::layered::unified::ensure_unified_partition(storage, initial_id).unwrap();
-}
-
 /// Read the current staged snapshot text.
 fn staged_text(storage: &SqliteStorage) -> String {
     let pid = layertwine::layered::staged::staged_partition_id();
@@ -128,7 +123,6 @@ fn test_full_agent_pipeline() {
     let initial_id = create_initial_snapshot(&storage, "base\n");
 
     ensure_staged(&storage, initial_id);
-    ensure_unified(&storage, initial_id);
 
     let agent_id = AgentInstanceId("agent-1".into());
     let feature = "feat-1";
@@ -157,11 +151,8 @@ fn test_full_agent_pipeline() {
     )
     .unwrap();
 
-    // Forward: Integrated → Unified
-    execute_forward(&storage, ForwardTransition::IntegratedToUnified, &[feature]).unwrap();
-
-    // Forward: Unified → Staged
-    execute_forward(&storage, ForwardTransition::UnifiedToStaged, &[]).unwrap();
+    // Forward: Integrated → Staged (no unified intermediary)
+    execute_forward(&storage, ForwardTransition::IntegratedToStaged, &[feature]).unwrap();
 
     let text = staged_text(&storage);
     assert_eq!(text, "base\nagent-change\n");
@@ -176,7 +167,6 @@ fn test_multi_agent_collaboration() {
     let initial_id = create_initial_snapshot(&storage, "lineA\nlineB\nlineC\n");
 
     ensure_staged(&storage, initial_id);
-    ensure_unified(&storage, initial_id);
 
     let agent_a = AgentInstanceId("agent-a".into());
     let agent_b = AgentInstanceId("agent-b".into());
@@ -221,9 +211,8 @@ fn test_multi_agent_collaboration() {
     )
     .unwrap();
 
-    // Merge feature → unified → staged
-    execute_forward(&storage, ForwardTransition::IntegratedToUnified, &[feature]).unwrap();
-    execute_forward(&storage, ForwardTransition::UnifiedToStaged, &[]).unwrap();
+    // Merge feature directly to staged
+    execute_forward(&storage, ForwardTransition::IntegratedToStaged, &[feature]).unwrap();
 
     let text = staged_text(&storage);
     // Both modifications should be present (different lines → no conflict)
@@ -249,7 +238,6 @@ fn test_multi_feature_merge() {
     let initial_id = create_initial_snapshot(&storage, "line1\nline2\n");
 
     ensure_staged(&storage, initial_id);
-    ensure_unified(&storage, initial_id);
 
     let agent1 = AgentInstanceId("agent-1".into());
     let agent2 = AgentInstanceId("agent-2".into());
@@ -285,22 +273,19 @@ fn test_multi_feature_merge() {
     )
     .unwrap();
 
-    // Merge both features into unified — each modifies a different line → no conflict
+    // Merge both features directly to staged — each modifies a different line → no conflict
     let names = &[feat1.to_string(), feat2.to_string()];
     let merge_result =
-        layertwine::layered::unified::merge_features_to_unified(&storage, names).unwrap();
+        layertwine::layered::staged::merge_features_to_staged(&storage, names).unwrap();
     assert!(
         !merge_result.has_conflicts(),
         "non-overlapping edits should not conflict"
     );
 
-    execute_forward(&storage, ForwardTransition::UnifiedToStaged, &[]).unwrap();
-
     let text = staged_text(&storage);
-    // The unified merge applies features sequentially. When feat2 is merged,
-    // the baseline is the original "line1\nline2\n" (without trailing newline),
-    // current (unified after feat1) is "alpha\nline2", and other (feat2 integrated)
-    // is "line1\nbeta". Different-line edits should merge cleanly.
+    // Features merged sequentially. feat1 changes line1 ("alpha\nline2"),
+    // feat2 changes line2 ("line1\nbeta"). When merged sequentially,
+    // different-line edits should merge cleanly.
     assert!(
         text.contains("alpha") && text.contains("beta"),
         "both features should be present; got: {text:?}"
@@ -415,16 +400,15 @@ fn test_idempotent_merge() {
 }
 
 // ---------------------------------------------------------------------------
-// Test: End-to-end approval → integrated → unified → staged chain
+// Test: End-to-end approval → integrated → staged chain
 // (without using execute_forward, direct function calls)
 // ---------------------------------------------------------------------------
 #[test]
-fn test_approval_integrated_unified_staged_chain() {
+fn test_approval_integrated_staged_chain() {
     let storage = setup_storage();
     let initial_id = create_initial_snapshot(&storage, "start\n");
 
     ensure_staged(&storage, initial_id);
-    ensure_unified(&storage, initial_id);
 
     let agent_id = AgentInstanceId("chain-agent".into());
     let feature = "chain-feat";
@@ -450,15 +434,13 @@ fn test_approval_integrated_unified_staged_chain() {
     assert!(!merge_result.has_conflicts());
     let integrated_sid = merge_result.snapshot_id;
 
-    // Direct function call: integrated → unified
-    layertwine::layered::unified::merge_features_to_unified(&storage, &[feature.to_string()])
-        .unwrap();
-
-    // Direct function call: unified → staged
-    let staged_sid = layertwine::layered::staged::merge_unified_to_staged(&storage).unwrap();
+    // Direct function call: integrated → staged (no unified intermediary)
+    let staged_result =
+        layertwine::layered::staged::merge_features_to_staged(&storage, &[feature.to_string()])
+            .unwrap();
 
     // Staged snapshot should be different from integrated snapshot
-    assert_ne!(staged_sid, integrated_sid, "staged snapshot must advance");
+    assert_ne!(staged_result.snapshot_id, integrated_sid, "staged snapshot must advance");
 
     let text = staged_text(&storage);
     assert_eq!(text, "start\nchained\n");

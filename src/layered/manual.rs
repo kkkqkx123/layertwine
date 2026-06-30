@@ -149,10 +149,19 @@ where
         .get_snapshot(&staged_partition.current_snapshot)
         .map_err(LayertwineError::Storage)?;
 
-    // Use staged's current snapshot as the merge baseline.
-    // This is the correct common ancestor: staged reflects the last committed/merged state,
-    // and manual contains the user's new edits. Using staged.current ensures the 3-way merge
-    // compares against the right baseline (not the initial empty snapshot).
+    // Three-way merge: base, ours (staged), theirs (manual).
+    //
+    // Using staged.current_snapshot as the merge base is intentional:
+    // when base == ours, the merge degenerates to "theirs wins" for any
+    // difference. This is the correct behavior for the sequential edit
+    // workflow where each manual edit is immediately merged into staged.
+    //
+    // For a true divergent-edit scenario (where staged advances independently
+    // of manual), a proper LCA-based merge would be needed. However, the
+    // current API (edit → merge_manual_to_staged) always calls merge
+    // immediately after each edit, so both partitions diverge only by a
+    // single step. Using staged.current as base is both correct and
+    // conflict-free for this pattern.
     let baseline_snapshot = staged_snapshot.clone();
 
     // Reconstruct texts for three-way merge

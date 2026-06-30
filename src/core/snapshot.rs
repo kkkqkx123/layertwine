@@ -172,8 +172,8 @@ impl Snapshot {
     /// All downstream merge functions follow this convention:
     ///   - merge_manual_to_staged:   [staged, manual]
     ///   - move_agent_to_approval:   [approval, agent]
-    ///   - merge_agent_to_feature:   [baseline, approval, integrated]
-    ///   - merge_feature_to_unified: [unified, feature]
+    ///   - merge_agent_to_feature:   [integrated, approval, baseline]
+    ///   - merge_feature_to_staged:  [staged, feature]
     pub fn merge(
         parents: Vec<&Snapshot>,
         delta_id: DeltaId,

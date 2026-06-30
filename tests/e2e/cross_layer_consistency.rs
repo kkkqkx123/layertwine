@@ -2,7 +2,7 @@
 //!
 //! Real scenario (S2): AI-assisted code review workflow.
 //! - Developer makes manual edits → staged
-//! - AI agent makes edits → submits for approval → approved → integrated → unified → staged
+//! - AI agent makes edits → submits for approval → approved → integrated → staged
 //! - After each transition, verify content consistency across layers.
 
 use crate::common::fixture::{TestConfig, TestEnvironment};
@@ -28,9 +28,8 @@ fn test_full_pipeline_layer_consistency() {
     submit_agent(&env, "agent-loop-1");
     approve_agent(&env, "agent-loop-1", "feature-1");
 
-    // Phase 3: Merge through the pipeline
+    // Phase 3: Merge features directly to staged (no unified intermediary)
     merge_to_unified(&env, None);
-    merge_to_staged(&env);
 
     // Verify final staged content has agent's changes
     let staged_parts = get_partitions_by_layer(&env, LayerType::Staged);
@@ -45,7 +44,10 @@ fn test_full_pipeline_layer_consistency() {
 
 // ---------------------------------------------------------------------------
 // Multiple agent partitions consistency: two independent agents →
-// approval → integrated → unified → staged
+// approval → integrated → staged
+//
+// Two agents edit the same file, then all integrated partitions
+// are merged directly to staged.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -69,9 +71,8 @@ fn test_multiple_agents_pipeline_consistency() {
     approve_agent(&env, "agent-a", "feature-a");
     approve_agent(&env, "agent-b", "feature-b");
 
-    // Merge all integrated → unified → staged
+    // Merge all integrated directly to staged
     merge_to_unified(&env, None);
-    merge_to_staged(&env);
 
     // Final staged content should contain at least one agent's changes
     let staged_parts = get_partitions_by_layer(&env, LayerType::Staged);

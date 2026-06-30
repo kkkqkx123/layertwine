@@ -7,10 +7,10 @@
 
 use crate::core::types::{AgentInstanceId, SnapshotId};
 use crate::error::Result;
+use crate::error::LayertwineError;
 use crate::layered::agent;
 use crate::layered::integrated;
 use crate::layered::staged;
-use crate::layered::unified;
 use crate::storage::repository::{
     CheckpointPersist, DeltaStore, FileNodeStore, PartitionStore, SnapshotStore,
 };
@@ -21,9 +21,8 @@ use crate::storage::repository::{
 /// 1. Create feature branch from baseline
 /// 2. Agent edits and submits
 /// 3. Merge to feature
-/// 4. Merge feature to unified
-/// 5. Merge unified to staged
-/// 6. Commit checkpoint
+/// 4. Merge feature directly to staged (replaces former unified → staged pipeline)
+/// 5. Commit checkpoint
 pub fn develop_single_feature<S>(
     storage: &S,
     feature_name: &str,
@@ -56,19 +55,16 @@ where
         )));
     }
 
-    // 6. Merge feature to unified
-    let unified_result = unified::merge_features_to_unified(storage, &[feature_name.to_string()])?;
-    if unified_result.has_conflicts() {
+    // 6. Merge feature directly to staged (no unified intermediary)
+    let staged_result = staged::merge_features_to_staged(storage, &[feature_name.to_string()])?;
+    if staged_result.has_conflicts() {
         return Err(crate::error::LayertwineError::General(format!(
             "Merge conflicts detected: {}",
-            unified_result.format_conflicts()
+            staged_result.format_conflicts()
         )));
     }
 
-    // 7. Merge unified to staged
-    staged::merge_unified_to_staged(storage)?;
-
-    // 8. Return staged snapshot (checkpoint commit would be the next step)
+    // 7. Return staged snapshot (checkpoint commit would be the next step)
     let staged_partition = storage
         .get_partition(&staged::staged_partition_id())
         .map_err(|_| {
@@ -118,19 +114,16 @@ where
         }
     }
 
-    // 4. Merge feature to unified
-    let unified_result = unified::merge_features_to_unified(storage, &[feature_name.to_string()])?;
-    if unified_result.has_conflicts() {
+    // 4. Merge feature directly to staged (no unified intermediary)
+    let staged_result = staged::merge_features_to_staged(storage, &[feature_name.to_string()])?;
+    if staged_result.has_conflicts() {
         return Err(crate::error::LayertwineError::General(format!(
             "Merge conflicts detected: {}",
-            unified_result.format_conflicts()
+            staged_result.format_conflicts()
         )));
     }
 
-    // 5. Merge unified to staged
-    staged::merge_unified_to_staged(storage)?;
-
-    // 6. Return staged snapshot
+    // 5. Return staged snapshot
     let staged_partition = storage
         .get_partition(&staged::staged_partition_id())
         .map_err(|_| {
@@ -141,7 +134,7 @@ where
 
 /// Development scenario 3: Merge multiple features
 ///
-/// Multiple features are merged into unified, then to staged.
+/// Multiple features are merged directly to staged.
 pub fn merge_multiple_features<S>(storage: &S, feature_names: &[String]) -> Result<SnapshotId>
 where
     S: DeltaStore + FileNodeStore + PartitionStore + CheckpointPersist,
@@ -152,19 +145,16 @@ where
         ));
     }
 
-    // 1. Merge features to unified
-    let unified_result = unified::merge_features_to_unified(storage, feature_names)?;
-    if unified_result.has_conflicts() {
+    // 1. Merge features directly to staged
+    let staged_result = staged::merge_features_to_staged(storage, feature_names)?;
+    if staged_result.has_conflicts() {
         return Err(crate::error::LayertwineError::General(format!(
             "Merge conflicts detected: {}",
-            unified_result.format_conflicts()
+            staged_result.format_conflicts()
         )));
     }
 
-    // 2. Merge unified to staged
-    staged::merge_unified_to_staged(storage)?;
-
-    // 3. Return staged snapshot
+    // 2. Return staged snapshot
     let staged_partition = storage
         .get_partition(&staged::staged_partition_id())
         .map_err(|_| {
@@ -179,23 +169,12 @@ fn get_current_baseline<S>(storage: &S) -> Result<crate::core::snapshot::Snapsho
 where
     S: SnapshotStore + PartitionStore,
 {
-    // Try to get the staged partition first
-    match storage.get_partition(&staged::staged_partition_id()) {
-        Ok(staged) => storage
-            .get_snapshot(&staged.current_snapshot)
-            .map_err(crate::error::LayertwineError::Storage),
-        Err(_) => {
-            // If staged doesn't exist, try to get unified
-            match storage.get_partition(&unified::unified_partition_id()) {
-                Ok(unified) => storage
-                    .get_snapshot(&unified.current_snapshot)
-                    .map_err(crate::error::LayertwineError::Storage),
-                Err(_) => Err(crate::error::LayertwineError::NotFound(
-                    "No baseline found. Please initialize staged or unified first.".to_string(),
-                )),
-            }
-        }
-    }
+    let staged = storage.get_partition(&staged::staged_partition_id()).map_err(|_| {
+        LayertwineError::NotFound("No baseline found. Please initialize staged first.".into())
+    })?;
+    storage
+        .get_snapshot(&staged.current_snapshot)
+        .map_err(crate::error::LayertwineError::Storage)
 }
 
 #[cfg(test)]

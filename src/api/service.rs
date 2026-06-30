@@ -532,23 +532,44 @@ impl ApiService {
         })
     }
 
-    /// Convenience wrapper: approve agent, then merge all integrated → unified → staged.
-    /// Uses `approve_agent`, `merge_to_unified` (auto-detect all), `merge_to_staged`.
+    /// Convenience wrapper: approve agent, then merge all integrated → staged.
+    /// Uses `approve_agent` and then merges features directly to staged.
     pub fn approve(&self, req: ApproveRequest) -> ApiResult<ApproveResponse> {
         let approve_resp = self.approve_agent(ApproveAgentRequest {
             agent_id: req.agent_id.clone(),
             integrated_name: Some(req.agent_id.clone()),
         })?;
 
-        let merge_to_staged_resp = self
-            .merge_to_unified(MergeToUnifiedRequest {
-                integration_names: None,
+        // Auto-detect all integrated partitions and merge directly to staged
+        let names = self
+            .storage
+            .list_partitions()
+            .ok()
+            .map(|partitions| {
+                partitions
+                    .into_iter()
+                    .filter_map(|p| match p.partition_type {
+                        crate::core::types::PartitionType::Integrated(name) => Some(name),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
             })
-            .and_then(|_| self.merge_to_staged(MergeToStagedRequest {}))?;
+            .unwrap_or_default();
+
+        let staged_snapshot_id = if names.is_empty() {
+            approve_resp.integrated_snapshot_id.clone()
+        } else {
+            let result = crate::layered::staged::merge_features_to_staged(
+                self.storage.as_ref(),
+                &names,
+            )
+            .map_err(map_error)?;
+            snapshot_id_to_hex(&result.snapshot_id)
+        };
 
         Ok(ApproveResponse {
             integrated_snapshot_id: approve_resp.integrated_snapshot_id,
-            staged_snapshot_id: merge_to_staged_resp.staged_snapshot_id,
+            staged_snapshot_id,
         })
     }
 
@@ -1288,6 +1309,8 @@ impl ApiService {
         })
     }
 
+    /// Merge integrated partitions directly to staged (replaces former unified layer).
+    /// Kept for backward compatibility — the unified layer has been removed.
     pub fn merge_to_unified(&self, req: MergeToUnifiedRequest) -> ApiResult<MergeToUnifiedResponse> {
         let names = req.integration_names.unwrap_or_else(|| {
             // Auto-detect all integrated partition names
@@ -1313,23 +1336,49 @@ impl ApiService {
         }
 
         let merged_count = names.len();
-        let unified_snapshot_id =
-            crate::layered::unified::move_integrated_to_unified(self.storage.as_ref(), &names)
+        let result =
+            crate::layered::staged::merge_features_to_staged(self.storage.as_ref(), &names)
                 .map_err(map_error)?;
 
         Ok(MergeToUnifiedResponse {
-            unified_snapshot_id: snapshot_id_to_hex(&unified_snapshot_id),
+            unified_snapshot_id: snapshot_id_to_hex(&result.snapshot_id),
             merged_count,
         })
     }
 
+    /// Merge to staged (now merges integrated features directly).
+    /// Kept for backward compatibility.
     pub fn merge_to_staged(&self, _req: MergeToStagedRequest) -> ApiResult<MergeToStagedResponse> {
-        let staged_snapshot_id =
-            crate::layered::staged::merge_unified_to_staged(self.storage.as_ref())
-                .map_err(map_error)?;
+        // Auto-detect all integrated partition names and merge directly to staged
+        let names: Vec<String> = self
+            .storage
+            .list_partitions()
+            .ok()
+            .map(|partitions| {
+                partitions
+                    .into_iter()
+                    .filter_map(|p| match p.partition_type {
+                        crate::core::types::PartitionType::Integrated(name) => Some(name),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
-        Ok(MergeToStagedResponse {
-            staged_snapshot_id: snapshot_id_to_hex(&staged_snapshot_id),
-        })
+        let staged_snapshot_id = if names.is_empty() {
+            // No integrated partitions — staged is already up to date
+            let staged_pid = crate::layered::staged::staged_partition_id();
+            let staged = self.storage.get_partition(&staged_pid).map_err(|e| {
+                map_error(LayertwineError::Storage(e))
+            })?;
+            snapshot_id_to_hex(&staged.current_snapshot)
+        } else {
+            let result =
+                crate::layered::staged::merge_features_to_staged(self.storage.as_ref(), &names)
+                    .map_err(map_error)?;
+            snapshot_id_to_hex(&result.snapshot_id)
+        };
+
+        Ok(MergeToStagedResponse { staged_snapshot_id })
     }
 }

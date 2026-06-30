@@ -115,27 +115,13 @@ fn test_complete_approval_flow() {
         ));
     }
 
-    // Merge to unified layer
-    print_info("Step 9: Merge to unified layer");
+    // Merge features directly to staged (no unified intermediary)
+    print_info("Step 9: Merge features directly to staged");
     merge_to_unified(&env, Some(vec!["test-feature".to_string()]));
-    print_success("Merged to unified layer");
+    print_success("Merged features to staged");
 
-    // Verify unified layer
-    print_info("Step 10: Verify unified layer");
-    let unified_partitions =
-        get_partitions_by_layer(&env, layertwine::core::types::LayerType::Unified);
-    assert!(
-        !unified_partitions.is_empty(),
-        "unified layer should have partitions"
-    );
-
-    // Merge unified to staged layer
-    print_info("Step 10.5: Merge unified to staged layer");
-    merge_to_staged(&env);
-    print_success("Merged unified to staged layer");
-
-    // Verify staged layer
-    print_info("Step 11: Verify staged layer");
+    // Verify staged layer has the merged content
+    print_info("Step 10: Verify staged layer");
     let staged_partitions =
         get_partitions_by_layer(&env, layertwine::core::types::LayerType::Staged);
     assert!(
@@ -143,8 +129,18 @@ fn test_complete_approval_flow() {
         "staged layer should have partitions"
     );
 
+    print_info("Staged layer partitions:");
+    for partition in &staged_partitions {
+        print_info(&format!(
+            "  - {}, snapshot: {}, history: {}",
+            partition.name,
+            truncate_id(&partition.current_snapshot.to_hex()),
+            partition.history.len()
+        ));
+    }
+
     // Commit merged changes
-    print_info("Step 12: Commit staged changes");
+    print_info("Step 11: Commit staged changes");
     commit_changes(&env, "Merge test-agent feature", "user-1");
     print_success("Changes committed");
 
