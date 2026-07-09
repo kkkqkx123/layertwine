@@ -106,6 +106,11 @@ impl CheckpointDag {
         self.nodes.contains_key(id)
     }
 
+    /// Set the generation number of a node (used when restoring from persistent DAG)
+    pub(crate) fn set_generation(&mut self, id: CheckpointId, gen: u64) {
+        self.generation.insert(id, gen);
+    }
+
     /// Get all ancestors of the node (from near to far, linear traversal)
     ///
     /// Iterate through the parents list in the Checkpoint entity.
@@ -146,10 +151,14 @@ impl CheckpointDag {
             return true;
         }
 
-        let anc_gen = self.generation.get(ancestor).copied().unwrap_or(0);
-        let desc_gen = self.generation.get(descendant).copied().unwrap_or(0);
-        if anc_gen >= desc_gen {
-            return false;
+        // Generation-based pruning: only use when both generations are known.
+        // If either is missing (None), we cannot prune and must traverse the graph.
+        let anc_gen = self.generation.get(ancestor);
+        let desc_gen = self.generation.get(descendant);
+        if let (Some(ag), Some(dg)) = (anc_gen, desc_gen) {
+            if ag >= dg {
+                return false;
+            }
         }
 
         let mut visited = HashSet::new();

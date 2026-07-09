@@ -9,6 +9,7 @@ use crate::core::types::{
     CheckpointId, DeltaId, LayerType, PartitionId, PartitionType, SnapshotId,
 };
 use crate::StorageResult;
+use std::collections::{HashMap, HashSet};
 
 /// Snapshot storage trait
 pub trait SnapshotStore {
@@ -144,12 +145,45 @@ pub trait Repository:
 {
 }
 
+/// DAG persistent storage trait
+///
+/// Stores the graph structure (parent-child edges and generation numbers)
+/// separately from full checkpoint entities, enabling lazy loading.
+pub trait DagStore: Send + Sync {
+    /// Bulk store DAG nodes and edges after full rebuild
+    fn store_dag_batch(
+        &self,
+        nodes: &[(CheckpointId, u64)],
+        edges: &[(CheckpointId, CheckpointId)],
+    ) -> StorageResult<()>;
+
+    /// Add a single edge during commit/merge (incremental update)
+    fn store_dag_edge(
+        &self,
+        parent_id: &CheckpointId,
+        child_id: &CheckpointId,
+        child_generation: u64,
+    ) -> StorageResult<()>;
+
+    /// Delete a node and all its associated edges
+    fn delete_dag_node(&self, node_id: &CheckpointId) -> StorageResult<()>;
+
+    /// Load the entire DAG structure from storage
+    fn load_dag(&self) -> StorageResult<(
+        HashMap<CheckpointId, HashSet<CheckpointId>>,
+        HashMap<CheckpointId, u64>,
+    )>;
+
+    /// Check if the DAG contains a node
+    fn dag_has_node(&self, node_id: &CheckpointId) -> StorageResult<bool>;
+}
+
 /// Checkpoint & Branch persistence trait — unified interface for CheckpointRepo
 ///
 /// Combines checkpoint, branch, metadata, and snapshot storage into a single trait.
 /// Storage backends (e.g. SQLite) implement this trait directly.
 pub trait CheckpointPersist:
-    MetadataStore + SnapshotStore + Send + Sync
+    MetadataStore + SnapshotStore + DagStore + Send + Sync
 {
     /// Store a checkpoint
     fn store_checkpoint(&self, checkpoint: &Checkpoint) -> StorageResult<()>;

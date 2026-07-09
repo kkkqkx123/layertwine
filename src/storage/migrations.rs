@@ -102,6 +102,22 @@ CREATE TABLE IF NOT EXISTS dag_store (
     updated_at      INTEGER NOT NULL
 );
 
+-- DAG 边表：存储 parent→child 关系
+CREATE TABLE IF NOT EXISTS dag_edges (
+    parent_id   BLOB NOT NULL,
+    child_id    BLOB NOT NULL,
+    PRIMARY KEY (parent_id, child_id)
+) WITHOUT ROWID;
+
+-- Generation 编号表：存储每个节点的最大距离（根节点距离）
+CREATE TABLE IF NOT EXISTS dag_generations (
+    node_id     BLOB PRIMARY KEY,
+    generation  INTEGER NOT NULL
+) WITHOUT ROWID;
+
+-- 索引：child_id 方向查询（反向遍历）
+CREATE INDEX IF NOT EXISTS idx_dag_edges_child ON dag_edges(child_id);
+
 -- Time Index Table (for fast time-based checkpoint queries)
 CREATE TABLE IF NOT EXISTS time_index (
     checkpoint_id   BLOB PRIMARY KEY,

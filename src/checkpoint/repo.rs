@@ -3,10 +3,90 @@ use crate::checkpoint::dag::CheckpointDag;
 use crate::checkpoint::time_index::TimeIndex;
 use crate::checkpoint::types::{Checkpoint, CheckpointMetadata};
 use crate::core::snapshot::Snapshot;
-use crate::core::types::{CheckpointId, SnapshotId};
+use crate::core::types::{CheckpointId, ContentId, SnapshotId};
 use crate::error::{LayertwineError, Result};
 use crate::storage::repository::CheckpointPersist;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::RwLock;
+
+/// Lazy-loading checkpoint map.
+///
+/// Loads checkpoints on-demand from the storage backend when they are
+/// first accessed. This avoids loading the entire checkpoint history
+/// into memory for repositories with large histories.
+#[allow(dead_code)]
+pub(crate) struct LazyCheckpointMap {
+    loaded: RwLock<HashMap<CheckpointId, Checkpoint>>,
+    storage: Option<Box<dyn CheckpointPersist>>,
+}
+
+#[allow(dead_code)]
+impl LazyCheckpointMap {
+    /// Create a new lazy checkpoint map with optional storage backend.
+    pub fn new(storage: Option<Box<dyn CheckpointPersist>>) -> Self {
+        LazyCheckpointMap {
+            loaded: RwLock::new(HashMap::new()),
+            storage,
+        }
+    }
+
+    /// Create a new lazy checkpoint map with pre-loaded checkpoints.
+    pub fn with_loaded(
+        loaded: HashMap<CheckpointId, Checkpoint>,
+        storage: Option<Box<dyn CheckpointPersist>>,
+    ) -> Self {
+        LazyCheckpointMap {
+            loaded: RwLock::new(loaded),
+            storage,
+        }
+    }
+
+    /// Get a checkpoint by ID. If not loaded, attempt to load from storage.
+    pub fn get(&self, id: &CheckpointId) -> Result<Checkpoint> {
+        // Fast path: check if already loaded
+        if let Some(cp) = self.loaded.read().map_err(|e| {
+            LayertwineError::General(format!("RwLock poisoned: {}", e))
+        })?.get(id) {
+            return Ok(cp.clone());
+        }
+
+        // Slow path: load from storage
+        if let Some(storage) = &self.storage {
+            let cp = storage.get_checkpoint(id)?;
+            self.loaded.write().map_err(|e| {
+                LayertwineError::General(format!("RwLock poisoned: {}", e))
+            })?.insert(*id, cp.clone());
+            return Ok(cp);
+        }
+
+        Err(LayertwineError::NotFound(format!(
+            "checkpoint {} not found",
+            id
+        )))
+    }
+
+    /// Check if a checkpoint ID is loaded.
+    pub fn contains_key(&self, id: &CheckpointId) -> bool {
+        self.loaded.read().map(|m| m.contains_key(id)).unwrap_or(false)
+    }
+
+    /// Insert a checkpoint into the map.
+    pub fn insert(&self, id: CheckpointId, cp: Checkpoint) {
+        if let Ok(mut map) = self.loaded.write() {
+            map.insert(id, cp);
+        }
+    }
+
+    /// Get all loaded checkpoint IDs.
+    pub fn keys(&self) -> Vec<CheckpointId> {
+        self.loaded.read().map(|m| m.keys().copied().collect()).unwrap_or_default()
+    }
+
+    /// Get a reference to the underlying loaded map (for migration purposes).
+    pub fn into_loaded(self) -> HashMap<CheckpointId, Checkpoint> {
+        self.loaded.into_inner().unwrap_or_default()
+    }
+}
 
 /// Checkpoint Repository - Versioning Core
 ///
@@ -110,8 +190,34 @@ impl CheckpointRepo {
             storage.store_metadata("current_branch", "main")?;
         }
 
-        // Build DAG dynamically from checkpoint relationships (not persisted)
-        let checkpoint_dag = Self::build_dag_from_checkpoints(&checkpoints);
+        // Try to load DAG from persistent storage; fallback to rebuilding from checkpoints.
+        // The DAG persistence enables fast loading without scanning all checkpoint entities.
+        let checkpoint_dag = if storage.dag_has_node(&branches.first()
+            .map(|b| b.head)
+            .unwrap_or(ContentId([0u8; 32])))
+            .unwrap_or(false)
+        {
+            // DAG table has data — load from persistent storage
+            let (nodes, generation) = storage.load_dag()?;
+            let mut dag = CheckpointDag::new();
+            for (node_id, children) in &nodes {
+                dag.add_node(*node_id);
+                for child_id in children {
+                    dag.add_edge_unchecked(*node_id, *child_id);
+                }
+            }
+            // Set generation numbers for nodes known from the DAG table
+            for (node_id, gen) in &generation {
+                if dag.has_node(node_id) {
+                    dag.set_generation(*node_id, *gen);
+                }
+            }
+            dag
+        } else {
+            // Fallback: rebuild DAG from checkpoint relationships (backward compatibility).
+            // This path is taken when the database was created before DAG persistence was added.
+            Self::build_dag_from_checkpoints(&checkpoints)
+        };
 
         // Build time index from all checkpoints
         let time_index =
@@ -218,19 +324,31 @@ impl CheckpointRepo {
     /// Also cleans up any checkpoints and branches that were deleted in memory
     /// from the storage backend.
     ///
-    /// DAG is not persisted; it is rebuilt dynamically from checkpoint relationships.
+    /// DAG edges are persisted alongside checkpoint data to ensure the DAG
+    /// structure is recoverable from storage without scanning all checkpoints.
     pub fn sync_all(&mut self) -> Result<()> {
         if let Some(storage) = &self.storage {
             // Persist only dirty (modified since last sync) checkpoints
             for cp_id in self.dirty_checkpoints.drain() {
                 if let Some(cp) = self.checkpoints.get(&cp_id) {
                     storage.store_checkpoint(cp)?;
+                    // Persist DAG edges for each parent relationship
+                    for parent_id in &cp.parents {
+                        if let Some(gen) = self.checkpoint_dag.generation(&cp_id) {
+                            storage.store_dag_edge(parent_id, &cp_id, gen)?;
+                        }
+                    }
                 }
             }
             // Clean up checkpoint deletions
             for deleted_id in self.deleted_checkpoints.drain() {
                 // Ignore "not found" errors — already deleted is fine
                 let _ = storage.delete_checkpoint(&deleted_id);
+                let _ = storage.delete_dag_node(&deleted_id);
+            }
+            // Clean up branch deletions
+            for deleted_name in self.deleted_branches.drain() {
+                let _ = storage.delete_branch(&deleted_name);
             }
             // Clean up branch deletions
             for deleted_name in self.deleted_branches.drain() {
@@ -303,9 +421,12 @@ impl CheckpointRepo {
         self.checkpoint_dag.add_edge(current_head, cp_id);
         self.current_branch_mut().set_head(cp_id);
 
-        // Auto-persist (DAG is not persisted)
+        // Auto-persist checkpoint + DAG edge
         if let Some(storage) = &self.storage {
             storage.store_checkpoint(&cp)?;
+            if let Some(gen) = self.checkpoint_dag.generation(&cp_id) {
+                storage.store_dag_edge(&current_head, &cp_id, gen)?;
+            }
             let branch = &self.branches[self.current_branch];
             storage.update_branch_head(&branch.name, &cp_id)?;
         }
@@ -351,6 +472,9 @@ impl CheckpointRepo {
 
         if let Some(storage) = &self.storage {
             storage.store_checkpoint(&cp)?;
+            if let Some(gen) = self.checkpoint_dag.generation(&cp_id) {
+                storage.store_dag_edge(&current_head, &cp_id, gen)?;
+            }
             let branch = &self.branches[self.current_branch];
             storage.update_branch_head(&branch.name, &cp_id)?;
         }
@@ -503,9 +627,13 @@ impl CheckpointRepo {
         self.checkpoint_dag.add_edge(source_head, cp_id);
         self.current_branch_mut().set_head(cp_id);
 
-        // Auto-persist (DAG is not persisted)
+        // Auto-persist checkpoint + DAG edges (both parents)
         if let Some(storage) = &self.storage {
             storage.store_checkpoint(&cp)?;
+            if let Some(gen) = self.checkpoint_dag.generation(&cp_id) {
+                storage.store_dag_edge(&current_head, &cp_id, gen)?;
+                storage.store_dag_edge(&source_head, &cp_id, gen)?;
+            }
             let branch = &self.branches[self.current_branch];
             storage.update_branch_head(&branch.name, &cp_id)?;
         }
@@ -590,6 +718,7 @@ impl CheckpointRepo {
         self.checkpoint_dag.remove_node(id);
         if let Some(storage) = &self.storage {
             storage.delete_checkpoint(id)?;
+            storage.delete_dag_node(id)?;
         }
         Ok(())
     }
