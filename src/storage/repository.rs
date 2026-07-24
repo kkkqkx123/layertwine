@@ -183,7 +183,7 @@ pub trait DagStore: Send + Sync {
 /// Combines checkpoint, branch, metadata, and snapshot storage into a single trait.
 /// Storage backends (e.g. SQLite) implement this trait directly.
 pub trait CheckpointPersist:
-    MetadataStore + SnapshotStore + DagStore + Send + Sync
+    MetadataStore + SnapshotStore + DagStore + FileNodeStore + DeltaStore + Send + Sync
 {
     /// Store a checkpoint
     fn store_checkpoint(&self, checkpoint: &Checkpoint) -> StorageResult<()>;

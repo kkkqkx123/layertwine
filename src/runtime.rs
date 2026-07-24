@@ -41,7 +41,12 @@ fn parse_common_config() -> Result<CommonConfig, LayertwineError> {
 
 /// Detect run mode from environment variables
 fn detect_run_mode(_config: &CommonConfig) -> Result<RunMode, LayertwineError> {
-    #[cfg(all(feature = "cli", feature = "http"))]
+    // Honor LAYERTWINE_MODE whenever the CLI binary also carries a server
+    // transport (http or grpc). Previously this branch was gated on
+    // `all(feature = "cli", feature = "http")`, which silently ignored
+    // LAYERTWINE_MODE=grpc under the `cli-grpc` feature combination and
+    // always fell back to CLI — breaking embedded gRPC deployment.
+    #[cfg(all(feature = "cli", any(feature = "http", feature = "grpc")))]
     {
         if let Ok(mode) = env::var("LAYERTWINE_MODE") {
             match mode.to_lowercase().as_str() {

@@ -297,6 +297,16 @@ impl CheckpointRepo {
     // Internal helpers
 
     /// Load all snapshot contents for a list of snapshot IDs
+    ///
+    /// Snapshots store deltas (not inline content), and a manually/staged
+    /// snapshot's `source`/`file` fields are inherited from its parent (the
+    /// init marker) rather than the real file path. To make
+    /// `RestoredSnapshotInfo` usable for file-based checkpoints we therefore:
+    ///   - reconstruct the full file content from the delta chain via
+    ///     `reconstruct_text` (when a storage backend is attached), and
+    ///   - report the real file path taken from the snapshot's most recent
+    ///     delta (`delta.file.path_str()`), falling back to the snapshot's
+    ///     own (inherited) `file.path_str()`.
     fn load_all_snapshot_contents(
         &self,
         snap_ids: &[SnapshotId],
@@ -305,11 +315,39 @@ impl CheckpointRepo {
             .iter()
             .map(|id| {
                 let snap = self.get_snapshot_by_id(id)?;
-                let content = snap
-                    .content
-                    .clone()
-                    .unwrap_or_else(|| SnapshotContent::FileContent(vec![]));
-                let source = snap.source.clone();
+                // Materialize the full file content from the delta chain.
+                // Fall back to the (typically empty) stored snapshot content
+                // only when no storage backend is attached (e.g. in-memory
+                // test repos that never persisted deltas).
+                let content = match &self.storage {
+                    Some(storage) => {
+                        let text = crate::layered::transition::reconstruct_text(
+                            &**storage,
+                            &snap,
+                        )?;
+                        SnapshotContent::FileContent(text.into_bytes())
+                    }
+                    None => snap
+                        .content
+                        .clone()
+                        .unwrap_or_else(|| SnapshotContent::FileContent(vec![])),
+                };
+                // Derive the real file path from the snapshot's most recent
+                // delta (the snapshot/file fields are parent-inherited and
+                // would otherwise report the init marker). When no storage is
+                // attached, fall back to the inherited source for parity.
+                let source = match &self.storage {
+                    Some(storage) => {
+                        let deltas = storage
+                            .get_deltas(&snap.deltas)
+                            .map_err(LayertwineError::Storage)?;
+                        deltas
+                            .last()
+                            .map(|d| d.file.path_str().to_string())
+                            .unwrap_or_else(|| snap.file.path_str().to_string())
+                    }
+                    None => snap.source.clone(),
+                };
                 Ok((*id, content, source))
             })
             .collect()

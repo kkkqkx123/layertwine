@@ -303,7 +303,7 @@ pub fn partition_type_matches_layer(partition_type: &str, target_layer: &LayerTy
 /// line-terminated text for accurate TextDiff comparison.
 pub fn reconstruct_text<S>(storage: &S, snapshot: &Snapshot) -> Result<String>
 where
-    S: FileNodeStore + DeltaStore,
+    S: FileNodeStore + DeltaStore + ?Sized,
 {
     let file_content = storage
         .get_file_content(snapshot.file.path_str(), &snapshot.file.base_hash)
