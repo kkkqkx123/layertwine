@@ -99,3 +99,5 @@ harness = false
 [[bench]]
 name = "file_storage"
 harness = false
+
+[workspace]
