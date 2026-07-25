@@ -1,6 +1,6 @@
 # Layertwine CLI 使用指南
 
-> Layertwine（地层）—— 轻量文件编辑历史存储层，专为多 Agent 协同 + 人工编辑混合场景设计。
+> Layertwine —— 轻量文件编辑历史存储层，专为多 Agent 协同 + 人工编辑混合场景设计。
 
 ## 概述
 
